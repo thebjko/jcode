@@ -35,18 +35,15 @@ workflows:
       - name: Set build number
         script: |
           echo "Build number: $PROJECT_BUILD_NUMBER"
-      - name: Build
+      - name: Build ipa for distribution
         script: |
           cd ios
           xcode-project build-ipa \
-            --project JCodeMobile.xcodeproj \
-            --scheme $SCHEME \
+            --project "JCodeMobile.xcodeproj" \
+            --scheme "$SCHEME" \
             --config Release \
-            --archive-path build/JCodeMobile.xcarchive \
-            --ipa-path build/JCodeMobile.ipa \
-            --build-arg CURRENT_PROJECT_VERSION=$PROJECT_BUILD_NUMBER
+            --archive-xcargs "CURRENT_PROJECT_VERSION=$PROJECT_BUILD_NUMBER"
     artifacts:
-      - ios/build/*.ipa
       - ios/build/ios/ipa/*.ipa
     publishing:
       app_store_connect:
