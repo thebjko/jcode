@@ -13,6 +13,7 @@
 //! - Clear only on render failure, not before every render
 
 use image::DynamicImage;
+use super::color_support::rgb;
 use mermaid_rs_renderer::{
     config::{LayoutConfig, RenderConfig},
     layout::compute_layout,
@@ -1821,7 +1822,7 @@ fn draw_left_border(buf: &mut Buffer, area: Rect) {
     if clamped.width == 0 || clamped.height == 0 {
         return;
     }
-    let border_style = Style::default().fg(Color::Rgb(100, 100, 100)); // DIM_COLOR
+    let border_style = Style::default().fg(rgb(100, 100, 100)); // DIM_COLOR
     let y_end = clamped.y.saturating_add(clamped.height);
     for row in clamped.y..y_end {
         set_cell_if_visible(buf, clamped.x, row, '│', Some(border_style));
@@ -2575,8 +2576,8 @@ pub fn write_video_export_marker(hash: u64, area: Rect, buf: &mut Buffer) {
 
 /// Create placeholder lines for when image protocols aren't available
 fn image_placeholder_lines(width: u32, height: u32) -> Vec<Line<'static>> {
-    let dim = Style::default().fg(Color::Rgb(100, 100, 100));
-    let info = Style::default().fg(Color::Rgb(140, 170, 200));
+    let dim = Style::default().fg(rgb(100, 100, 100));
+    let info = Style::default().fg(rgb(140, 170, 200));
 
     vec![
         Line::from(Span::styled("┌─ mermaid diagram ", dim)),
@@ -2598,8 +2599,8 @@ pub fn diagram_placeholder_lines(width: u32, height: u32) -> Vec<Line<'static>> 
 
 /// Convert error to ratatui Lines
 pub fn error_to_lines(error: &str) -> Vec<Line<'static>> {
-    let dim = Style::default().fg(Color::Rgb(100, 100, 100));
-    let err_style = Style::default().fg(Color::Rgb(200, 80, 80));
+    let dim = Style::default().fg(rgb(100, 100, 100));
+    let err_style = Style::default().fg(rgb(200, 80, 80));
 
     // Calculate box width based on content
     let header = "mermaid error";

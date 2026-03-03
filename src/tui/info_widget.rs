@@ -5,6 +5,7 @@
 //! In left-aligned mode, widgets only appear on the right margin.
 
 use crate::ambient::AmbientStatus;
+use super::color_support::rgb;
 use crate::memory_graph::EdgeKind;
 use crate::prompt::ContextInfo;
 use crate::protocol::SwarmMemberStatus;
@@ -1615,7 +1616,7 @@ fn render_single_widget(frame: &mut Frame, placement: &WidgetPlacement, data: &I
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::Rgb(70, 70, 80)).dim());
+        .border_style(Style::default().fg(rgb(70, 70, 80)).dim());
 
     let inner = block.inner(rect);
 
@@ -1713,12 +1714,12 @@ fn render_overview_widget(frame: &mut Frame, inner: Rect, data: &InfoWidgetData)
             if i == page_index {
                 dots.push(Span::styled(
                     "● ",
-                    Style::default().fg(Color::Rgb(170, 170, 180)),
+                    Style::default().fg(rgb(170, 170, 180)),
                 ));
             } else {
                 dots.push(Span::styled(
                     "○ ",
-                    Style::default().fg(Color::Rgb(100, 100, 110)),
+                    Style::default().fg(rgb(100, 100, 110)),
                 ));
             }
         }
@@ -1941,11 +1942,11 @@ fn render_todos_widget(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static>>
     lines.push(Line::from(vec![
         Span::styled(
             "Todos ",
-            Style::default().fg(Color::Rgb(180, 180, 190)).bold(),
+            Style::default().fg(rgb(180, 180, 190)).bold(),
         ),
         Span::styled(
             format!("{}/{}", completed, total),
-            Style::default().fg(Color::Rgb(140, 140, 150)),
+            Style::default().fg(rgb(140, 140, 150)),
         ),
     ]));
 
@@ -1955,16 +1956,16 @@ fn render_todos_widget(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static>>
         let filled = ((completed as f64 / total as f64) * bar_width as f64).round() as usize;
         let empty = bar_width.saturating_sub(filled);
         lines.push(Line::from(vec![
-            Span::styled("[", Style::default().fg(Color::Rgb(90, 90, 100))),
+            Span::styled("[", Style::default().fg(rgb(90, 90, 100))),
             Span::styled(
                 "█".repeat(filled),
-                Style::default().fg(Color::Rgb(100, 180, 100)),
+                Style::default().fg(rgb(100, 180, 100)),
             ),
             Span::styled(
                 "░".repeat(empty),
-                Style::default().fg(Color::Rgb(50, 50, 60)),
+                Style::default().fg(rgb(50, 50, 60)),
             ),
-            Span::styled("]", Style::default().fg(Color::Rgb(90, 90, 100))),
+            Span::styled("]", Style::default().fg(rgb(90, 90, 100))),
         ]));
     }
 
@@ -1986,13 +1987,13 @@ fn render_todos_widget(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static>>
     for todo in sorted_todos.iter().take(available_lines.min(5)) {
         let is_blocked = !todo.blocked_by.is_empty();
         let (icon, status_color) = if is_blocked && todo.status != "completed" {
-            ("⊳", Color::Rgb(180, 140, 100))
+            ("⊳", rgb(180, 140, 100))
         } else {
             match todo.status.as_str() {
-                "completed" => ("✓", Color::Rgb(100, 180, 100)),
-                "in_progress" => ("▶", Color::Rgb(255, 200, 100)),
-                "cancelled" => ("✗", Color::Rgb(120, 80, 80)),
-                _ => ("○", Color::Rgb(120, 120, 130)),
+                "completed" => ("✓", rgb(100, 180, 100)),
+                "in_progress" => ("▶", rgb(255, 200, 100)),
+                "cancelled" => ("✗", rgb(120, 80, 80)),
+                _ => ("○", rgb(120, 120, 130)),
             }
         };
 
@@ -2005,13 +2006,13 @@ fn render_todos_widget(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static>>
         let content = truncate_smart(&todo.content, max_len);
 
         let text_color = if todo.status == "completed" {
-            Color::Rgb(100, 100, 110)
+            rgb(100, 100, 110)
         } else if is_blocked {
-            Color::Rgb(120, 120, 130)
+            rgb(120, 120, 130)
         } else if todo.status == "in_progress" {
-            Color::Rgb(200, 200, 210)
+            rgb(200, 200, 210)
         } else {
-            Color::Rgb(160, 160, 170)
+            rgb(160, 160, 170)
         };
 
         let mut spans = vec![
@@ -2021,7 +2022,7 @@ fn render_todos_widget(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static>>
         if !suffix.is_empty() {
             spans.push(Span::styled(
                 suffix.to_string(),
-                Style::default().fg(Color::Rgb(100, 100, 110)),
+                Style::default().fg(rgb(100, 100, 110)),
             ));
         }
         lines.push(Line::from(spans));
@@ -2033,7 +2034,7 @@ fn render_todos_widget(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static>>
         let remaining = data.todos.len() - shown;
         lines.push(Line::from(vec![Span::styled(
             format!("  +{} more", remaining),
-            Style::default().fg(Color::Rgb(100, 100, 110)),
+            Style::default().fg(rgb(100, 100, 110)),
         )]));
     }
 
@@ -2081,10 +2082,10 @@ fn render_memory_widget(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static>
 
     // Title with count
     lines.push(Line::from(vec![
-        Span::styled("🧠 ", Style::default().fg(Color::Rgb(200, 150, 255))),
+        Span::styled("🧠 ", Style::default().fg(rgb(200, 150, 255))),
         Span::styled(
             format!("{} memories", info.total_count),
-            Style::default().fg(Color::Rgb(180, 180, 190)),
+            Style::default().fg(rgb(180, 180, 190)),
         ),
     ]));
 
@@ -2107,7 +2108,7 @@ fn render_memory_widget(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static>
                 &stats_parts.join(" · "),
                 inner.width.saturating_sub(2) as usize,
             ),
-            Style::default().fg(Color::Rgb(130, 130, 140)),
+            Style::default().fg(rgb(130, 130, 140)),
         )]));
 
         if !info.by_category.is_empty() {
@@ -2132,7 +2133,7 @@ fn render_memory_widget(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static>
 
             lines.push(Line::from(vec![Span::styled(
                 cat_text,
-                Style::default().fg(Color::Rgb(105, 105, 115)),
+                Style::default().fg(rgb(105, 105, 115)),
             )]));
         }
     }
@@ -2148,9 +2149,9 @@ fn render_memory_widget(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static>
     // Activity state if active
     if let Some(activity) = &info.activity {
         let max_width = inner.width.saturating_sub(4) as usize;
-        let dim = Color::Rgb(100, 100, 110);
-        let text_color = Color::Rgb(160, 160, 170);
-        let label_color = Color::Rgb(140, 140, 150);
+        let dim = rgb(100, 100, 110);
+        let text_color = rgb(160, 160, 170);
+        let label_color = rgb(140, 140, 150);
 
         if let Some(pipeline) = &activity.pipeline {
             let steps: Vec<(
@@ -2190,10 +2191,10 @@ fn render_memory_widget(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static>
                     continue;
                 }
                 let (icon, icon_color) = match status {
-                    StepStatus::Running => ("⠋", Color::Rgb(255, 200, 100)),
-                    StepStatus::Done => ("✓", Color::Rgb(100, 200, 100)),
-                    StepStatus::Error => ("!", Color::Rgb(255, 100, 100)),
-                    _ => ("○", Color::Rgb(80, 80, 90)),
+                    StepStatus::Running => ("⠋", rgb(255, 200, 100)),
+                    StepStatus::Done => ("✓", rgb(100, 200, 100)),
+                    StepStatus::Error => ("!", rgb(255, 100, 100)),
+                    _ => ("○", rgb(80, 80, 90)),
                 };
                 let mut spans: Vec<Span> = vec![
                     Span::styled(format!("{} ", icon), Style::default().fg(icon_color)),
@@ -2208,7 +2209,7 @@ fn render_memory_widget(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static>
                     if let Some((done, total)) = progress {
                         spans.push(Span::styled(
                             format!("{}/{}...", done, total),
-                            Style::default().fg(Color::Rgb(255, 200, 100)),
+                            Style::default().fg(rgb(255, 200, 100)),
                         ));
                     }
                 }
@@ -2219,7 +2220,7 @@ fn render_memory_widget(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static>
                 MemoryState::Extracting { reason } => {
                     let elapsed = format_age(activity.state_since.elapsed());
                     lines.push(Line::from(vec![
-                        Span::styled("🧠 ", Style::default().fg(Color::Rgb(200, 150, 255))),
+                        Span::styled("🧠 ", Style::default().fg(rgb(200, 150, 255))),
                         Span::styled(
                             truncate_smart(
                                 &format!("extracting ({}) {}", reason, elapsed),
@@ -2285,10 +2286,10 @@ fn render_memory_topology_lines(info: &MemoryInfo, inner: Rect) -> Vec<Line<'sta
     let hub_label = truncate_smart(&hub.label, inner.width.saturating_sub(8) as usize);
     let hub_kind = if hub.kind == "tag" { "tag" } else { "mem" };
     lines.push(Line::from(vec![
-        Span::styled("• ", Style::default().fg(Color::Rgb(140, 180, 220))),
+        Span::styled("• ", Style::default().fg(rgb(140, 180, 220))),
         Span::styled(
             format!("hub {}: {}", hub_kind, hub_label),
-            Style::default().fg(Color::Rgb(145, 145, 155)),
+            Style::default().fg(rgb(145, 145, 155)),
         ),
     ]));
 
@@ -2317,7 +2318,7 @@ fn render_memory_topology_lines(info: &MemoryInfo, inner: Rect) -> Vec<Line<'sta
         let text = truncate_smart(&text, inner.width.saturating_sub(2) as usize);
         lines.push(Line::from(vec![Span::styled(
             text,
-            Style::default().fg(Color::Rgb(110, 110, 122)),
+            Style::default().fg(rgb(110, 110, 122)),
         )]));
         if lines.len() >= max_lines {
             break;
@@ -2348,15 +2349,15 @@ fn swarm_member_label(member: &SwarmMemberStatus) -> String {
 
 fn swarm_status_style(status: &str) -> (Color, &'static str) {
     match status {
-        "spawned" => (Color::Rgb(140, 140, 150), "○"),
-        "ready" => (Color::Rgb(120, 180, 120), "●"),
-        "running" => (Color::Rgb(255, 200, 100), "▶"),
-        "blocked" => (Color::Rgb(255, 170, 80), "⏸"),
-        "failed" => (Color::Rgb(255, 100, 100), "✗"),
-        "completed" => (Color::Rgb(100, 200, 100), "✓"),
-        "stopped" => (Color::Rgb(140, 140, 150), "■"),
-        "crashed" => (Color::Rgb(255, 80, 80), "!"),
-        _ => (Color::Rgb(140, 140, 150), "·"),
+        "spawned" => (rgb(140, 140, 150), "○"),
+        "ready" => (rgb(120, 180, 120), "●"),
+        "running" => (rgb(255, 200, 100), "▶"),
+        "blocked" => (rgb(255, 170, 80), "⏸"),
+        "failed" => (rgb(255, 100, 100), "✗"),
+        "completed" => (rgb(100, 200, 100), "✓"),
+        "stopped" => (rgb(140, 140, 150), "■"),
+        "crashed" => (rgb(255, 80, 80), "!"),
+        _ => (rgb(140, 140, 150), "·"),
     }
 }
 
@@ -2380,10 +2381,10 @@ fn swarm_member_line(member: &SwarmMemberStatus, max_width: usize) -> Line<'stat
     Line::from(vec![
         Span::styled(
             role_prefix.to_string(),
-            Style::default().fg(Color::Rgb(255, 200, 100)),
+            Style::default().fg(rgb(255, 200, 100)),
         ),
         Span::styled(format!("{} ", icon), Style::default().fg(color)),
-        Span::styled(line_text, Style::default().fg(Color::Rgb(140, 140, 150))),
+        Span::styled(line_text, Style::default().fg(rgb(140, 140, 150))),
     ])
 }
 
@@ -2398,25 +2399,25 @@ fn render_swarm_widget(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static>>
     // Stats line
     let mut stats_parts: Vec<Span> = vec![Span::styled(
         "🐝 ",
-        Style::default().fg(Color::Rgb(255, 200, 100)),
+        Style::default().fg(rgb(255, 200, 100)),
     )];
 
     if info.session_count > 0 {
         stats_parts.push(Span::styled(
             format!("{}s", info.session_count),
-            Style::default().fg(Color::Rgb(160, 160, 170)),
+            Style::default().fg(rgb(160, 160, 170)),
         ));
     }
     if let Some(clients) = info.client_count {
         if info.session_count > 0 {
             stats_parts.push(Span::styled(
                 " · ",
-                Style::default().fg(Color::Rgb(100, 100, 110)),
+                Style::default().fg(rgb(100, 100, 110)),
             ));
         }
         stats_parts.push(Span::styled(
             format!("{}c", clients),
-            Style::default().fg(Color::Rgb(160, 160, 170)),
+            Style::default().fg(rgb(160, 160, 170)),
         ));
     }
     lines.push(Line::from(stats_parts));
@@ -2425,10 +2426,10 @@ fn render_swarm_widget(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static>>
     if info.members.is_empty() {
         if let Some(status) = &info.subagent_status {
             lines.push(Line::from(vec![
-                Span::styled("▶ ", Style::default().fg(Color::Rgb(255, 200, 100))),
+                Span::styled("▶ ", Style::default().fg(rgb(255, 200, 100))),
                 Span::styled(
                     truncate_smart(status, inner.width.saturating_sub(4) as usize),
-                    Style::default().fg(Color::Rgb(200, 200, 210)),
+                    Style::default().fg(rgb(200, 200, 210)),
                 ),
             ]));
         }
@@ -2444,10 +2445,10 @@ fn render_swarm_widget(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static>>
     } else {
         for name in info.session_names.iter().take(max_names.min(3)) {
             lines.push(Line::from(vec![
-                Span::styled("  · ", Style::default().fg(Color::Rgb(100, 100, 110))),
+                Span::styled("  · ", Style::default().fg(rgb(100, 100, 110))),
                 Span::styled(
                     truncate_smart(name, max_name_len),
-                    Style::default().fg(Color::Rgb(140, 140, 150)),
+                    Style::default().fg(rgb(140, 140, 150)),
                 ),
             ]));
         }
@@ -2467,7 +2468,7 @@ fn render_background_widget(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'sta
 
     let mut spans: Vec<Span> = vec![Span::styled(
         "⏳ ",
-        Style::default().fg(Color::Rgb(180, 140, 255)),
+        Style::default().fg(rgb(180, 140, 255)),
     )];
 
     let mut parts: Vec<String> = Vec::new();
@@ -2489,7 +2490,7 @@ fn render_background_widget(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'sta
 
     spans.push(Span::styled(
         parts.join(" "),
-        Style::default().fg(Color::Rgb(160, 160, 170)),
+        Style::default().fg(rgb(160, 160, 170)),
     ));
 
     vec![Line::from(spans)]
@@ -2502,20 +2503,20 @@ fn render_ambient_widget(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static
     };
 
     let mut lines: Vec<Line> = Vec::new();
-    let dim = Color::Rgb(100, 100, 110);
-    let label_color = Color::Rgb(140, 140, 150);
+    let dim = rgb(100, 100, 110);
+    let label_color = rgb(140, 140, 150);
     let max_w = inner.width.saturating_sub(2) as usize;
 
     // Status line with icon
     let (icon, status_text, status_color) = match &info.status {
-        AmbientStatus::Idle => ("○", "Idle".to_string(), Color::Rgb(120, 120, 130)),
+        AmbientStatus::Idle => ("○", "Idle".to_string(), rgb(120, 120, 130)),
         AmbientStatus::Running { detail } => (
             "●",
             format!("Running: {}", detail),
-            Color::Rgb(100, 200, 100),
+            rgb(100, 200, 100),
         ),
         AmbientStatus::Scheduled { .. } => {
-            ("◐", "Waiting for next run".to_string(), Color::Rgb(140, 180, 255))
+            ("◐", "Waiting for next run".to_string(), rgb(140, 180, 255))
         }
         AmbientStatus::Paused { reason } => (
             "⏸",
@@ -2523,7 +2524,7 @@ fn render_ambient_widget(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static
                 "Paused: {}",
                 truncate_smart(reason, inner.width.saturating_sub(12) as usize)
             ),
-            Color::Rgb(255, 200, 100),
+            rgb(255, 200, 100),
         ),
         AmbientStatus::Disabled => ("○", "Not running".to_string(), dim),
     };
@@ -2532,7 +2533,7 @@ fn render_ambient_widget(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static
         Span::styled(format!("{} ", icon), Style::default().fg(status_color)),
         Span::styled(
             truncate_smart(&status_text, inner.width.saturating_sub(3) as usize),
-            Style::default().fg(Color::Rgb(180, 180, 190)),
+            Style::default().fg(rgb(180, 180, 190)),
         ),
     ]));
 
@@ -2593,11 +2594,11 @@ fn render_ambient_widget(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static
         let empty = bar_width.saturating_sub(filled);
 
         let bar_color = if pct < 20 {
-            Color::Rgb(255, 100, 100)
+            rgb(255, 100, 100)
         } else if pct <= 50 {
-            Color::Rgb(255, 200, 100)
+            rgb(255, 200, 100)
         } else {
-            Color::Rgb(100, 200, 100)
+            rgb(100, 200, 100)
         };
 
         lines.push(Line::from(vec![
@@ -2605,7 +2606,7 @@ fn render_ambient_widget(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static
             Span::styled("█".repeat(filled), Style::default().fg(bar_color)),
             Span::styled(
                 "░".repeat(empty),
-                Style::default().fg(Color::Rgb(50, 50, 60)),
+                Style::default().fg(rgb(50, 50, 60)),
             ),
             Span::styled(format!(" {}%", pct), Style::default().fg(bar_color)),
         ]));
@@ -2631,17 +2632,17 @@ fn render_usage_widget(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static>>
                     format_tokens(info.input_tokens),
                     format_tokens(info.output_tokens)
                 ),
-                Style::default().fg(Color::Rgb(140, 140, 150)),
+                Style::default().fg(rgb(140, 140, 150)),
             )])]
         }
         UsageProvider::CostBased => {
             // Show token costs for API-key providers (OpenRouter, direct API)
             vec![
                 Line::from(vec![
-                    Span::styled("💰 ", Style::default().fg(Color::Rgb(140, 180, 255))),
+                    Span::styled("💰 ", Style::default().fg(rgb(140, 180, 255))),
                     Span::styled(
                         format!("${:.4}", info.total_cost),
-                        Style::default().fg(Color::Rgb(180, 180, 190)).bold(),
+                        Style::default().fg(rgb(180, 180, 190)).bold(),
                     ),
                 ]),
                 Line::from(vec![Span::styled(
@@ -2650,7 +2651,7 @@ fn render_usage_widget(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static>>
                         format_tokens(info.input_tokens),
                         format_tokens(info.output_tokens)
                     ),
-                    Style::default().fg(Color::Rgb(140, 140, 150)),
+                    Style::default().fg(rgb(140, 140, 150)),
                 )]),
             ]
         }
@@ -2676,7 +2677,7 @@ fn render_usage_widget(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static>>
                 lines.push(Line::from(vec![Span::styled(
                     format!("{} limits", label),
                     Style::default()
-                        .fg(Color::Rgb(140, 140, 150))
+                        .fg(rgb(140, 140, 150))
                         .add_modifier(ratatui::style::Modifier::DIM),
                 )]));
             }
@@ -2748,10 +2749,10 @@ fn render_model_widget(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static>>
     let max_len = inner.width.saturating_sub(2) as usize;
 
     let mut spans = vec![
-        Span::styled("⚡ ", Style::default().fg(Color::Rgb(140, 180, 255))),
+        Span::styled("⚡ ", Style::default().fg(rgb(140, 180, 255))),
         Span::styled(
             truncate_smart(&short_name, max_len.saturating_sub(2)),
-            Style::default().fg(Color::Rgb(180, 180, 190)).bold(),
+            Style::default().fg(rgb(180, 180, 190)).bold(),
         ),
     ];
 
@@ -2767,7 +2768,7 @@ fn render_model_widget(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static>>
         spans.push(Span::styled(" ", Style::default()));
         spans.push(Span::styled(
             format!("({})", effort_short),
-            Style::default().fg(Color::Rgb(255, 200, 100)),
+            Style::default().fg(rgb(255, 200, 100)),
         ));
     }
 
@@ -2795,7 +2796,7 @@ fn render_model_widget(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static>>
             let detail = truncate_smart(&parts.join(" · "), max_len.saturating_sub(2));
             lines.push(Line::from(vec![Span::styled(
                 detail,
-                Style::default().fg(Color::Rgb(140, 140, 150)),
+                Style::default().fg(rgb(140, 140, 150)),
             )]));
         }
     }
@@ -2807,21 +2808,21 @@ fn render_model_widget(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static>>
         .filter(|s| !s.is_empty())
     {
         let mut provider_spans = vec![
-            Span::styled("☁ ", Style::default().fg(Color::Rgb(140, 180, 255))),
+            Span::styled("☁ ", Style::default().fg(rgb(140, 180, 255))),
             Span::styled(
                 provider.to_lowercase(),
-                Style::default().fg(Color::Rgb(140, 180, 255)),
+                Style::default().fg(rgb(140, 180, 255)),
             ),
         ];
         if let Some(upstream) = data.upstream_provider.as_deref().map(str::trim) {
             if !upstream.is_empty() {
                 provider_spans.push(Span::styled(
                     " -> ",
-                    Style::default().fg(Color::Rgb(100, 100, 110)),
+                    Style::default().fg(rgb(100, 100, 110)),
                 ));
                 provider_spans.push(Span::styled(
                     upstream.to_string(),
-                    Style::default().fg(Color::Rgb(220, 190, 120)),
+                    Style::default().fg(rgb(220, 190, 120)),
                 ));
             }
         }
@@ -2835,10 +2836,10 @@ fn render_model_widget(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static>>
         .filter(|s| !s.is_empty())
     {
         lines.push(Line::from(vec![
-            Span::styled("↔ ", Style::default().fg(Color::Rgb(140, 180, 255))),
+            Span::styled("↔ ", Style::default().fg(rgb(140, 180, 255))),
             Span::styled(
                 connection.to_lowercase(),
-                Style::default().fg(Color::Rgb(140, 180, 255)),
+                Style::default().fg(rgb(140, 180, 255)),
             ),
         ]));
     }
@@ -2846,12 +2847,12 @@ fn render_model_widget(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static>>
     // Auth method line (with upstream provider if available)
     if data.auth_method != AuthMethod::Unknown {
         let (icon, label, color) = match data.auth_method {
-            AuthMethod::AnthropicOAuth => ("🔐", "OAuth", Color::Rgb(255, 160, 100)),
-            AuthMethod::AnthropicApiKey => ("🔑", "API Key", Color::Rgb(180, 180, 190)),
-            AuthMethod::OpenAIOAuth => ("🔐", "OAuth", Color::Rgb(100, 200, 180)),
-            AuthMethod::OpenAIApiKey => ("🔑", "API Key", Color::Rgb(180, 180, 190)),
-            AuthMethod::OpenRouterApiKey => ("🔑", "API Key", Color::Rgb(140, 180, 255)),
-            AuthMethod::CopilotOAuth => ("🔐", "OAuth", Color::Rgb(110, 200, 140)),
+            AuthMethod::AnthropicOAuth => ("🔐", "OAuth", rgb(255, 160, 100)),
+            AuthMethod::AnthropicApiKey => ("🔑", "API Key", rgb(180, 180, 190)),
+            AuthMethod::OpenAIOAuth => ("🔐", "OAuth", rgb(100, 200, 180)),
+            AuthMethod::OpenAIApiKey => ("🔑", "API Key", rgb(180, 180, 190)),
+            AuthMethod::OpenRouterApiKey => ("🔑", "API Key", rgb(140, 180, 255)),
+            AuthMethod::CopilotOAuth => ("🔐", "OAuth", rgb(110, 200, 140)),
             AuthMethod::Unknown => unreachable!(),
         };
 
@@ -2859,17 +2860,17 @@ fn render_model_widget(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static>>
         if let Some(ref upstream) = data.upstream_provider {
             lines.push(Line::from(vec![
                 Span::styled(format!("{} ", icon), Style::default().fg(color)),
-                Span::styled(label, Style::default().fg(Color::Rgb(140, 140, 150))),
-                Span::styled(" via ", Style::default().fg(Color::Rgb(100, 100, 110))),
+                Span::styled(label, Style::default().fg(rgb(140, 140, 150))),
+                Span::styled(" via ", Style::default().fg(rgb(100, 100, 110))),
                 Span::styled(
                     upstream.clone(),
-                    Style::default().fg(Color::Rgb(200, 180, 100)),
+                    Style::default().fg(rgb(200, 180, 100)),
                 ),
             ]));
         } else {
             lines.push(Line::from(vec![
                 Span::styled(format!("{} ", icon), Style::default().fg(color)),
-                Span::styled(label, Style::default().fg(Color::Rgb(140, 140, 150))),
+                Span::styled(label, Style::default().fg(rgb(140, 140, 150))),
             ]));
         }
     }
@@ -2877,10 +2878,10 @@ fn render_model_widget(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static>>
     if let Some(tps) = data.tokens_per_second {
         if tps.is_finite() && tps > 0.1 {
             lines.push(Line::from(vec![
-                Span::styled("⏱ ", Style::default().fg(Color::Rgb(140, 180, 255))),
+                Span::styled("⏱ ", Style::default().fg(rgb(140, 180, 255))),
                 Span::styled(
                     format!("{:.1} t/s", tps),
-                    Style::default().fg(Color::Rgb(140, 140, 150)),
+                    Style::default().fg(rgb(140, 140, 150)),
                 ),
             ]));
         }
@@ -3340,11 +3341,11 @@ fn render_todos_expanded(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static
     lines.push(Line::from(vec![
         Span::styled(
             "Todos ",
-            Style::default().fg(Color::Rgb(180, 180, 190)).bold(),
+            Style::default().fg(rgb(180, 180, 190)).bold(),
         ),
         Span::styled(
             format!("{}/{}", completed, total),
-            Style::default().fg(Color::Rgb(140, 140, 150)),
+            Style::default().fg(rgb(140, 140, 150)),
         ),
     ]));
 
@@ -3354,16 +3355,16 @@ fn render_todos_expanded(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static
         let filled = ((completed as f64 / total as f64) * bar_width as f64).round() as usize;
         let empty = bar_width.saturating_sub(filled);
         lines.push(Line::from(vec![
-            Span::styled("[", Style::default().fg(Color::Rgb(90, 90, 100))),
+            Span::styled("[", Style::default().fg(rgb(90, 90, 100))),
             Span::styled(
                 "█".repeat(filled),
-                Style::default().fg(Color::Rgb(100, 180, 100)),
+                Style::default().fg(rgb(100, 180, 100)),
             ),
             Span::styled(
                 "░".repeat(empty),
-                Style::default().fg(Color::Rgb(50, 50, 60)),
+                Style::default().fg(rgb(50, 50, 60)),
             ),
-            Span::styled("]", Style::default().fg(Color::Rgb(90, 90, 100))),
+            Span::styled("]", Style::default().fg(rgb(90, 90, 100))),
         ]));
     }
 
@@ -3385,21 +3386,21 @@ fn render_todos_expanded(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static
     for todo in sorted_todos.iter().take(available_lines) {
         let is_blocked = !todo.blocked_by.is_empty();
         let (icon, status_color) = if is_blocked && todo.status != "completed" {
-            ("⊳", Color::Rgb(180, 140, 100))
+            ("⊳", rgb(180, 140, 100))
         } else {
             match todo.status.as_str() {
-                "completed" => ("✓", Color::Rgb(100, 180, 100)),
-                "in_progress" => ("▶", Color::Rgb(255, 200, 100)),
-                "cancelled" => ("✗", Color::Rgb(120, 80, 80)),
-                _ => ("○", Color::Rgb(120, 120, 130)),
+                "completed" => ("✓", rgb(100, 180, 100)),
+                "in_progress" => ("▶", rgb(255, 200, 100)),
+                "cancelled" => ("✗", rgb(120, 80, 80)),
+                _ => ("○", rgb(120, 120, 130)),
             }
         };
 
         // Priority indicator
         let priority_marker = match todo.priority.as_str() {
-            "high" => ("!", Color::Rgb(255, 120, 100)),
-            "medium" => ("", Color::Rgb(200, 180, 100)),
-            _ => ("", Color::Rgb(120, 120, 130)),
+            "high" => ("!", rgb(255, 120, 100)),
+            "medium" => ("", rgb(200, 180, 100)),
+            _ => ("", rgb(120, 120, 130)),
         };
 
         let suffix = if is_blocked && todo.status != "completed" {
@@ -3412,13 +3413,13 @@ fn render_todos_expanded(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static
 
         // Dim completed and blocked items
         let text_color = if todo.status == "completed" {
-            Color::Rgb(100, 100, 110)
+            rgb(100, 100, 110)
         } else if is_blocked {
-            Color::Rgb(120, 120, 130)
+            rgb(120, 120, 130)
         } else if todo.status == "in_progress" {
-            Color::Rgb(200, 200, 210)
+            rgb(200, 200, 210)
         } else {
-            Color::Rgb(160, 160, 170)
+            rgb(160, 160, 170)
         };
 
         let mut spans = vec![Span::styled(
@@ -3438,7 +3439,7 @@ fn render_todos_expanded(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static
         if !suffix.is_empty() {
             spans.push(Span::styled(
                 suffix.to_string(),
-                Style::default().fg(Color::Rgb(100, 100, 110)),
+                Style::default().fg(rgb(100, 100, 110)),
             ));
         }
 
@@ -3463,7 +3464,7 @@ fn render_todos_expanded(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static
         };
         lines.push(Line::from(vec![Span::styled(
             desc,
-            Style::default().fg(Color::Rgb(100, 100, 110)),
+            Style::default().fg(rgb(100, 100, 110)),
         )]));
     }
 
@@ -3607,7 +3608,7 @@ fn render_git_widget(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static>> {
     let mut parts: Vec<Span> = Vec::new();
     parts.push(Span::styled(
         " ",
-        Style::default().fg(Color::Rgb(240, 160, 60)),
+        Style::default().fg(rgb(240, 160, 60)),
     ));
 
     // Calculate how much space stats need so we can truncate branch name
@@ -3633,38 +3634,38 @@ fn render_git_widget(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static>> {
     parts.push(Span::styled(
         branch_display,
         Style::default()
-            .fg(Color::Rgb(200, 200, 210))
+            .fg(rgb(200, 200, 210))
             .add_modifier(Modifier::BOLD),
     ));
 
     if info.modified > 0 {
         parts.push(Span::styled(
             format!(" ~{}", info.modified),
-            Style::default().fg(Color::Rgb(240, 200, 80)),
+            Style::default().fg(rgb(240, 200, 80)),
         ));
     }
     if info.staged > 0 {
         parts.push(Span::styled(
             format!(" +{}", info.staged),
-            Style::default().fg(Color::Rgb(100, 200, 100)),
+            Style::default().fg(rgb(100, 200, 100)),
         ));
     }
     if info.untracked > 0 {
         parts.push(Span::styled(
             format!(" ?{}", info.untracked),
-            Style::default().fg(Color::Rgb(140, 140, 150)),
+            Style::default().fg(rgb(140, 140, 150)),
         ));
     }
     if info.ahead > 0 {
         parts.push(Span::styled(
             format!(" ↑{}", info.ahead),
-            Style::default().fg(Color::Rgb(100, 200, 100)),
+            Style::default().fg(rgb(100, 200, 100)),
         ));
     }
     if info.behind > 0 {
         parts.push(Span::styled(
             format!(" ↓{}", info.behind),
-            Style::default().fg(Color::Rgb(255, 140, 100)),
+            Style::default().fg(rgb(255, 140, 100)),
         ));
     }
 
@@ -3676,7 +3677,7 @@ fn render_git_widget(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static>> {
         let display = truncate_smart(file, w.saturating_sub(4));
         lines.push(Line::from(vec![
             Span::raw("  "),
-            Span::styled(display, Style::default().fg(Color::Rgb(140, 140, 155))),
+            Span::styled(display, Style::default().fg(rgb(140, 140, 155))),
         ]));
     }
     if info.dirty_files.len() > max_files {
@@ -3684,7 +3685,7 @@ fn render_git_widget(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static>> {
             Span::raw("  "),
             Span::styled(
                 format!("+{} more", info.dirty_files.len() - max_files),
-                Style::default().fg(Color::Rgb(100, 100, 115)),
+                Style::default().fg(rgb(100, 100, 115)),
             ),
         ]));
     }
@@ -3701,11 +3702,11 @@ fn render_tips_widget(inner: Rect) -> Vec<Line<'static>> {
 
     // Header line: icon + "Did you know?"
     lines.push(Line::from(vec![
-        Span::styled("💡 ", Style::default().fg(Color::Rgb(255, 210, 80))),
+        Span::styled("💡 ", Style::default().fg(rgb(255, 210, 80))),
         Span::styled(
             "Did you know?",
             Style::default()
-                .fg(Color::Rgb(200, 200, 210))
+                .fg(rgb(200, 200, 210))
                 .add_modifier(Modifier::BOLD),
         ),
     ]));
@@ -3714,7 +3715,7 @@ fn render_tips_widget(inner: Rect) -> Vec<Line<'static>> {
     for line_text in wrapped {
         lines.push(Line::from(vec![
             Span::raw("  "),
-            Span::styled(line_text, Style::default().fg(Color::Rgb(160, 160, 175))),
+            Span::styled(line_text, Style::default().fg(rgb(160, 160, 175))),
         ]));
     }
 
@@ -4052,22 +4053,22 @@ fn render_todos_compact(data: &InfoWidgetData, _inner: Rect) -> Vec<Line<'static
     vec![
         Line::from(vec![Span::styled(
             "Todos",
-            Style::default().fg(Color::Rgb(180, 180, 190)).bold(),
+            Style::default().fg(rgb(180, 180, 190)).bold(),
         )]),
         Line::from(vec![
             Span::styled(
                 format!("{} total", total),
-                Style::default().fg(Color::Rgb(160, 160, 170)),
+                Style::default().fg(rgb(160, 160, 170)),
             ),
-            Span::styled(" · ", Style::default().fg(Color::Rgb(100, 100, 110))),
+            Span::styled(" · ", Style::default().fg(rgb(100, 100, 110))),
             Span::styled(
                 format!("{} active", in_progress),
-                Style::default().fg(Color::Rgb(255, 200, 100)),
+                Style::default().fg(rgb(255, 200, 100)),
             ),
-            Span::styled(" · ", Style::default().fg(Color::Rgb(100, 100, 110))),
+            Span::styled(" · ", Style::default().fg(rgb(100, 100, 110))),
             Span::styled(
                 format!("{} open", pending),
-                Style::default().fg(Color::Rgb(140, 140, 150)),
+                Style::default().fg(rgb(140, 140, 150)),
             ),
         ]),
     ]
@@ -4079,23 +4080,23 @@ fn render_queue_compact(data: &InfoWidgetData, _inner: Rect) -> Vec<Line<'static
     };
 
     let (mode_text, mode_color) = if queue_mode {
-        ("Wait", Color::Rgb(255, 200, 100))
+        ("Wait", rgb(255, 200, 100))
     } else {
-        ("ASAP", Color::Rgb(120, 200, 120))
+        ("ASAP", rgb(120, 200, 120))
     };
 
     vec![Line::from(vec![
-        Span::styled("Queue: ", Style::default().fg(Color::Rgb(140, 140, 150))),
+        Span::styled("Queue: ", Style::default().fg(rgb(140, 140, 150))),
         Span::styled(mode_text, Style::default().fg(mode_color)),
     ])]
 }
 
 fn render_memory_compact(info: &MemoryInfo) -> Vec<Line<'static>> {
     let mut spans = vec![
-        Span::styled("🧠 ", Style::default().fg(Color::Rgb(200, 150, 255))),
+        Span::styled("🧠 ", Style::default().fg(rgb(200, 150, 255))),
         Span::styled(
             format!("{}", info.total_count),
-            Style::default().fg(Color::Rgb(180, 180, 190)),
+            Style::default().fg(rgb(180, 180, 190)),
         ),
         Span::styled(
             if info.total_count == 1 {
@@ -4103,28 +4104,28 @@ fn render_memory_compact(info: &MemoryInfo) -> Vec<Line<'static>> {
             } else {
                 " memories"
             },
-            Style::default().fg(Color::Rgb(140, 140, 150)),
+            Style::default().fg(rgb(140, 140, 150)),
         ),
     ];
 
     if let Some(activity) = &info.activity {
         let icon = match &activity.state {
             MemoryState::Embedding | MemoryState::SidecarChecking { .. } => {
-                Some(("🔍", Color::Rgb(255, 200, 100)))
+                Some(("🔍", rgb(255, 200, 100)))
             }
             MemoryState::FoundRelevant { count } => {
-                Some((if *count > 0 { "✓" } else { "" }, Color::Rgb(100, 200, 100)))
+                Some((if *count > 0 { "✓" } else { "" }, rgb(100, 200, 100)))
             }
-            MemoryState::Extracting { .. } => Some(("🧠", Color::Rgb(200, 150, 255))),
-            MemoryState::Maintaining { .. } => Some(("🌿", Color::Rgb(120, 220, 180))),
-            MemoryState::ToolAction { .. } => Some(("💾", Color::Rgb(200, 150, 255))),
+            MemoryState::Extracting { .. } => Some(("🧠", rgb(200, 150, 255))),
+            MemoryState::Maintaining { .. } => Some(("🌿", rgb(120, 220, 180))),
+            MemoryState::ToolAction { .. } => Some(("💾", rgb(200, 150, 255))),
             MemoryState::Idle => None,
         };
         if let Some((icon_str, color)) = icon {
             if !icon_str.is_empty() {
                 spans.push(Span::styled(
                     " · ",
-                    Style::default().fg(Color::Rgb(100, 100, 110)),
+                    Style::default().fg(rgb(100, 100, 110)),
                 ));
                 spans.push(Span::styled(icon_str, Style::default().fg(color)));
             }
@@ -4137,14 +4138,14 @@ fn render_memory_compact(info: &MemoryInfo) -> Vec<Line<'static>> {
 fn render_memory_expanded(info: &MemoryInfo, inner: Rect) -> Vec<Line<'static>> {
     let mut lines: Vec<Line> = Vec::new();
     let max_width = inner.width.saturating_sub(2) as usize;
-    let dim = Color::Rgb(100, 100, 110);
-    let text_color = Color::Rgb(160, 160, 170);
-    let label_color = Color::Rgb(140, 140, 150);
+    let dim = rgb(100, 100, 110);
+    let text_color = rgb(160, 160, 170);
+    let label_color = rgb(140, 140, 150);
 
     // Title
     lines.push(Line::from(vec![Span::styled(
         "Memory",
-        Style::default().fg(Color::Rgb(180, 180, 190)).bold(),
+        Style::default().fg(rgb(180, 180, 190)).bold(),
     )]));
 
     // Stats line - readable breakdown
@@ -4231,11 +4232,11 @@ fn render_memory_expanded(info: &MemoryInfo, inner: Rect) -> Vec<Line<'static>> 
                 }
 
                 let (icon, icon_color) = match status {
-                    StepStatus::Pending => ("○", Color::Rgb(80, 80, 90)),
-                    StepStatus::Running => ("⠋", Color::Rgb(255, 200, 100)),
-                    StepStatus::Done => ("✓", Color::Rgb(100, 200, 100)),
-                    StepStatus::Error => ("!", Color::Rgb(255, 100, 100)),
-                    StepStatus::Skipped => ("─", Color::Rgb(80, 80, 90)),
+                    StepStatus::Pending => ("○", rgb(80, 80, 90)),
+                    StepStatus::Running => ("⠋", rgb(255, 200, 100)),
+                    StepStatus::Done => ("✓", rgb(100, 200, 100)),
+                    StepStatus::Error => ("!", rgb(255, 100, 100)),
+                    StepStatus::Skipped => ("─", rgb(80, 80, 90)),
                 };
 
                 let mut spans: Vec<Span> = vec![
@@ -4243,7 +4244,7 @@ fn render_memory_expanded(info: &MemoryInfo, inner: Rect) -> Vec<Line<'static>> 
                     Span::styled(
                         format!("{:<8}", name),
                         Style::default().fg(if matches!(status, StepStatus::Running) {
-                            Color::Rgb(200, 200, 210)
+                            rgb(200, 200, 210)
                         } else {
                             label_color
                         }),
@@ -4265,12 +4266,12 @@ fn render_memory_expanded(info: &MemoryInfo, inner: Rect) -> Vec<Line<'static>> 
                     if let Some((done, total)) = progress {
                         spans.push(Span::styled(
                             format!("{}/{}...", done, total),
-                            Style::default().fg(Color::Rgb(255, 200, 100)),
+                            Style::default().fg(rgb(255, 200, 100)),
                         ));
                     } else {
                         spans.push(Span::styled(
                             "...",
-                            Style::default().fg(Color::Rgb(255, 200, 100)),
+                            Style::default().fg(rgb(255, 200, 100)),
                         ));
                     }
                 }
@@ -4283,7 +4284,7 @@ fn render_memory_expanded(info: &MemoryInfo, inner: Rect) -> Vec<Line<'static>> 
                 MemoryState::Extracting { reason } => {
                     let elapsed = format_age(activity.state_since.elapsed());
                     lines.push(Line::from(vec![
-                        Span::styled("🧠 ", Style::default().fg(Color::Rgb(200, 150, 255))),
+                        Span::styled("🧠 ", Style::default().fg(rgb(200, 150, 255))),
                         Span::styled(
                             truncate_with_ellipsis(
                                 &format!("extracting ({})  {}", reason, elapsed),
@@ -4311,7 +4312,7 @@ fn render_memory_expanded(info: &MemoryInfo, inner: Rect) -> Vec<Line<'static>> 
                     lines.push(Line::from(vec![
                         Span::styled(
                             format!("{} ", icon),
-                            Style::default().fg(Color::Rgb(200, 150, 255)),
+                            Style::default().fg(rgb(200, 150, 255)),
                         ),
                         Span::styled(
                             truncate_with_ellipsis(&text, max_width.saturating_sub(3)),
@@ -4384,17 +4385,17 @@ fn format_event_for_expanded(
         MemoryEventKind::EmbeddingComplete { latency_ms, hits } => (
             "→",
             truncate_with_ellipsis(&format!("{} hits ({}ms)", hits, latency_ms), max_width),
-            Color::Rgb(140, 180, 255),
+            rgb(140, 180, 255),
         ),
         MemoryEventKind::SidecarRelevant { memory_preview } => (
             "✓",
             truncate_with_ellipsis(memory_preview, max_width),
-            Color::Rgb(100, 200, 100),
+            rgb(100, 200, 100),
         ),
         MemoryEventKind::MemorySurfaced { memory_preview } => (
             "★",
             truncate_with_ellipsis(memory_preview, max_width),
-            Color::Rgb(255, 220, 100),
+            rgb(255, 220, 100),
         ),
         MemoryEventKind::MemoryInjected {
             count,
@@ -4413,62 +4414,62 @@ fn format_event_for_expanded(
                     &format!("{} {} ({}c){}", count, plural, prompt_chars, detail),
                     max_width,
                 ),
-                Color::Rgb(140, 210, 255),
+                rgb(140, 210, 255),
             )
         }
         MemoryEventKind::MaintenanceComplete { latency_ms } => (
             "🌿",
             truncate_with_ellipsis(&format!("maintained ({}ms)", latency_ms), max_width),
-            Color::Rgb(120, 220, 180),
+            rgb(120, 220, 180),
         ),
         MemoryEventKind::ExtractionStarted { reason } => (
             "🧠",
             truncate_with_ellipsis(&format!("extracting: {}", reason), max_width),
-            Color::Rgb(200, 150, 255),
+            rgb(200, 150, 255),
         ),
         MemoryEventKind::ExtractionComplete { count } => (
             "✓",
             truncate_with_ellipsis(&format!("saved {} memories", count), max_width),
-            Color::Rgb(100, 200, 100),
+            rgb(100, 200, 100),
         ),
         MemoryEventKind::Error { message } => (
             "!",
             truncate_with_ellipsis(message, max_width),
-            Color::Rgb(255, 100, 100),
+            rgb(255, 100, 100),
         ),
         MemoryEventKind::ToolRemembered {
             content, category, ..
         } => (
             "💾",
             truncate_with_ellipsis(&format!("[{}] {}", category, content), max_width),
-            Color::Rgb(100, 200, 100),
+            rgb(100, 200, 100),
         ),
         MemoryEventKind::ToolRecalled { query, count } => (
             "🔍",
             truncate_with_ellipsis(&format!("{} found for '{}'", count, query), max_width),
-            Color::Rgb(140, 180, 255),
+            rgb(140, 180, 255),
         ),
         MemoryEventKind::ToolForgot { id } => (
             "🗑\u{fe0f}",
             truncate_with_ellipsis(id, max_width),
-            Color::Rgb(255, 170, 100),
+            rgb(255, 170, 100),
         ),
         MemoryEventKind::ToolTagged { id, tags } => (
             "🏷\u{fe0f}",
             truncate_with_ellipsis(&format!("{} +{}", id, tags), max_width),
-            Color::Rgb(140, 200, 255),
+            rgb(140, 200, 255),
         ),
         MemoryEventKind::ToolLinked { from, to } => (
             "🔗",
             truncate_with_ellipsis(&format!("{} → {}", from, to), max_width),
-            Color::Rgb(200, 180, 255),
+            rgb(200, 180, 255),
         ),
         MemoryEventKind::ToolListed { count } => (
             "📋",
             format!("{} memories", count),
-            Color::Rgb(140, 140, 150),
+            rgb(140, 140, 150),
         ),
-        _ => ("·", String::new(), Color::Rgb(100, 100, 110)),
+        _ => ("·", String::new(), rgb(100, 100, 110)),
     }
 }
 
@@ -4490,22 +4491,22 @@ fn render_swarm_compact(info: &SwarmInfo) -> Vec<Line<'static>> {
         let label = format!("{} {}", swarm_member_label(member), detail);
         spans.push(Span::styled(
             truncate_smart(&label, 20),
-            Style::default().fg(Color::Rgb(180, 180, 190)),
+            Style::default().fg(rgb(180, 180, 190)),
         ));
     } else if let Some(status) = &info.subagent_status {
         spans.push(Span::styled(
             "▶ ",
-            Style::default().fg(Color::Rgb(255, 200, 100)),
+            Style::default().fg(rgb(255, 200, 100)),
         ));
         spans.push(Span::styled(
             truncate_smart(status, 20),
-            Style::default().fg(Color::Rgb(180, 180, 190)),
+            Style::default().fg(rgb(180, 180, 190)),
         ));
     } else {
         // Show swarm icon (bee for "swarm")
         spans.push(Span::styled(
             "🐝 ",
-            Style::default().fg(Color::Rgb(255, 200, 100)),
+            Style::default().fg(rgb(255, 200, 100)),
         ));
     }
 
@@ -4514,12 +4515,12 @@ fn render_swarm_compact(info: &SwarmInfo) -> Vec<Line<'static>> {
         if !spans.is_empty() {
             spans.push(Span::styled(
                 " · ",
-                Style::default().fg(Color::Rgb(100, 100, 110)),
+                Style::default().fg(rgb(100, 100, 110)),
             ));
         }
         spans.push(Span::styled(
             format!("{}s", info.session_count),
-            Style::default().fg(Color::Rgb(140, 140, 150)),
+            Style::default().fg(rgb(140, 140, 150)),
         ));
     }
 
@@ -4528,12 +4529,12 @@ fn render_swarm_compact(info: &SwarmInfo) -> Vec<Line<'static>> {
         if !spans.is_empty() {
             spans.push(Span::styled(
                 " · ",
-                Style::default().fg(Color::Rgb(100, 100, 110)),
+                Style::default().fg(rgb(100, 100, 110)),
             ));
         }
         spans.push(Span::styled(
             format!("{}c", clients),
-            Style::default().fg(Color::Rgb(140, 140, 150)),
+            Style::default().fg(rgb(140, 140, 150)),
         ));
     }
 
@@ -4550,7 +4551,7 @@ fn render_swarm_expanded(info: &SwarmInfo, inner: Rect) -> Vec<Line<'static>> {
     // Title
     lines.push(Line::from(vec![Span::styled(
         "Swarm",
-        Style::default().fg(Color::Rgb(180, 180, 190)).bold(),
+        Style::default().fg(rgb(180, 180, 190)).bold(),
     )]));
 
     // Stats line
@@ -4562,19 +4563,19 @@ fn render_swarm_expanded(info: &SwarmInfo, inner: Rect) -> Vec<Line<'static>> {
                 info.session_count,
                 if info.session_count == 1 { "" } else { "s" }
             ),
-            Style::default().fg(Color::Rgb(160, 160, 170)),
+            Style::default().fg(rgb(160, 160, 170)),
         ));
     }
     if let Some(clients) = info.client_count {
         if !stats_parts.is_empty() {
             stats_parts.push(Span::styled(
                 " · ",
-                Style::default().fg(Color::Rgb(100, 100, 110)),
+                Style::default().fg(rgb(100, 100, 110)),
             ));
         }
         stats_parts.push(Span::styled(
             format!("{} client{}", clients, if clients == 1 { "" } else { "s" }),
-            Style::default().fg(Color::Rgb(160, 160, 170)),
+            Style::default().fg(rgb(160, 160, 170)),
         ));
     }
     if !stats_parts.is_empty() {
@@ -4585,10 +4586,10 @@ fn render_swarm_expanded(info: &SwarmInfo, inner: Rect) -> Vec<Line<'static>> {
     if info.members.is_empty() {
         if let Some(status) = &info.subagent_status {
             lines.push(Line::from(vec![
-                Span::styled("▶ ", Style::default().fg(Color::Rgb(255, 200, 100))),
+                Span::styled("▶ ", Style::default().fg(rgb(255, 200, 100))),
                 Span::styled(
                     truncate_smart(status, inner.width.saturating_sub(4) as usize),
-                    Style::default().fg(Color::Rgb(200, 200, 210)),
+                    Style::default().fg(rgb(200, 200, 210)),
                 ),
             ]));
         }
@@ -4615,11 +4616,11 @@ fn render_swarm_expanded(info: &SwarmInfo, inner: Rect) -> Vec<Line<'static>> {
                 let coord_label = swarm_member_label(coord);
                 let (color, icon) = swarm_status_style(&coord.status);
                 lines.push(Line::from(vec![
-                    Span::styled("★ ", Style::default().fg(Color::Rgb(255, 200, 100))),
+                    Span::styled("★ ", Style::default().fg(rgb(255, 200, 100))),
                     Span::styled(format!("{} ", icon), Style::default().fg(color)),
                     Span::styled(
                         truncate_smart(&coord_label, max_name_len),
-                        Style::default().fg(Color::Rgb(200, 200, 210)),
+                        Style::default().fg(rgb(200, 200, 210)),
                     ),
                 ]));
 
@@ -4632,7 +4633,7 @@ fn render_swarm_expanded(info: &SwarmInfo, inner: Rect) -> Vec<Line<'static>> {
                     );
                     lines.push(Line::from(vec![Span::styled(
                         connector,
-                        Style::default().fg(Color::Rgb(80, 80, 90)),
+                        Style::default().fg(rgb(80, 80, 90)),
                     )]));
                 }
             }
@@ -4644,7 +4645,7 @@ fn render_swarm_expanded(info: &SwarmInfo, inner: Rect) -> Vec<Line<'static>> {
                 let remaining = agents.len() - 4;
                 lines.push(Line::from(vec![Span::styled(
                     format!("  +{} more", remaining),
-                    Style::default().fg(Color::Rgb(100, 100, 110)),
+                    Style::default().fg(rgb(100, 100, 110)),
                 )]));
             }
         } else {
@@ -4656,7 +4657,7 @@ fn render_swarm_expanded(info: &SwarmInfo, inner: Rect) -> Vec<Line<'static>> {
                 let remaining = info.members.len() - 4;
                 lines.push(Line::from(vec![Span::styled(
                     format!("  +{} more", remaining),
-                    Style::default().fg(Color::Rgb(100, 100, 110)),
+                    Style::default().fg(rgb(100, 100, 110)),
                 )]));
             }
         }
@@ -4664,10 +4665,10 @@ fn render_swarm_expanded(info: &SwarmInfo, inner: Rect) -> Vec<Line<'static>> {
         // Session names (up to 4)
         for name in info.session_names.iter().take(4) {
             lines.push(Line::from(vec![
-                Span::styled("  · ", Style::default().fg(Color::Rgb(100, 100, 110))),
+                Span::styled("  · ", Style::default().fg(rgb(100, 100, 110))),
                 Span::styled(
                     truncate_smart(name, max_name_len),
-                    Style::default().fg(Color::Rgb(140, 140, 150)),
+                    Style::default().fg(rgb(140, 140, 150)),
                 ),
             ]));
         }
@@ -4677,7 +4678,7 @@ fn render_swarm_expanded(info: &SwarmInfo, inner: Rect) -> Vec<Line<'static>> {
             let remaining = info.session_names.len() - 4;
             lines.push(Line::from(vec![Span::styled(
                 format!("  +{} more", remaining),
-                Style::default().fg(Color::Rgb(100, 100, 110)),
+                Style::default().fg(rgb(100, 100, 110)),
             )]));
         }
     }
@@ -4691,7 +4692,7 @@ fn render_background_compact(info: &BackgroundInfo) -> Vec<Line<'static>> {
     // Show spinner icon for active background work
     spans.push(Span::styled(
         "⏳ ",
-        Style::default().fg(Color::Rgb(180, 140, 255)),
+        Style::default().fg(rgb(180, 140, 255)),
     ));
 
     let mut parts: Vec<String> = Vec::new();
@@ -4718,7 +4719,7 @@ fn render_background_compact(info: &BackgroundInfo) -> Vec<Line<'static>> {
 
     spans.push(Span::styled(
         parts.join(" "),
-        Style::default().fg(Color::Rgb(160, 160, 170)),
+        Style::default().fg(rgb(160, 160, 170)),
     ));
 
     if spans.len() <= 1 {
@@ -4752,7 +4753,7 @@ fn render_usage_compact(info: &UsageInfo, width: u16) -> Vec<Line<'static>> {
         lines.push(Line::from(vec![Span::styled(
             format!("{} limits", label),
             Style::default()
-                .fg(Color::Rgb(140, 140, 150))
+                .fg(rgb(140, 140, 150))
                 .add_modifier(ratatui::style::Modifier::DIM),
         )]));
     }
@@ -4795,41 +4796,41 @@ fn render_git_compact(info: &GitInfo, width: u16) -> Vec<Line<'static>> {
     let branch_display = truncate_smart(&info.branch, w.saturating_sub(12).max(6));
     parts.push(Span::styled(
         " ",
-        Style::default().fg(Color::Rgb(240, 160, 60)),
+        Style::default().fg(rgb(240, 160, 60)),
     ));
     parts.push(Span::styled(
         branch_display,
-        Style::default().fg(Color::Rgb(160, 160, 170)),
+        Style::default().fg(rgb(160, 160, 170)),
     ));
 
     if info.ahead > 0 {
         parts.push(Span::styled(
             format!(" ↑{}", info.ahead),
-            Style::default().fg(Color::Rgb(100, 200, 100)),
+            Style::default().fg(rgb(100, 200, 100)),
         ));
     }
     if info.behind > 0 {
         parts.push(Span::styled(
             format!(" ↓{}", info.behind),
-            Style::default().fg(Color::Rgb(255, 140, 100)),
+            Style::default().fg(rgb(255, 140, 100)),
         ));
     }
     if info.modified > 0 {
         parts.push(Span::styled(
             format!(" ~{}", info.modified),
-            Style::default().fg(Color::Rgb(240, 200, 80)),
+            Style::default().fg(rgb(240, 200, 80)),
         ));
     }
     if info.staged > 0 {
         parts.push(Span::styled(
             format!(" +{}", info.staged),
-            Style::default().fg(Color::Rgb(100, 200, 100)),
+            Style::default().fg(rgb(100, 200, 100)),
         ));
     }
     if info.untracked > 0 {
         parts.push(Span::styled(
             format!(" ?{}", info.untracked),
-            Style::default().fg(Color::Rgb(140, 140, 150)),
+            Style::default().fg(rgb(140, 140, 150)),
         ));
     }
 
@@ -4847,13 +4848,13 @@ fn render_labeled_bar(
 ) -> Line<'static> {
     // Color based on remaining percentage
     let color = if left_pct == 0 {
-        Color::Rgb(255, 100, 100) // Red - depleted
+        rgb(255, 100, 100) // Red - depleted
     } else if left_pct < 20 {
-        Color::Rgb(255, 100, 100) // Red - critical
+        rgb(255, 100, 100) // Red - critical
     } else if left_pct <= 50 {
-        Color::Rgb(255, 200, 100) // Yellow - getting low
+        rgb(255, 200, 100) // Yellow - getting low
     } else {
-        Color::Rgb(100, 200, 100) // Green - plenty left
+        rgb(100, 200, 100) // Green - plenty left
     };
 
     // Calculate bar width: total width - label - space - suffix
@@ -4888,9 +4889,9 @@ fn render_labeled_bar(
     let padded_label = format!("{:<7}", label);
 
     Line::from(vec![
-        Span::styled(padded_label, Style::default().fg(Color::Rgb(140, 140, 150))),
+        Span::styled(padded_label, Style::default().fg(rgb(140, 140, 150))),
         Span::styled(bar_filled, Style::default().fg(color)),
-        Span::styled(bar_empty, Style::default().fg(Color::Rgb(50, 50, 60))),
+        Span::styled(bar_empty, Style::default().fg(rgb(50, 50, 60))),
         Span::styled(suffix, Style::default().fg(color)),
     ])
 }
@@ -4905,7 +4906,7 @@ fn render_model_info(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static>> {
     let max_len = inner.width.saturating_sub(2) as usize;
 
     let mut spans = vec![
-        Span::styled("⚡ ", Style::default().fg(Color::Rgb(140, 180, 255))),
+        Span::styled("⚡ ", Style::default().fg(rgb(140, 180, 255))),
         Span::styled(
             if short_name.chars().count() > max_len.saturating_sub(2) {
                 format!(
@@ -4915,7 +4916,7 @@ fn render_model_info(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static>> {
             } else {
                 short_name
             },
-            Style::default().fg(Color::Rgb(180, 180, 190)).bold(),
+            Style::default().fg(rgb(180, 180, 190)).bold(),
         ),
     ];
 
@@ -4932,7 +4933,7 @@ fn render_model_info(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static>> {
         spans.push(Span::styled(" ", Style::default()));
         spans.push(Span::styled(
             format!("({})", effort_short),
-            Style::default().fg(Color::Rgb(255, 200, 100)),
+            Style::default().fg(rgb(255, 200, 100)),
         ));
     }
 
@@ -4960,7 +4961,7 @@ fn render_model_info(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static>> {
             let detail = truncate_smart(&parts.join(" · "), max_len.saturating_sub(2));
             lines.push(Line::from(vec![Span::styled(
                 detail,
-                Style::default().fg(Color::Rgb(140, 140, 150)),
+                Style::default().fg(rgb(140, 140, 150)),
             )]));
         }
     }
@@ -5028,7 +5029,7 @@ fn render_context_expanded(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'stat
     };
     lines.push(Line::from(vec![Span::styled(
         header,
-        Style::default().fg(Color::Rgb(180, 180, 190)).bold(),
+        Style::default().fg(rgb(180, 180, 190)).bold(),
     )]));
 
     let used_tokens = data
@@ -5042,10 +5043,10 @@ fn render_context_expanded(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'stat
         .round()
         .min(100.0) as usize;
     lines.push(Line::from(vec![
-        Span::styled("Usage ", Style::default().fg(Color::Rgb(160, 160, 170))),
+        Span::styled("Usage ", Style::default().fg(rgb(160, 160, 170))),
         Span::styled(
             format!("{}/{} ({}%)", used_str, limit_str, pct),
-            Style::default().fg(Color::Rgb(140, 140, 150)),
+            Style::default().fg(rgb(140, 140, 150)),
         ),
     ]));
     lines.push(render_usage_bar(used_tokens, limit_tokens, inner.width));
@@ -5064,7 +5065,7 @@ fn render_context_expanded(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'stat
         }
         lines.push(Line::from(Span::styled(
             content,
-            Style::default().fg(Color::Rgb(140, 140, 150)),
+            Style::default().fg(rgb(140, 140, 150)),
         )));
     }
 
@@ -5116,21 +5117,21 @@ fn render_usage_bar(used_tokens: usize, limit_tokens: usize, width: u16) -> Line
     let mut spans = Vec::new();
     spans.push(Span::styled(
         "[",
-        Style::default().fg(Color::Rgb(90, 90, 100)),
+        Style::default().fg(rgb(90, 90, 100)),
     ));
     spans.push(Span::styled(
         "█".repeat(used_cells),
-        Style::default().fg(Color::Rgb(120, 200, 180)),
+        Style::default().fg(rgb(120, 200, 180)),
     ));
     if empty_cells > 0 {
         spans.push(Span::styled(
             "░".repeat(empty_cells),
-            Style::default().fg(Color::Rgb(50, 50, 60)),
+            Style::default().fg(rgb(50, 50, 60)),
         ));
     }
     spans.push(Span::styled(
         "]",
-        Style::default().fg(Color::Rgb(90, 90, 100)),
+        Style::default().fg(rgb(90, 90, 100)),
     ));
     Line::from(spans)
 }
@@ -5159,7 +5160,7 @@ fn render_pagination_dots(count: usize, current: usize, width: u16) -> Line<'sta
         .saturating_div(2);
     Line::from(vec![
         Span::raw(" ".repeat(pad as usize)),
-        Span::styled(dots, Style::default().fg(Color::Rgb(140, 140, 150))),
+        Span::styled(dots, Style::default().fg(rgb(140, 140, 150))),
     ])
 }
 

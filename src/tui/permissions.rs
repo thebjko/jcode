@@ -1,4 +1,5 @@
 use crate::safety::{self, PermissionRequest, Urgency};
+use super::color_support::rgb;
 use anyhow::Result;
 use chrono::Utc;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -122,7 +123,7 @@ impl PermissionsApp {
             )
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(Color::Rgb(80, 80, 90)));
+            .border_style(Style::default().fg(rgb(80, 80, 90)));
         let inner = outer.inner(area);
         frame.render_widget(outer, area);
 
@@ -153,9 +154,9 @@ impl PermissionsApp {
             let cursor = if is_selected { "❯" } else { " " };
 
             let (urgency_icon, urgency_color) = match req.urgency {
-                Urgency::High => ("●", Color::Rgb(255, 100, 100)),
-                Urgency::Normal => ("●", Color::Rgb(255, 200, 100)),
-                Urgency::Low => ("○", Color::Rgb(120, 120, 130)),
+                Urgency::High => ("●", rgb(255, 100, 100)),
+                Urgency::Normal => ("●", rgb(255, 200, 100)),
+                Urgency::Low => ("○", rgb(120, 120, 130)),
             };
 
             let age = format_age(now - req.created_at);
@@ -165,13 +166,13 @@ impl PermissionsApp {
                     .fg(Color::White)
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(Color::Rgb(180, 180, 190))
+                Style::default().fg(rgb(180, 180, 190))
             };
 
             let desc_style = if is_selected {
-                Style::default().fg(Color::Rgb(160, 160, 170))
+                Style::default().fg(rgb(160, 160, 170))
             } else {
-                Style::default().fg(Color::Rgb(120, 120, 130))
+                Style::default().fg(rgb(120, 120, 130))
             };
 
             let urgency_label = match req.urgency {
@@ -191,9 +192,9 @@ impl PermissionsApp {
                 Span::styled(
                     format!(" {} ", cursor),
                     Style::default().fg(if is_selected {
-                        Color::Rgb(140, 180, 255)
+                        rgb(140, 180, 255)
                     } else {
-                        Color::Rgb(60, 60, 70)
+                        rgb(60, 60, 70)
                     }),
                 ),
                 Span::styled(
@@ -204,7 +205,7 @@ impl PermissionsApp {
                 Span::raw(padding),
                 Span::styled(
                     format!("{} ", age),
-                    Style::default().fg(Color::Rgb(100, 100, 110)),
+                    Style::default().fg(rgb(100, 100, 110)),
                 ),
             ]));
 
@@ -236,7 +237,7 @@ impl PermissionsApp {
         let sep = "─".repeat(area.width as usize);
         let line = Line::from(Span::styled(
             sep,
-            Style::default().fg(Color::Rgb(60, 60, 70)),
+            Style::default().fg(rgb(60, 60, 70)),
         ));
         frame.render_widget(Paragraph::new(vec![line]), area);
     }
@@ -249,9 +250,9 @@ impl PermissionsApp {
         let mut lines: Vec<Line<'static>> = Vec::new();
 
         let label_style = Style::default()
-            .fg(Color::Rgb(140, 180, 255))
+            .fg(rgb(140, 180, 255))
             .add_modifier(Modifier::BOLD);
-        let value_style = Style::default().fg(Color::Rgb(180, 180, 190));
+        let value_style = Style::default().fg(rgb(180, 180, 190));
         let review = extract_permission_review(req);
 
         push_wrapped_field(
@@ -369,7 +370,7 @@ impl PermissionsApp {
             Span::styled(" ID: ", label_style),
             Span::styled(
                 req.id.clone(),
-                Style::default().fg(Color::Rgb(100, 100, 110)),
+                Style::default().fg(rgb(100, 100, 110)),
             ),
         ]));
 
@@ -377,16 +378,16 @@ impl PermissionsApp {
             Span::styled(" Created: ", label_style),
             Span::styled(
                 req.created_at.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
-                Style::default().fg(Color::Rgb(100, 100, 110)),
+                Style::default().fg(rgb(100, 100, 110)),
             ),
         ]));
 
         if req.wait {
             lines.push(Line::from(vec![
-                Span::styled(" ⏳ ", Style::default().fg(Color::Rgb(255, 200, 100))),
+                Span::styled(" ⏳ ", Style::default().fg(rgb(255, 200, 100))),
                 Span::styled(
                     "Agent is waiting for this decision",
-                    Style::default().fg(Color::Rgb(255, 200, 100)),
+                    Style::default().fg(rgb(255, 200, 100)),
                 ),
             ]));
         }
@@ -397,7 +398,7 @@ impl PermissionsApp {
                 Span::styled(
                     " Deny reason: ",
                     Style::default()
-                        .fg(Color::Rgb(255, 100, 100))
+                        .fg(rgb(255, 100, 100))
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(format!("{}▌", deny_text), Style::default().fg(Color::White)),
@@ -430,12 +431,12 @@ impl PermissionsApp {
                     Span::styled(
                         format!(" {} ", key),
                         Style::default()
-                            .fg(Color::Rgb(30, 30, 35))
-                            .bg(Color::Rgb(140, 180, 255)),
+                            .fg(rgb(30, 30, 35))
+                            .bg(rgb(140, 180, 255)),
                     ),
                     Span::styled(
                         format!(" {} ", desc),
-                        Style::default().fg(Color::Rgb(140, 140, 150)),
+                        Style::default().fg(rgb(140, 140, 150)),
                     ),
                 ];
                 if i < help_items.len() - 1 {
@@ -458,7 +459,7 @@ impl PermissionsApp {
             )
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(Color::Rgb(80, 80, 90)));
+            .border_style(Style::default().fg(rgb(80, 80, 90)));
         let inner = outer.inner(area);
         frame.render_widget(outer, area);
 
@@ -466,12 +467,12 @@ impl PermissionsApp {
             Line::raw(""),
             Line::from(Span::styled(
                 "  No pending permission requests.",
-                Style::default().fg(Color::Rgb(120, 120, 130)),
+                Style::default().fg(rgb(120, 120, 130)),
             )),
             Line::raw(""),
             Line::from(Span::styled(
                 "  Press q to quit.",
-                Style::default().fg(Color::Rgb(80, 80, 90)),
+                Style::default().fg(rgb(80, 80, 90)),
             )),
         ];
         frame.render_widget(Paragraph::new(lines), inner);
@@ -487,7 +488,7 @@ impl PermissionsApp {
             )
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(Color::Rgb(80, 80, 90)));
+            .border_style(Style::default().fg(rgb(80, 80, 90)));
         let inner = outer.inner(area);
         frame.render_widget(outer, area);
 
@@ -496,20 +497,20 @@ impl PermissionsApp {
         if self.approved_count > 0 {
             lines.push(Line::from(vec![Span::styled(
                 format!("  ✓ {} approved", self.approved_count),
-                Style::default().fg(Color::Rgb(100, 200, 100)),
+                Style::default().fg(rgb(100, 200, 100)),
             )]));
         }
         if self.denied_count > 0 {
             lines.push(Line::from(vec![Span::styled(
                 format!("  ✗ {} denied", self.denied_count),
-                Style::default().fg(Color::Rgb(255, 100, 100)),
+                Style::default().fg(rgb(255, 100, 100)),
             )]));
         }
 
         lines.push(Line::raw(""));
         lines.push(Line::from(Span::styled(
             "  Done! Press any key to exit.",
-            Style::default().fg(Color::Rgb(140, 140, 150)),
+            Style::default().fg(rgb(140, 140, 150)),
         )));
 
         frame.render_widget(Paragraph::new(lines), inner);

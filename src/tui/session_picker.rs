@@ -4,6 +4,7 @@
 //! conversation on the right. Sessions are grouped by server for multi-server support.
 
 use crate::id::{extract_session_name, session_icon};
+use super::color_support::rgb;
 use crate::message::Role;
 use crate::registry::{self, ServerInfo};
 use crate::session::{self, CrashedSessionsInfo, Session, SessionStatus};
@@ -1114,18 +1115,18 @@ impl SessionPicker {
             Span::styled("     ", Style::default()),
             Span::styled(
                 format!("reason: {}", reason_display),
-                Style::default().fg(Color::Rgb(220, 120, 120)),
+                Style::default().fg(rgb(220, 120, 120)),
             ),
         ]))
     }
 
     fn render_session_item(&self, session: &SessionInfo, is_selected: bool) -> ListItem<'static> {
-        const DIM: Color = Color::Rgb(100, 100, 100);
-        const DIMMER: Color = Color::Rgb(70, 70, 70);
-        const USER_CLR: Color = Color::Rgb(138, 180, 248);
-        const ACCENT: Color = Color::Rgb(186, 139, 255);
-        const BATCH_RESTORE: Color = Color::Rgb(255, 140, 140);
-        const BATCH_ROW_BG: Color = Color::Rgb(36, 18, 18);
+        let DIM: Color = rgb(100, 100, 100);
+        let DIMMER: Color = rgb(70, 70, 70);
+        let USER_CLR: Color = rgb(138, 180, 248);
+        let ACCENT: Color = rgb(186, 139, 255);
+        let BATCH_RESTORE: Color = rgb(255, 140, 140);
+        let BATCH_ROW_BG: Color = rgb(36, 18, 18);
 
         let created_ago = format_time_ago(session.created_at);
         let in_batch_restore = self.crashed_session_ids.contains(&session.id);
@@ -1133,7 +1134,7 @@ impl SessionPicker {
         // Name style
         let name_style = if is_selected {
             Style::default()
-                .fg(Color::Rgb(140, 220, 160))
+                .fg(rgb(140, 220, 160))
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::White)
@@ -1145,23 +1146,23 @@ impl SessionPicker {
         // Status indicator with color and time label
         let time_ago = format_time_ago(session.last_message_time);
         let (status_icon, status_color, time_label) = match &session.status {
-            SessionStatus::Active => ("▶", Color::Rgb(100, 200, 100), "active".to_string()),
+            SessionStatus::Active => ("▶", rgb(100, 200, 100), "active".to_string()),
             SessionStatus::Closed => ("✓", DIM, format!("closed {}", time_ago)),
             SessionStatus::Crashed { .. } => (
                 "💥",
-                Color::Rgb(220, 100, 100),
+                rgb(220, 100, 100),
                 format!("crashed {}", time_ago),
             ),
             SessionStatus::Reloaded => ("🔄", USER_CLR, format!("reloaded {}", time_ago)),
             SessionStatus::Compacted => (
                 "📦",
-                Color::Rgb(255, 193, 7),
+                rgb(255, 193, 7),
                 format!("compacted {}", time_ago),
             ),
             SessionStatus::RateLimited => ("⏳", ACCENT, format!("rate-limited {}", time_ago)),
             SessionStatus::Error { .. } => (
                 "❌",
-                Color::Rgb(220, 100, 100),
+                rgb(220, 100, 100),
                 format!("errored {}", time_ago),
             ),
         };
@@ -1171,11 +1172,11 @@ impl SessionPicker {
             Span::styled("  ", Style::default()), // Indent for sessions under server
             Span::styled(
                 format!("{} ", session.icon),
-                Style::default().fg(Color::Rgb(110, 210, 255)),
+                Style::default().fg(rgb(110, 210, 255)),
             ),
             Span::styled(session.short_name.clone(), name_style),
-            Span::styled(canary_marker, Style::default().fg(Color::Rgb(255, 193, 7))),
-            Span::styled(debug_marker, Style::default().fg(Color::Rgb(180, 180, 180))),
+            Span::styled(canary_marker, Style::default().fg(rgb(255, 193, 7))),
+            Span::styled(debug_marker, Style::default().fg(rgb(180, 180, 180))),
             Span::styled(
                 format!(" {}", status_icon),
                 Style::default().fg(status_color),
@@ -1202,7 +1203,7 @@ impl SessionPicker {
             Span::styled("     ", Style::default()),
             Span::styled(
                 title_display,
-                Style::default().fg(Color::Rgb(180, 180, 180)),
+                Style::default().fg(rgb(180, 180, 180)),
             ),
         ]);
 
@@ -1222,7 +1223,7 @@ impl SessionPicker {
             Span::styled(" · ", Style::default().fg(DIMMER)),
             Span::styled(
                 format!("{}", session.assistant_message_count),
-                Style::default().fg(Color::Rgb(129, 199, 132)),
+                Style::default().fg(rgb(129, 199, 132)),
             ),
             Span::styled(" assistant", Style::default().fg(DIMMER)),
             Span::styled(" · ", Style::default().fg(DIMMER)),
@@ -1272,8 +1273,8 @@ impl SessionPicker {
     }
 
     fn render_session_list(&mut self, frame: &mut Frame, area: Rect) {
-        const SERVER_COLOR: Color = Color::Rgb(255, 200, 100); // Amber for server headers
-        const DIM: Color = Color::Rgb(100, 100, 100);
+        let SERVER_COLOR: Color = rgb(255, 200, 100); // Amber for server headers
+        let DIM: Color = rgb(100, 100, 100);
 
         let items: Vec<ListItem> = self
             .items
@@ -1330,25 +1331,25 @@ impl SessionPicker {
         title_parts.push(Span::styled(
             format!(" {} ", self.sessions.len()),
             Style::default()
-                .fg(Color::Rgb(200, 200, 200))
+                .fg(rgb(200, 200, 200))
                 .add_modifier(Modifier::BOLD),
         ));
         title_parts.push(Span::styled(
             "sessions",
-            Style::default().fg(Color::Rgb(120, 120, 120)),
+            Style::default().fg(rgb(120, 120, 120)),
         ));
 
         if self.hidden_test_count > 0 {
             title_parts.push(Span::styled(
                 format!(" (+{} hidden)", self.hidden_test_count),
-                Style::default().fg(Color::Rgb(80, 80, 80)),
+                Style::default().fg(rgb(80, 80, 80)),
             ));
         }
 
         if !self.search_query.is_empty() {
             title_parts.push(Span::styled(
                 format!("  🔍 \"{}\"", self.search_query),
-                Style::default().fg(Color::Rgb(186, 139, 255)),
+                Style::default().fg(rgb(186, 139, 255)),
             ));
         }
 
@@ -1361,8 +1362,8 @@ impl SessionPicker {
             " / search · d show all · h/l focus · ↑↓ · Enter · q "
         };
 
-        const BORDER_DIM: Color = Color::Rgb(70, 70, 70);
-        const BORDER_FOCUS: Color = Color::Rgb(130, 130, 160);
+        let BORDER_DIM: Color = rgb(70, 70, 70);
+        let BORDER_FOCUS: Color = rgb(130, 130, 160);
         let border_color = if self.focus == PaneFocus::Sessions {
             BORDER_FOCUS
         } else {
@@ -1377,13 +1378,13 @@ impl SessionPicker {
                     .title(Line::from(title_parts))
                     .title_bottom(Line::from(Span::styled(
                         help,
-                        Style::default().fg(Color::Rgb(80, 80, 80)),
+                        Style::default().fg(rgb(80, 80, 80)),
                     )))
                     .border_style(Style::default().fg(border_color)),
             )
             .highlight_style(
                 Style::default()
-                    .bg(Color::Rgb(40, 44, 52))
+                    .bg(rgb(40, 44, 52))
                     .add_modifier(Modifier::BOLD),
             );
 
@@ -1392,16 +1393,16 @@ impl SessionPicker {
 
     fn render_preview(&mut self, frame: &mut Frame, area: Rect) {
         // Colors matching the actual TUI
-        const USER_COLOR: Color = Color::Rgb(138, 180, 248); // Soft blue
-        const USER_TEXT: Color = Color::Rgb(245, 245, 255); // Bright cool white
-        const DIM_COLOR: Color = Color::Rgb(80, 80, 80); // Dim gray
-        const HEADER_ICON_COLOR: Color = Color::Rgb(120, 210, 230); // Teal
-        const HEADER_SESSION_COLOR: Color = Color::Rgb(255, 255, 255); // White
+        let USER_COLOR: Color = rgb(138, 180, 248); // Soft blue
+        let USER_TEXT: Color = rgb(245, 245, 255); // Bright cool white
+        let DIM_COLOR: Color = rgb(80, 80, 80); // Dim gray
+        let HEADER_ICON_COLOR: Color = rgb(120, 210, 230); // Teal
+        let HEADER_SESSION_COLOR: Color = rgb(255, 255, 255); // White
 
         let empty_border_color = if self.focus == PaneFocus::Preview {
-            Color::Rgb(130, 130, 160)
+            rgb(130, 130, 160)
         } else {
-            Color::Rgb(50, 50, 50)
+            rgb(50, 50, 50)
         };
         self.ensure_selected_preview_loaded();
 
@@ -1483,27 +1484,27 @@ impl SessionPicker {
 
         // Status line with details
         let (status_icon, status_text, status_color) = match &session.status {
-            SessionStatus::Active => ("▶", "Active".to_string(), Color::Rgb(100, 200, 100)),
+            SessionStatus::Active => ("▶", "Active".to_string(), rgb(100, 200, 100)),
             SessionStatus::Closed => ("✓", "Closed normally".to_string(), Color::DarkGray),
             SessionStatus::Crashed { message } => {
                 let text = match message {
                     Some(msg) => format!("Crashed: {}", safe_truncate(msg, 80)),
                     None => "Crashed".to_string(),
                 };
-                ("💥", text, Color::Rgb(220, 100, 100))
+                ("💥", text, rgb(220, 100, 100))
             }
-            SessionStatus::Reloaded => ("🔄", "Reloaded".to_string(), Color::Rgb(138, 180, 248)),
+            SessionStatus::Reloaded => ("🔄", "Reloaded".to_string(), rgb(138, 180, 248)),
             SessionStatus::Compacted => (
                 "📦",
                 "Compacted (context too large)".to_string(),
-                Color::Rgb(255, 193, 7),
+                rgb(255, 193, 7),
             ),
             SessionStatus::RateLimited => {
-                ("⏳", "Rate limited".to_string(), Color::Rgb(186, 139, 255))
+                ("⏳", "Rate limited".to_string(), rgb(186, 139, 255))
             }
             SessionStatus::Error { message } => {
                 let text = format!("Error: {}", safe_truncate(message, 40));
-                ("❌", text, Color::Rgb(220, 100, 100))
+                ("❌", text, rgb(220, 100, 100))
             }
         };
         lines.push(
@@ -1522,7 +1523,7 @@ impl SessionPicker {
                 Line::from(vec![Span::styled(
                     "Included in batch restore",
                     Style::default()
-                        .fg(Color::Rgb(255, 140, 140))
+                        .fg(rgb(255, 140, 140))
                         .add_modifier(Modifier::BOLD),
                 )])
                 .alignment(align),
@@ -1533,7 +1534,7 @@ impl SessionPicker {
         lines.push(
             Line::from(vec![Span::styled(
                 "─".repeat(area.width.saturating_sub(4) as usize),
-                Style::default().fg(Color::Rgb(60, 60, 60)),
+                Style::default().fg(rgb(60, 60, 60)),
             )])
             .alignment(align),
         );
@@ -1651,7 +1652,7 @@ impl SessionPicker {
                             Line::from(vec![Span::styled(
                                 msg.content.clone(),
                                 Style::default()
-                                    .fg(Color::Rgb(186, 139, 255))
+                                    .fg(rgb(186, 139, 255))
                                     .add_modifier(Modifier::ITALIC),
                             )])
                             .alignment(align),
@@ -1665,7 +1666,7 @@ impl SessionPicker {
                             Span::styled("🧠 ", Style::default()),
                             Span::styled(
                                 msg.content.clone(),
-                                Style::default().fg(Color::Rgb(140, 210, 255)),
+                                Style::default().fg(rgb(140, 210, 255)),
                             ),
                         ])
                         .alignment(align),
@@ -1716,9 +1717,9 @@ impl SessionPicker {
         }
 
         let preview_border_color = if self.focus == PaneFocus::Preview {
-            Color::Rgb(130, 130, 160)
+            rgb(130, 130, 160)
         } else {
-            Color::Rgb(70, 70, 70)
+            rgb(70, 70, 70)
         };
         let block = Block::default()
             .borders(Borders::ALL)
@@ -1751,10 +1752,10 @@ impl SessionPicker {
     }
 
     fn render_crash_banner(&self, frame: &mut Frame, area: Rect) {
-        const CRASH_BG: Color = Color::Rgb(60, 30, 30);
-        const CRASH_FG: Color = Color::Rgb(255, 140, 140);
-        const CRASH_ICON: Color = Color::Rgb(255, 100, 100);
-        const DIM: Color = Color::Rgb(180, 140, 140);
+        let CRASH_BG: Color = rgb(60, 30, 30);
+        let CRASH_FG: Color = rgb(255, 140, 140);
+        let CRASH_ICON: Color = rgb(255, 100, 100);
+        let DIM: Color = rgb(180, 140, 140);
 
         let Some(info) = &self.crashed_sessions else {
             return;
@@ -1844,25 +1845,25 @@ impl SessionPicker {
 
             let cursor_char = if self.search_active { "▎" } else { "" };
             let search_line = Line::from(vec![
-                Span::styled(" 🔍 ", Style::default().fg(Color::Rgb(186, 139, 255))),
+                Span::styled(" 🔍 ", Style::default().fg(rgb(186, 139, 255))),
                 Span::styled(
                     &self.search_query,
                     Style::default()
                         .fg(Color::White)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(cursor_char, Style::default().fg(Color::Rgb(186, 139, 255))),
+                Span::styled(cursor_char, Style::default().fg(rgb(186, 139, 255))),
                 if self.search_active {
                     Span::styled(
                         "  Esc to clear",
-                        Style::default().fg(Color::Rgb(60, 60, 60)),
+                        Style::default().fg(rgb(60, 60, 60)),
                     )
                 } else {
-                    Span::styled("  / to edit", Style::default().fg(Color::Rgb(60, 60, 60)))
+                    Span::styled("  / to edit", Style::default().fg(rgb(60, 60, 60)))
                 },
             ]);
             let search_widget =
-                Paragraph::new(search_line).style(Style::default().bg(Color::Rgb(25, 25, 30)));
+                Paragraph::new(search_line).style(Style::default().bg(rgb(25, 25, 30)));
             frame.render_widget(search_widget, search_area);
         }
 
