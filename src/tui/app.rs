@@ -11192,6 +11192,87 @@ impl App {
         }
     }
 
+    fn handle_batch_crash_restore(&mut self) {
+        let recovered = match crate::session::recover_crashed_sessions() {
+            Ok(ids) => ids,
+            Err(e) => {
+                self.push_display_message(DisplayMessage::error(format!(
+                    "Failed to recover crashed sessions: {}",
+                    e
+                )));
+                return;
+            }
+        };
+
+        if recovered.is_empty() {
+            self.push_display_message(DisplayMessage::system(
+                "No crashed sessions found to restore.".to_string(),
+            ));
+            return;
+        }
+
+        let exe = std::env::current_exe().unwrap_or_default();
+        let cwd = std::env::current_dir().unwrap_or_default();
+        let socket = std::env::var("JCODE_SOCKET").ok();
+        let mut spawned = 0usize;
+        let mut failed = Vec::new();
+
+        for session_id in &recovered {
+            let mut session_cwd = cwd.clone();
+            if let Ok(session) = crate::session::Session::load(session_id) {
+                if let Some(dir) = session.working_dir.as_deref() {
+                    if std::path::Path::new(dir).is_dir() {
+                        session_cwd = std::path::PathBuf::from(dir);
+                    }
+                }
+            }
+
+            match spawn_in_new_terminal(&exe, session_id, &session_cwd, socket.as_deref()) {
+                Ok(true) => {
+                    spawned += 1;
+                }
+                Ok(false) => {
+                    failed.push(session_id.clone());
+                }
+                Err(e) => {
+                    crate::logging::error(&format!(
+                        "Failed to spawn session {}: {}",
+                        session_id, e
+                    ));
+                    failed.push(session_id.clone());
+                }
+            }
+        }
+
+        if spawned > 0 && failed.is_empty() {
+            self.push_display_message(DisplayMessage::system(format!(
+                "Restored {} crashed session(s) in new windows.",
+                spawned
+            )));
+            self.set_status_notice(format!("Restored {} session(s)", spawned));
+        } else if spawned > 0 {
+            let manual: Vec<String> = failed
+                .iter()
+                .map(|id| format!("  jcode --resume {}", id))
+                .collect();
+            self.push_display_message(DisplayMessage::system(format!(
+                "Restored {} session(s) in new windows. {} failed:\n```\n{}\n```",
+                spawned,
+                failed.len(),
+                manual.join("\n")
+            )));
+        } else {
+            let manual: Vec<String> = recovered
+                .iter()
+                .map(|id| format!("  jcode --resume {}", id))
+                .collect();
+            self.push_display_message(DisplayMessage::system(format!(
+                "No terminal found. Resume manually:\n```\n{}\n```",
+                manual.join("\n")
+            )));
+        }
+    }
+
     fn handle_session_picker_key(
         &mut self,
         code: KeyCode,
