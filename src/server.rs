@@ -581,6 +581,8 @@ pub struct Server {
     event_history: Arc<RwLock<Vec<SwarmEvent>>>,
     /// Counter for event IDs
     event_counter: Arc<std::sync::atomic::AtomicU64>,
+    /// Broadcast channel for swarm event subscriptions (debug socket subscribers)
+    swarm_event_tx: broadcast::Sender<SwarmEvent>,
     /// Ambient mode runner handle (None if ambient is disabled)
     ambient_runner: Option<AmbientRunnerHandle>,
     /// Shared MCP server pool (processes shared across sessions)
@@ -639,6 +641,7 @@ impl Server {
             channel_subscriptions: Arc::new(RwLock::new(HashMap::new())),
             event_history: Arc::new(RwLock::new(Vec::new())),
             event_counter: Arc::new(std::sync::atomic::AtomicU64::new(1)),
+            swarm_event_tx: broadcast::channel(256).0,
             ambient_runner,
             mcp_pool: Arc::new(crate::mcp::SharedMcpPool::from_default_config()),
             shutdown_signals: Arc::new(RwLock::new(HashMap::new())),
@@ -672,6 +675,7 @@ impl Server {
         sessions: Arc<RwLock<HashMap<String, Arc<Mutex<Agent>>>>>,
         event_history: Arc<RwLock<Vec<SwarmEvent>>>,
         event_counter: Arc<std::sync::atomic::AtomicU64>,
+        swarm_event_tx: broadcast::Sender<SwarmEvent>,
     ) {
         let mut receiver = Bus::global().subscribe();
         let mut last_cleanup = Instant::now();
@@ -730,10 +734,11 @@ impl Server {
                         };
 
                         let mut history = event_history.write().await;
-                        history.push(event);
+                        history.push(event.clone());
                         if history.len() > MAX_EVENT_HISTORY {
                             history.remove(0);
                         }
+                        let _ = swarm_event_tx.send(event);
                     }
 
                     // Find the swarm this session belongs to
@@ -1033,6 +1038,7 @@ impl Server {
         let monitor_sessions = Arc::clone(&self.sessions);
         let monitor_event_history = Arc::clone(&self.event_history);
         let monitor_event_counter = Arc::clone(&self.event_counter);
+        let monitor_swarm_event_tx = self.swarm_event_tx.clone();
         tokio::spawn(async move {
             Self::monitor_bus(
                 monitor_file_touches,
@@ -1044,6 +1050,7 @@ impl Server {
                 monitor_sessions,
                 monitor_event_history,
                 monitor_event_counter,
+                monitor_swarm_event_tx,
             )
             .await;
         });
@@ -1158,6 +1165,7 @@ impl Server {
         let main_client_debug_response_tx = self.client_debug_response_tx.clone();
         let main_event_history = Arc::clone(&self.event_history);
         let main_event_counter = Arc::clone(&self.event_counter);
+        let main_swarm_event_tx = self.swarm_event_tx.clone();
         let main_server_name = self.identity.name.clone();
         let main_server_icon = self.identity.icon.clone();
         let main_ambient_runner = self.ambient_runner.clone();
@@ -1186,6 +1194,7 @@ impl Server {
                         let client_debug_response_tx = main_client_debug_response_tx.clone();
                         let event_history = Arc::clone(&main_event_history);
                         let event_counter = Arc::clone(&main_event_counter);
+                        let swarm_event_tx = main_swarm_event_tx.clone();
                         let server_name = main_server_name.clone();
                         let server_icon = main_server_icon.clone();
                         let ambient_runner = main_ambient_runner.clone();
@@ -1216,6 +1225,7 @@ impl Server {
                                 client_debug_response_tx,
                                 event_history,
                                 event_counter,
+                                swarm_event_tx,
                                 server_name,
                                 server_icon,
                                 mcp_pool,
@@ -1260,6 +1270,7 @@ impl Server {
         let debug_client_debug_response_tx = self.client_debug_response_tx.clone();
         let debug_jobs = Arc::clone(&self.debug_jobs);
         let debug_event_history = Arc::clone(&self.event_history);
+        let debug_swarm_event_tx = self.swarm_event_tx.clone();
         let debug_server_identity = self.identity.clone();
         let debug_start_time = std::time::Instant::now();
         let debug_ambient_runner = self.ambient_runner.clone();
@@ -1284,6 +1295,7 @@ impl Server {
                         let client_debug_response_tx = debug_client_debug_response_tx.clone();
                         let debug_jobs = Arc::clone(&debug_jobs);
                         let event_history = Arc::clone(&debug_event_history);
+                        let swarm_event_tx = debug_swarm_event_tx.clone();
                         let server_identity = debug_server_identity.clone();
                         let server_start_time = debug_start_time;
                         let ambient_runner = debug_ambient_runner.clone();
@@ -1307,6 +1319,7 @@ impl Server {
                                 client_debug_response_tx,
                                 debug_jobs,
                                 event_history,
+                                swarm_event_tx,
                                 server_identity,
                                 server_start_time,
                                 ambient_runner,
@@ -1376,6 +1389,7 @@ impl Server {
         let gw_client_debug_response_tx = self.client_debug_response_tx.clone();
         let gw_event_history = Arc::clone(&self.event_history);
         let gw_event_counter = Arc::clone(&self.event_counter);
+        let gw_swarm_event_tx = self.swarm_event_tx.clone();
         let gw_server_name = self.identity.name.clone();
         let gw_server_icon = self.identity.icon.clone();
         let gw_ambient_runner = self.ambient_runner.clone();
@@ -1402,6 +1416,7 @@ impl Server {
                 let client_debug_response_tx = gw_client_debug_response_tx.clone();
                 let event_history = Arc::clone(&gw_event_history);
                 let event_counter = Arc::clone(&gw_event_counter);
+                let swarm_event_tx = gw_swarm_event_tx.clone();
                 let server_name = gw_server_name.clone();
                 let server_icon = gw_server_icon.clone();
                 let ambient_runner = gw_ambient_runner.clone();
@@ -1436,6 +1451,7 @@ impl Server {
                         client_debug_response_tx,
                         event_history,
                         event_counter,
+                        swarm_event_tx,
                         server_name,
                         server_icon,
                         mcp_pool,
@@ -1476,6 +1492,7 @@ async fn handle_client(
     client_debug_response_tx: broadcast::Sender<(u64, String)>,
     event_history: Arc<RwLock<Vec<SwarmEvent>>>,
     event_counter: Arc<std::sync::atomic::AtomicU64>,
+    swarm_event_tx: broadcast::Sender<SwarmEvent>,
     server_name: String,
     server_icon: String,
     mcp_pool: Arc<crate::mcp::SharedMcpPool>,
@@ -1596,6 +1613,7 @@ async fn handle_client(
         record_swarm_event(
             &event_history,
             &event_counter,
+            &swarm_event_tx,
             client_session_id.clone(),
             friendly_name.clone(),
             Some(id.clone()),
@@ -1631,6 +1649,7 @@ async fn handle_client(
         &swarms_by_id,
         Some(&event_history),
         Some(&event_counter),
+        Some(&swarm_event_tx),
     )
     .await;
     if is_new_coordinator {
@@ -1753,6 +1772,7 @@ async fn handle_client(
                                     &swarms_by_id,
                                     Some(&event_history),
                                     Some(&event_counter),
+                                    Some(&swarm_event_tx),
                                 )
                                 .await;
                             }
@@ -1768,6 +1788,7 @@ async fn handle_client(
                                     &swarms_by_id,
                                     Some(&event_history),
                                     Some(&event_counter),
+                                    Some(&swarm_event_tx),
                                 )
                                 .await;
                             }
@@ -1858,6 +1879,7 @@ async fn handle_client(
                     &swarms_by_id,
                     Some(&event_history),
                     Some(&event_counter),
+                    Some(&swarm_event_tx),
                 )
                 .await;
 
@@ -1954,6 +1976,7 @@ async fn handle_client(
                             &swarms_by_id,
                             Some(&event_history),
                             Some(&event_counter),
+                            Some(&swarm_event_tx),
                         )
                         .await;
                     }
@@ -2057,6 +2080,7 @@ async fn handle_client(
                     &swarms_by_id,
                     Some(&event_history),
                     Some(&event_counter),
+                    Some(&swarm_event_tx),
                 )
                 .await;
                 if let Some(swarm_id) = swarm_id_for_update {
@@ -2503,6 +2527,7 @@ async fn handle_client(
                             &swarms_by_id,
                             Some(&event_history),
                             Some(&event_counter),
+                            Some(&swarm_event_tx),
                         )
                         .await;
                         if let Some(swarm_id) = {
@@ -3057,6 +3082,7 @@ async fn handle_client(
                     &swarms_by_id,
                     Some(&event_history),
                     Some(&event_counter),
+                    Some(&swarm_event_tx),
                 )
                 .await;
                 let result = process_message_streaming_mpsc(
@@ -3076,6 +3102,7 @@ async fn handle_client(
                             &swarms_by_id,
                             Some(&event_history),
                             Some(&event_counter),
+                            Some(&swarm_event_tx),
                         )
                         .await;
                         let _ = client_event_tx.send(ServerEvent::Done { id });
@@ -3089,6 +3116,7 @@ async fn handle_client(
                             &swarms_by_id,
                             Some(&event_history),
                             Some(&event_counter),
+                            Some(&swarm_event_tx),
                         )
                         .await;
                         let retry_after_secs = e
@@ -3182,6 +3210,7 @@ async fn handle_client(
                     record_swarm_event(
                         &event_history,
                         &event_counter,
+                        &swarm_event_tx,
                         req_session_id.clone(),
                         friendly_name.clone(),
                         Some(swarm_id.clone()),
@@ -3375,6 +3404,7 @@ async fn handle_client(
                     record_swarm_event(
                         &event_history,
                         &event_counter,
+                        &swarm_event_tx,
                         from_session.clone(),
                         friendly_name.clone(),
                         Some(swarm_id.clone()),
@@ -3563,6 +3593,7 @@ async fn handle_client(
                     record_swarm_event(
                         &event_history,
                         &event_counter,
+                        &swarm_event_tx,
                         req_session_id.clone(),
                         from_name.clone(),
                         Some(swarm_id.clone()),
@@ -3599,6 +3630,7 @@ async fn handle_client(
                 record_swarm_event(
                     &event_history,
                     &event_counter,
+                    &swarm_event_tx,
                     req_session_id.clone(),
                     from_name.clone(),
                     Some(swarm_id.clone()),
@@ -3775,6 +3807,7 @@ async fn handle_client(
                     record_swarm_event(
                         &event_history,
                         &event_counter,
+                        &swarm_event_tx,
                         req_session_id.clone(),
                         None,
                         Some(swarm_id.clone()),
@@ -3935,6 +3968,7 @@ async fn handle_client(
                 record_swarm_event(
                     &event_history,
                     &event_counter,
+                    &swarm_event_tx,
                     req_session_id.clone(),
                     coordinator_name,
                     Some(swarm_id.clone()),
@@ -4057,9 +4091,9 @@ async fn handle_client(
                             &swarm_members,
                             &event_history,
                             &event_counter,
+                            &swarm_event_tx,
                         )
                         .await;
-
                         // Queue initial message as soft interrupt if provided
                         if let Some(ref msg) = initial_message {
                             let agent_sessions = sessions.read().await;
@@ -4150,6 +4184,7 @@ async fn handle_client(
                         record_swarm_event(
                             &event_history,
                             &event_counter,
+                            &swarm_event_tx,
                             target_session.clone(),
                             removed_name.clone(),
                             Some(sid.clone()),
@@ -4284,6 +4319,7 @@ async fn handle_client(
                 record_swarm_event(
                     &event_history,
                     &event_counter,
+                    &swarm_event_tx,
                     req_session_id.clone(),
                     None,
                     Some(swarm_id.clone()),
@@ -4415,6 +4451,7 @@ async fn handle_client(
                         record_swarm_event(
                             &event_history,
                             &event_counter,
+                            &swarm_event_tx,
                             req_session_id.clone(),
                             None,
                             Some(swarm_id.clone()),
@@ -4523,6 +4560,7 @@ async fn handle_client(
                         record_swarm_event(
                             &event_history,
                             &event_counter,
+                            &swarm_event_tx,
                             req_session_id.clone(),
                             None,
                             Some(swarm_id.clone()),
@@ -4586,6 +4624,7 @@ async fn handle_client(
                                 let task_id_for_run = task_id.clone();
                                 let event_history_for_run = Arc::clone(&event_history);
                                 let event_counter_for_run = Arc::clone(&event_counter);
+                                let swarm_event_tx_for_run = swarm_event_tx.clone();
                                 let assignment_text = if let Some(extra) = message.clone() {
                                     format!(
                                         "{}\n\nAdditional coordinator instructions:\n{}",
@@ -4624,6 +4663,7 @@ async fn handle_client(
                                         &swarms_for_run,
                                         Some(&event_history_for_run),
                                         Some(&event_counter_for_run),
+                                        Some(&swarm_event_tx_for_run),
                                     )
                                     .await;
 
@@ -4663,6 +4703,7 @@ async fn handle_client(
                                                 &swarms_for_run,
                                                 Some(&event_history_for_run),
                                                 Some(&event_counter_for_run),
+                                                Some(&swarm_event_tx_for_run),
                                             )
                                             .await;
                                         }
@@ -4696,6 +4737,7 @@ async fn handle_client(
                                                 &swarms_for_run,
                                                 Some(&event_history_for_run),
                                                 Some(&event_counter_for_run),
+                                                Some(&swarm_event_tx_for_run),
                                             )
                                             .await;
                                         }
@@ -4760,6 +4802,7 @@ async fn handle_client(
                     record_swarm_event(
                         &event_history,
                         &event_counter,
+                        &swarm_event_tx,
                         req_session_id.clone(),
                         None,
                         Some(swarm_id.clone()),
@@ -4804,6 +4847,7 @@ async fn handle_client(
                     record_swarm_event(
                         &event_history,
                         &event_counter,
+                        &swarm_event_tx,
                         req_session_id.clone(),
                         None,
                         Some(swarm_id.clone()),
@@ -4886,6 +4930,7 @@ async fn handle_client(
             &swarms_by_id,
             Some(&event_history),
             Some(&event_counter),
+            Some(&swarm_event_tx),
         )
         .await;
 
@@ -4902,6 +4947,7 @@ async fn handle_client(
             record_swarm_event(
                 &event_history,
                 &event_counter,
+                &swarm_event_tx,
                 client_session_id.clone(),
                 removed_name.clone(),
                 Some(swarm_id.clone()),
@@ -5217,13 +5263,13 @@ async fn remove_session_from_swarm(
 async fn record_swarm_event(
     event_history: &Arc<RwLock<Vec<SwarmEvent>>>,
     event_counter: &Arc<std::sync::atomic::AtomicU64>,
+    swarm_event_tx: &broadcast::Sender<SwarmEvent>,
     session_id: String,
     session_name: Option<String>,
     swarm_id: Option<String>,
     event: SwarmEventType,
 ) {
-    let mut history = event_history.write().await;
-    history.push(SwarmEvent {
+    let swarm_event = SwarmEvent {
         id: event_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
         session_id,
         session_name,
@@ -5231,7 +5277,10 @@ async fn record_swarm_event(
         event,
         timestamp: Instant::now(),
         absolute_time: std::time::SystemTime::now(),
-    });
+    };
+    let _ = swarm_event_tx.send(swarm_event.clone());
+    let mut history = event_history.write().await;
+    history.push(swarm_event);
     if history.len() > MAX_EVENT_HISTORY {
         history.remove(0);
     }
@@ -5243,6 +5292,7 @@ async fn record_swarm_event_for_session(
     swarm_members: &Arc<RwLock<HashMap<String, SwarmMember>>>,
     event_history: &Arc<RwLock<Vec<SwarmEvent>>>,
     event_counter: &Arc<std::sync::atomic::AtomicU64>,
+    swarm_event_tx: &broadcast::Sender<SwarmEvent>,
 ) {
     let (session_name, swarm_id) = {
         let members = swarm_members.read().await;
@@ -5255,6 +5305,7 @@ async fn record_swarm_event_for_session(
     record_swarm_event(
         event_history,
         event_counter,
+        swarm_event_tx,
         session_id.to_string(),
         session_name,
         swarm_id,
@@ -5271,6 +5322,7 @@ async fn update_member_status(
     swarms_by_id: &Arc<RwLock<HashMap<String, HashSet<String>>>>,
     event_history: Option<&Arc<RwLock<Vec<SwarmEvent>>>>,
     event_counter: Option<&Arc<std::sync::atomic::AtomicU64>>,
+    swarm_event_tx: Option<&broadcast::Sender<SwarmEvent>>,
 ) {
     let (swarm_id, agent_name, status_changed, old_status) = {
         let mut members = swarm_members.write().await;
@@ -5290,10 +5342,11 @@ async fn update_member_status(
     };
     if let Some(ref id) = swarm_id {
         if status_changed {
-            if let (Some(history), Some(counter)) = (event_history, event_counter) {
+            if let (Some(history), Some(counter), Some(tx)) = (event_history, event_counter, swarm_event_tx) {
                 record_swarm_event(
                     history,
                     counter,
+                    tx,
                     session_id.to_string(),
                     agent_name.clone(),
                     Some(id.clone()),
@@ -6623,6 +6676,7 @@ async fn handle_debug_client(
     client_debug_response_tx: broadcast::Sender<(u64, String)>,
     debug_jobs: Arc<RwLock<HashMap<String, DebugJob>>>,
     event_history: Arc<RwLock<Vec<SwarmEvent>>>,
+    swarm_event_tx: broadcast::Sender<SwarmEvent>,
     server_identity: ServerIdentity,
     server_start_time: std::time::Instant,
     ambient_runner: Option<AmbientRunnerHandle>,
@@ -8192,6 +8246,79 @@ async fn handle_debug_client(
   ambient:start               - Start/restart ambient mode
   ambient:stop                - Stop ambient mode"#
                                 .to_string())
+                        } else if cmd == "events:subscribe" || cmd.starts_with("events:subscribe:") {
+                            let type_filter: Option<Vec<String>> = cmd
+                                .strip_prefix("events:subscribe:")
+                                .map(|s| s.split(',').map(|t| t.trim().to_string()).collect());
+
+                            let ack = ServerEvent::DebugResponse {
+                                id,
+                                ok: true,
+                                output: serde_json::json!({
+                                    "subscribed": true,
+                                    "filter": type_filter.as_ref().map(|f| f.join(",")),
+                                }).to_string(),
+                            };
+                            let json = encode_event(&ack);
+                            writer.write_all(json.as_bytes()).await?;
+
+                            let mut rx = swarm_event_tx.subscribe();
+                            loop {
+                                match rx.recv().await {
+                                    Ok(event) => {
+                                        let event_type = match &event.event {
+                                            SwarmEventType::FileTouch { .. } => "file_touch",
+                                            SwarmEventType::Notification { .. } => "notification",
+                                            SwarmEventType::PlanUpdate { .. } => "plan_update",
+                                            SwarmEventType::PlanProposal { .. } => "plan_proposal",
+                                            SwarmEventType::ContextUpdate { .. } => "context_update",
+                                            SwarmEventType::StatusChange { .. } => "status_change",
+                                            SwarmEventType::MemberChange { .. } => "member_change",
+                                        };
+                                        if let Some(ref filter) = type_filter {
+                                            if !filter.iter().any(|f| f == event_type) {
+                                                continue;
+                                            }
+                                        }
+                                        let timestamp_unix = event
+                                            .absolute_time
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .map(|d| d.as_secs())
+                                            .unwrap_or(0);
+                                        let event_json = serde_json::json!({
+                                            "type": "event",
+                                            "id": event.id,
+                                            "session_id": event.session_id,
+                                            "session_name": event.session_name,
+                                            "swarm_id": event.swarm_id,
+                                            "event": event.event,
+                                            "timestamp_unix": timestamp_unix,
+                                        });
+                                        let mut line = serde_json::to_string(&event_json)
+                                            .unwrap_or_default();
+                                        line.push('\n');
+                                        if writer.write_all(line.as_bytes()).await.is_err() {
+                                            break;
+                                        }
+                                    }
+                                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                                        let lag_json = serde_json::json!({
+                                            "type": "lag",
+                                            "missed": n,
+                                        });
+                                        let mut line = serde_json::to_string(&lag_json)
+                                            .unwrap_or_default();
+                                        line.push('\n');
+                                        if writer.write_all(line.as_bytes()).await.is_err() {
+                                            break;
+                                        }
+                                    }
+                                    Err(broadcast::error::RecvError::Closed) => {
+                                        break;
+                                    }
+                                }
+                            }
+                            return Ok(());
                         } else if cmd == "events:recent" || cmd.starts_with("events:recent:") {
                             // Get recent events (default 50, or specify count)
                             let count: usize = cmd
@@ -8265,7 +8392,7 @@ async fn handle_debug_client(
                                     "status_change",
                                     "member_change"
                                 ],
-                                "description": "Use events:recent or events:since:<id> to get events"
+                                "description": "Use events:recent, events:since:<id>, or events:subscribe to get events"
                             }).to_string())
                         } else if cmd == "events:count" {
                             // Get current event count and latest ID
@@ -8462,6 +8589,8 @@ EVENTS COMMANDS (events: prefix):
   events:since:<id>        - Get events since event ID
   events:count             - Event count and latest ID
   events:types             - List available event types
+  events:subscribe         - Subscribe to all events (streaming)
+  events:subscribe:<types> - Subscribe filtered (e.g. status_change,member_change)
 
 CLIENT COMMANDS (client: prefix):
   client:state             - Get TUI state
@@ -8580,6 +8709,8 @@ REAL-TIME EVENTS:
   events:since:<id>        - Get events since event ID (for polling)
   events:count             - Get event count and latest ID
   events:types             - List available event types
+  events:subscribe         - Subscribe to all events (streaming, keeps connection open)
+  events:subscribe:<types> - Subscribe filtered (e.g. events:subscribe:status_change,member_change)
 
 Examples:
   {"type":"debug_command","id":1,"command":"swarm:list"}

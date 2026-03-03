@@ -95,6 +95,7 @@ pub struct ClientApp {
     streaming_md_renderer: RefCell<IncrementalMarkdownRenderer>,
     // Scroll keybindings
     scroll_keys: super::keybind::ScrollKeys,
+    last_mouse_scroll: Option<Instant>,
 }
 
 impl ClientApp {
@@ -114,6 +115,22 @@ impl ClientApp {
         } else {
             None
         }
+    }
+
+    fn mouse_scroll_amount(&mut self) -> usize {
+        let now = Instant::now();
+        let amount = if let Some(last) = self.last_mouse_scroll {
+            let gap = now.duration_since(last);
+            if gap.as_millis() < 50 {
+                1
+            } else {
+                3
+            }
+        } else {
+            3
+        };
+        self.last_mouse_scroll = Some(now);
+        amount
     }
 
     fn scroll_up(&mut self, amount: usize) {
@@ -302,6 +319,7 @@ impl ClientApp {
             },
             streaming_md_renderer: RefCell::new(IncrementalMarkdownRenderer::new(None)),
             scroll_keys: super::keybind::load_scroll_keys(),
+            last_mouse_scroll: None,
         }
     }
 
@@ -684,10 +702,12 @@ impl ClientApp {
                                 use crossterm::event::MouseEventKind;
                                 match mouse.kind {
                                     MouseEventKind::ScrollUp => {
-                                        self.scroll_up(3);
+                                        let amt = self.mouse_scroll_amount();
+                                        self.scroll_up(amt);
                                     }
                                     MouseEventKind::ScrollDown => {
-                                        self.scroll_down(3);
+                                        let amt = self.mouse_scroll_amount();
+                                        self.scroll_down(amt);
                                     }
                                     _ => {}
                                 }
@@ -706,8 +726,14 @@ impl ClientApp {
                                     Event::Mouse(mouse) => {
                                         use crossterm::event::MouseEventKind;
                                         match mouse.kind {
-                                            MouseEventKind::ScrollUp => self.scroll_up(3),
-                                            MouseEventKind::ScrollDown => self.scroll_down(3),
+                                            MouseEventKind::ScrollUp => {
+                                                let amt = self.mouse_scroll_amount();
+                                                self.scroll_up(amt);
+                                            }
+                                            MouseEventKind::ScrollDown => {
+                                                let amt = self.mouse_scroll_amount();
+                                                self.scroll_down(amt);
+                                            }
                                             _ => {}
                                         }
                                     }

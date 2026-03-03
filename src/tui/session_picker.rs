@@ -561,6 +561,7 @@ pub struct SessionPicker {
     hidden_test_count: usize,
     /// Which pane has keyboard focus
     focus: PaneFocus,
+    last_mouse_scroll: Option<std::time::Instant>,
 }
 
 impl SessionPicker {
@@ -606,6 +607,7 @@ impl SessionPicker {
             total_session_count,
             hidden_test_count,
             focus: PaneFocus::Sessions,
+            last_mouse_scroll: None,
         }
     }
 
@@ -704,6 +706,7 @@ impl SessionPicker {
             total_session_count,
             hidden_test_count,
             focus: PaneFocus::Sessions,
+            last_mouse_scroll: None,
         }
     }
 
@@ -820,12 +823,12 @@ impl SessionPicker {
         }
     }
 
-    pub fn scroll_preview_down(&mut self) {
-        self.scroll_offset = self.scroll_offset.saturating_add(3);
+    pub fn scroll_preview_down(&mut self, amount: u16) {
+        self.scroll_offset = self.scroll_offset.saturating_add(amount);
     }
 
-    pub fn scroll_preview_up(&mut self) {
-        self.scroll_offset = self.scroll_offset.saturating_sub(3);
+    pub fn scroll_preview_up(&mut self, amount: u16) {
+        self.scroll_offset = self.scroll_offset.saturating_sub(amount);
     }
 
     fn point_in_rect(col: u16, row: u16, rect: Rect) -> bool {
@@ -833,6 +836,22 @@ impl SessionPicker {
             && col < rect.x.saturating_add(rect.width)
             && row >= rect.y
             && row < rect.y.saturating_add(rect.height)
+    }
+
+    fn mouse_scroll_amount(&mut self) -> u16 {
+        let now = std::time::Instant::now();
+        let amount = if let Some(last) = self.last_mouse_scroll {
+            let gap = now.duration_since(last);
+            if gap.as_millis() < 50 {
+                1
+            } else {
+                3
+            }
+        } else {
+            3
+        };
+        self.last_mouse_scroll = Some(now);
+        amount
     }
 
     fn handle_mouse_scroll(&mut self, col: u16, row: u16, kind: MouseEventKind) {
@@ -846,9 +865,10 @@ impl SessionPicker {
             .unwrap_or(false);
 
         if over_preview {
+            let amt = self.mouse_scroll_amount();
             match kind {
-                MouseEventKind::ScrollUp => self.scroll_preview_up(),
-                MouseEventKind::ScrollDown => self.scroll_preview_down(),
+                MouseEventKind::ScrollUp => self.scroll_preview_up(amt),
+                MouseEventKind::ScrollDown => self.scroll_preview_down(amt),
                 _ => {}
             }
             return;
@@ -1061,23 +1081,23 @@ impl SessionPicker {
             }
             KeyCode::Down | KeyCode::Char('j') => match self.focus {
                 PaneFocus::Sessions => self.next(),
-                PaneFocus::Preview => self.scroll_preview_down(),
+                PaneFocus::Preview => self.scroll_preview_down(3),
             },
             KeyCode::Up | KeyCode::Char('k') => match self.focus {
                 PaneFocus::Sessions => self.previous(),
-                PaneFocus::Preview => self.scroll_preview_up(),
+                PaneFocus::Preview => self.scroll_preview_up(3),
             },
-            KeyCode::Char('J') => self.scroll_preview_down(),
-            KeyCode::Char('K') => self.scroll_preview_up(),
+            KeyCode::Char('J') => self.scroll_preview_down(3),
+            KeyCode::Char('K') => self.scroll_preview_up(3),
             KeyCode::PageDown => {
-                self.scroll_preview_down();
-                self.scroll_preview_down();
-                self.scroll_preview_down();
+                self.scroll_preview_down(3);
+                self.scroll_preview_down(3);
+                self.scroll_preview_down(3);
             }
             KeyCode::PageUp => {
-                self.scroll_preview_up();
-                self.scroll_preview_up();
-                self.scroll_preview_up();
+                self.scroll_preview_up(3);
+                self.scroll_preview_up(3);
+                self.scroll_preview_up(3);
             }
             KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
                 return Ok(OverlayAction::Close);
@@ -1999,21 +2019,21 @@ impl SessionPicker {
                             }
                             KeyCode::Down => {
                                 if key.modifiers.contains(KeyModifiers::SHIFT) {
-                                    self.scroll_preview_down();
+                                    self.scroll_preview_down(3);
                                 } else {
                                     match self.focus {
                                         PaneFocus::Sessions => self.next(),
-                                        PaneFocus::Preview => self.scroll_preview_down(),
+                                        PaneFocus::Preview => self.scroll_preview_down(3),
                                     }
                                 }
                             }
                             KeyCode::Up => {
                                 if key.modifiers.contains(KeyModifiers::SHIFT) {
-                                    self.scroll_preview_up();
+                                    self.scroll_preview_up(3);
                                 } else {
                                     match self.focus {
                                         PaneFocus::Sessions => self.previous(),
-                                        PaneFocus::Preview => self.scroll_preview_up(),
+                                        PaneFocus::Preview => self.scroll_preview_up(3),
                                     }
                                 }
                             }
@@ -2021,11 +2041,11 @@ impl SessionPicker {
                                 let force_preview = key.modifiers.contains(KeyModifiers::SHIFT)
                                     || matches!(key.code, KeyCode::Char('J'));
                                 if force_preview {
-                                    self.scroll_preview_down();
+                                    self.scroll_preview_down(3);
                                 } else {
                                     match self.focus {
                                         PaneFocus::Sessions => self.next(),
-                                        PaneFocus::Preview => self.scroll_preview_down(),
+                                        PaneFocus::Preview => self.scroll_preview_down(3),
                                     }
                                 }
                             }
@@ -2033,23 +2053,23 @@ impl SessionPicker {
                                 let force_preview = key.modifiers.contains(KeyModifiers::SHIFT)
                                     || matches!(key.code, KeyCode::Char('K'));
                                 if force_preview {
-                                    self.scroll_preview_up();
+                                    self.scroll_preview_up(3);
                                 } else {
                                     match self.focus {
                                         PaneFocus::Sessions => self.previous(),
-                                        PaneFocus::Preview => self.scroll_preview_up(),
+                                        PaneFocus::Preview => self.scroll_preview_up(3),
                                     }
                                 }
                             }
                             KeyCode::PageDown => {
-                                self.scroll_preview_down();
-                                self.scroll_preview_down();
-                                self.scroll_preview_down();
+                                self.scroll_preview_down(3);
+                                self.scroll_preview_down(3);
+                                self.scroll_preview_down(3);
                             }
                             KeyCode::PageUp => {
-                                self.scroll_preview_up();
-                                self.scroll_preview_up();
-                                self.scroll_preview_up();
+                                self.scroll_preview_up(3);
+                                self.scroll_preview_up(3);
+                                self.scroll_preview_up(3);
                             }
                             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                                 break Ok(None);
