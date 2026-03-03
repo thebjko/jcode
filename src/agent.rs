@@ -1352,6 +1352,10 @@ impl Agent {
         let manager = crate::memory::MemoryManager::new();
         manager.spawn_relevance_check(sid, messages.to_vec());
 
+        // Send context to memory agent for incremental extraction
+        // (topic change detection and periodic extraction every N turns)
+        crate::memory_agent::update_context_sync(sid, messages.to_vec());
+
         // Return pending memory from previous turn
         pending
     }
