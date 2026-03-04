@@ -169,6 +169,12 @@ pub struct Session {
     /// Whether this is a debug/test session (created via debug socket)
     #[serde(default)]
     pub is_debug: bool,
+    /// Whether this session has been saved/bookmarked by the user
+    #[serde(default)]
+    pub saved: bool,
+    /// Optional user-provided label for saved sessions
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub save_label: Option<String>,
     /// Environment snapshots for post-mortem debugging
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub env_snapshots: Vec<EnvSnapshot>,
@@ -250,6 +256,8 @@ impl Session {
             last_pid: Some(std::process::id()),
             last_active_at: Some(now),
             is_debug,
+            saved: false,
+            save_label: None,
             env_snapshots: Vec::new(),
         }
     }
@@ -277,6 +285,8 @@ impl Session {
             last_pid: Some(std::process::id()),
             last_active_at: Some(now),
             is_debug,
+            saved: false,
+            save_label: None,
             env_snapshots: Vec::new(),
         }
     }
@@ -284,6 +294,20 @@ impl Session {
     /// Mark this session as a debug/test session
     pub fn set_debug(&mut self, is_debug: bool) {
         self.is_debug = is_debug;
+    }
+
+    /// Save/bookmark this session with an optional label
+    pub fn mark_saved(&mut self, label: Option<String>) {
+        self.saved = true;
+        if label.is_some() {
+            self.save_label = label;
+        }
+    }
+
+    /// Remove the saved/bookmark status
+    pub fn unmark_saved(&mut self) {
+        self.saved = false;
+        self.save_label = None;
     }
 
     /// Record an environment snapshot for post-mortem debugging
@@ -759,6 +783,8 @@ pub fn recover_crashed_sessions() -> Result<Vec<String>> {
         new_session.is_canary = old.is_canary;
         new_session.is_debug = old.is_debug;
         new_session.testing_build = old.testing_build.clone();
+        new_session.saved = old.saved;
+        new_session.save_label = old.save_label.clone();
         new_session.provider_session_id = None;
         new_session.status = SessionStatus::Closed;
 

@@ -43,6 +43,8 @@ pub struct SessionInfo {
     pub working_dir: Option<String>,
     pub is_canary: bool,
     pub is_debug: bool,
+    pub saved: bool,
+    pub save_label: Option<String>,
     pub status: SessionStatus,
     pub estimated_tokens: usize,
     pub messages_preview: Vec<PreviewMessage>,
@@ -101,6 +103,7 @@ fn build_search_index(
     short_name: &str,
     title: &str,
     working_dir: Option<&str>,
+    save_label: Option<&str>,
     messages_preview: &[PreviewMessage],
 ) -> String {
     let mut combined = String::new();
@@ -113,6 +116,11 @@ fn build_search_index(
     if let Some(dir) = working_dir {
         combined.push(' ');
         combined.push_str(dir);
+    }
+
+    if let Some(label) = save_label {
+        combined.push(' ');
+        combined.push_str(label);
     }
 
     let mut budget = SEARCH_CONTENT_BUDGET_BYTES;
@@ -229,6 +237,10 @@ struct SessionSummary {
     is_canary: bool,
     #[serde(default)]
     is_debug: bool,
+    #[serde(default)]
+    saved: bool,
+    #[serde(default)]
+    save_label: Option<String>,
     #[serde(default)]
     status: SessionStatus,
 }
@@ -373,6 +385,7 @@ pub fn load_sessions() -> Result<Vec<SessionInfo>> {
                 &short_name,
                 &title,
                 session.working_dir.as_deref(),
+                session.save_label.as_deref(),
                 &messages_preview,
             );
 
@@ -389,6 +402,8 @@ pub fn load_sessions() -> Result<Vec<SessionInfo>> {
                 working_dir: session.working_dir,
                 is_canary: session.is_canary,
                 is_debug: session.is_debug,
+                saved: session.saved,
+                save_label: session.save_label,
                 status,
                 estimated_tokens,
                 messages_preview,
@@ -544,6 +559,9 @@ pub enum PickerItem {
     OrphanHeader {
         session_count: usize,
     },
+    SavedHeader {
+        session_count: usize,
+    },
 }
 
 /// Interactive session picker
@@ -591,31 +609,20 @@ impl SessionPicker {
         let total_session_count = sessions.len();
         let hidden_test_count = sessions.iter().filter(|s| s.is_debug).count();
 
-        // Filter out debug/test sessions by default (canary sessions are shown)
-        let visible: Vec<SessionInfo> = sessions.iter().filter(|s| !s.is_debug).cloned().collect();
-
-        let items: Vec<PickerItem> = visible.iter().cloned().map(PickerItem::Session).collect();
-        let item_to_session: Vec<Option<usize>> = (0..visible.len()).map(Some).collect();
-
-        let mut list_state = ListState::default();
-        if !visible.is_empty() {
-            list_state.select(Some(0));
-        }
-
-        let crashed_sessions = crashed_sessions_from_visible_sessions(&visible);
+        let crashed_sessions = crashed_sessions_from_visible_sessions(&sessions);
         let crashed_session_ids: HashSet<String> = crashed_sessions
             .as_ref()
             .map(|info| info.session_ids.iter().cloned().collect())
             .unwrap_or_default();
 
-        Self {
-            items,
-            sessions: visible,
+        let mut picker = Self {
+            items: Vec::new(),
+            sessions: Vec::new(),
             all_sessions: sessions,
             all_server_groups: Vec::new(),
             all_orphan_sessions: Vec::new(),
-            item_to_session,
-            list_state,
+            item_to_session: Vec::new(),
+            list_state: ListState::default(),
             scroll_offset: 0,
             auto_scroll_preview: true,
             server_count: 0,
@@ -630,7 +637,9 @@ impl SessionPicker {
             hidden_test_count,
             focus: PaneFocus::Sessions,
             last_mouse_scroll: None,
-        }
+        };
+        picker.rebuild_items();
+        picker
     }
 
     /// Create a picker with server grouping
@@ -648,73 +657,31 @@ impl SessionPicker {
             .filter(|s| s.is_debug)
             .count();
 
-        // Build filtered view (hide debug/test sessions by default, canary sessions are shown)
-        let mut items: Vec<PickerItem> = Vec::new();
-        let mut all_sessions: Vec<SessionInfo> = Vec::new();
-        let mut item_to_session: Vec<Option<usize>> = Vec::new();
-
         let server_count = server_groups.len();
 
-        for group in &server_groups {
-            let visible_sessions: Vec<&SessionInfo> =
-                group.sessions.iter().filter(|s| !s.is_debug).collect();
-
-            if visible_sessions.is_empty() {
-                continue;
-            }
-
-            items.push(PickerItem::ServerHeader {
-                name: group.name.clone(),
-                icon: group.icon.clone(),
-                version: group.version.clone(),
-                session_count: visible_sessions.len(),
-            });
-            item_to_session.push(None);
-
-            for session in visible_sessions {
-                let session_idx = all_sessions.len();
-                all_sessions.push(session.clone());
-                items.push(PickerItem::Session(session.clone()));
-                item_to_session.push(Some(session_idx));
-            }
-        }
-
-        let visible_orphans: Vec<&SessionInfo> =
-            orphan_sessions.iter().filter(|s| !s.is_debug).collect();
-        if !visible_orphans.is_empty() {
-            items.push(PickerItem::OrphanHeader {
-                session_count: visible_orphans.len(),
-            });
-            item_to_session.push(None);
-
-            for session in visible_orphans {
-                let session_idx = all_sessions.len();
-                all_sessions.push(session.clone());
-                items.push(PickerItem::Session(session.clone()));
-                item_to_session.push(Some(session_idx));
-            }
-        }
-
-        let first_session_idx = item_to_session.iter().position(|x| x.is_some());
-        let mut list_state = ListState::default();
-        if let Some(idx) = first_session_idx {
-            list_state.select(Some(idx));
-        }
-
-        let crashed_sessions = crashed_sessions_from_visible_sessions(&all_sessions);
+        // Gather all sessions for crash detection
+        let all_for_crash: Vec<&SessionInfo> = server_groups
+            .iter()
+            .flat_map(|g| g.sessions.iter())
+            .chain(orphan_sessions.iter())
+            .filter(|s| !s.is_debug)
+            .collect();
+        let crashed_sessions = crashed_sessions_from_visible_sessions(
+            &all_for_crash.into_iter().cloned().collect::<Vec<_>>(),
+        );
         let crashed_session_ids: HashSet<String> = crashed_sessions
             .as_ref()
             .map(|info| info.session_ids.iter().cloned().collect())
             .unwrap_or_default();
 
-        Self {
-            items,
-            sessions: all_sessions,
-            all_sessions: Vec::new(), // will be populated in rebuild_items
+        let mut picker = Self {
+            items: Vec::new(),
+            sessions: Vec::new(),
+            all_sessions: Vec::new(),
             all_server_groups: server_groups,
             all_orphan_sessions: orphan_sessions,
-            item_to_session,
-            list_state,
+            item_to_session: Vec::new(),
+            list_state: ListState::default(),
             scroll_offset: 0,
             auto_scroll_preview: true,
             server_count,
@@ -729,7 +696,9 @@ impl SessionPicker {
             hidden_test_count,
             focus: PaneFocus::Sessions,
             last_mouse_scroll: None,
-        }
+        };
+        picker.rebuild_items();
+        picker
     }
 
     pub fn selected_session(&self) -> Option<&SessionInfo> {
@@ -927,13 +896,59 @@ impl SessionPicker {
         self.sessions.clear();
         self.item_to_session.clear();
 
+        // Collect all saved sessions across all sources and show them first
+        let mut saved_sessions: Vec<SessionInfo> = Vec::new();
+        let mut saved_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+
         if !self.all_server_groups.is_empty() {
-            // Grouped mode
+            for group in &self.all_server_groups {
+                for s in &group.sessions {
+                    if s.saved && session_visible(s) {
+                        saved_ids.insert(s.id.clone());
+                        saved_sessions.push(s.clone());
+                    }
+                }
+            }
+            for s in &self.all_orphan_sessions {
+                if s.saved && session_visible(s) {
+                    saved_ids.insert(s.id.clone());
+                    saved_sessions.push(s.clone());
+                }
+            }
+        } else {
+            for s in &self.all_sessions {
+                if s.saved && session_visible(s) {
+                    saved_ids.insert(s.id.clone());
+                    saved_sessions.push(s.clone());
+                }
+            }
+        }
+
+        // Sort saved sessions by last message time (most recent first)
+        saved_sessions.sort_by(|a, b| b.last_message_time.cmp(&a.last_message_time));
+
+        // Insert saved section at the top
+        if !saved_sessions.is_empty() {
+            self.items.push(PickerItem::SavedHeader {
+                session_count: saved_sessions.len(),
+            });
+            self.item_to_session.push(None);
+
+            for session in saved_sessions {
+                let session_idx = self.sessions.len();
+                self.sessions.push(session.clone());
+                self.items.push(PickerItem::Session(session));
+                self.item_to_session.push(Some(session_idx));
+            }
+        }
+
+        if !self.all_server_groups.is_empty() {
+            // Grouped mode - skip saved sessions (already shown above)
             for group in &self.all_server_groups {
                 let visible: Vec<&SessionInfo> = group
                     .sessions
                     .iter()
-                    .filter(|s| session_visible(s))
+                    .filter(|s| session_visible(s) && !saved_ids.contains(&s.id))
                     .collect();
 
                 if visible.is_empty() {
@@ -959,7 +974,7 @@ impl SessionPicker {
             let visible_orphans: Vec<&SessionInfo> = self
                 .all_orphan_sessions
                 .iter()
-                .filter(|s| session_visible(s))
+                .filter(|s| session_visible(s) && !saved_ids.contains(&s.id))
                 .collect();
             if !visible_orphans.is_empty() {
                 self.items.push(PickerItem::OrphanHeader {
@@ -975,9 +990,9 @@ impl SessionPicker {
                 }
             }
         } else {
-            // Simple mode (no server grouping)
+            // Simple mode (no server grouping) - skip saved sessions
             for session in &self.all_sessions {
-                if session_visible(session) {
+                if session_visible(session) && !saved_ids.contains(&session.id) {
                     let session_idx = self.sessions.len();
                     self.sessions.push(session.clone());
                     self.items.push(PickerItem::Session(session.clone()));
@@ -1184,6 +1199,7 @@ impl SessionPicker {
 
         let canary_marker = if session.is_canary { " 🔬" } else { "" };
         let debug_marker = if session.is_debug { " 🧪" } else { "" };
+        let saved_marker = if session.saved { " 📌" } else { "" };
 
         // Status indicator with color and time label
         let time_ago = format_time_ago(session.last_message_time);
@@ -1219,12 +1235,19 @@ impl SessionPicker {
             Span::styled(session.short_name.clone(), name_style),
             Span::styled(canary_marker, Style::default().fg(rgb(255, 193, 7))),
             Span::styled(debug_marker, Style::default().fg(rgb(180, 180, 180))),
+            Span::styled(saved_marker, Style::default().fg(rgb(255, 180, 100))),
             Span::styled(
                 format!(" {}", status_icon),
                 Style::default().fg(status_color),
             ),
             Span::styled(format!("  {}", time_label), Style::default().fg(DIM)),
         ];
+        if let Some(ref label) = session.save_label {
+            line1_spans.push(Span::styled(
+                format!("  \"{}\"", label),
+                Style::default().fg(rgb(255, 200, 140)),
+            ));
+        }
         if in_batch_restore {
             line1_spans.push(Span::styled(
                 "  [BATCH]",
@@ -1358,6 +1381,23 @@ impl SessionPicker {
                             ),
                             Span::styled(
                                 format!("  {} sessions", session_count),
+                                Style::default().fg(DIM),
+                            ),
+                        ]);
+                        ListItem::new(vec![line1])
+                    }
+                    PickerItem::SavedHeader { session_count } => {
+                        let SAVED_COLOR: Color = rgb(255, 180, 100);
+                        let line1 = Line::from(vec![
+                            Span::styled("📌 ", Style::default().fg(SAVED_COLOR)),
+                            Span::styled(
+                                "Saved",
+                                Style::default()
+                                    .fg(SAVED_COLOR)
+                                    .add_modifier(Modifier::BOLD),
+                            ),
+                            Span::styled(
+                                format!("  {}", session_count),
                                 Style::default().fg(DIM),
                             ),
                         ]);
@@ -1512,6 +1552,22 @@ impl SessionPicker {
             )])
             .alignment(align),
         );
+
+        // Saved/bookmark indicator
+        if session.saved {
+            let saved_label = if let Some(ref label) = session.save_label {
+                format!("📌 Saved as \"{}\"", label)
+            } else {
+                "📌 Saved".to_string()
+            };
+            lines.push(
+                Line::from(vec![Span::styled(
+                    saved_label,
+                    Style::default().fg(rgb(255, 180, 100)),
+                )])
+                .alignment(align),
+            );
+        }
 
         // Working directory
         if let Some(ref dir) = session.working_dir {
@@ -2196,6 +2252,7 @@ mod tests {
             short_name,
             &title,
             working_dir.as_deref(),
+            None,
             &messages_preview,
         );
 
@@ -2212,6 +2269,8 @@ mod tests {
             working_dir,
             is_canary,
             is_debug,
+            saved: false,
+            save_label: None,
             status,
             estimated_tokens: 200,
             messages_preview,

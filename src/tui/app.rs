@@ -6424,6 +6424,58 @@ impl App {
                         return Ok(());
                     }
 
+                    // Handle /save command - bookmark the current session
+                    if trimmed == "/save" || trimmed.starts_with("/save ") {
+                        let label = trimmed.strip_prefix("/save").unwrap().trim();
+                        let label = if label.is_empty() {
+                            None
+                        } else {
+                            Some(label.to_string())
+                        };
+                        self.session.mark_saved(label.clone());
+                        if let Err(e) = self.session.save() {
+                            self.push_display_message(DisplayMessage::error(format!(
+                                "Failed to save session: {}",
+                                e
+                            )));
+                            return Ok(());
+                        }
+                        let name = self.session.display_name().to_string();
+                        let msg = if let Some(ref lbl) = self.session.save_label {
+                            format!(
+                                "📌 Session **{}** saved as \"**{}**\". It will appear at the top of `/resume`.",
+                                name, lbl,
+                            )
+                        } else {
+                            format!(
+                                "📌 Session **{}** saved. It will appear at the top of `/resume`.",
+                                name,
+                            )
+                        };
+                        self.push_display_message(DisplayMessage::system(msg));
+                        self.set_status_notice("Session saved");
+                        return Ok(());
+                    }
+
+                    // Handle /unsave command - remove bookmark
+                    if trimmed == "/unsave" {
+                        self.session.unmark_saved();
+                        if let Err(e) = self.session.save() {
+                            self.push_display_message(DisplayMessage::error(format!(
+                                "Failed to save session: {}",
+                                e
+                            )));
+                            return Ok(());
+                        }
+                        let name = self.session.display_name().to_string();
+                        self.push_display_message(DisplayMessage::system(format!(
+                            "Removed bookmark from session **{}**.",
+                            name,
+                        )));
+                        self.set_status_notice("Bookmark removed");
+                        return Ok(());
+                    }
+
                     if trimmed == "/split" {
                         if self.is_processing {
                             self.push_display_message(DisplayMessage::error(
@@ -7348,6 +7400,12 @@ impl App {
             "account" | "accounts" => {
                 "`/account`\nList all Anthropic OAuth accounts.\n\n`/account add <label>`\nAdd a new account via OAuth login.\n\n`/account switch <label>`\nSwitch the active account.\n\n`/account remove <label>`\nRemove an account."
             }
+            "save" => {
+                "`/save`\nBookmark the current session so it appears at the top of `/resume`.\n\n`/save <label>`\nBookmark with a custom label for easy identification.\n\nSaved sessions are shown in a dedicated \"Saved\" section in the session picker."
+            }
+            "unsave" => {
+                "`/unsave`\nRemove the bookmark from the current session."
+            }
             "client-reload" if self.is_remote => {
                 "`/client-reload`\nForce client binary reload in remote mode."
             }
@@ -7436,6 +7494,9 @@ impl App {
                      • `/rebuild` - Full rebuild (git pull + cargo build + tests){}\n\
                      • `/changelog` - Show recent changes in this build\n\
                      • `/resume` - Open session picker (browse and resume previous sessions)\n\
+                     • `/save` - Bookmark session (appears at top of `/resume`)\n\
+                     • `/save <label>` - Bookmark with a custom label\n\
+                     • `/unsave` - Remove bookmark from current session\n\
                      • `/split` - Split session into a new window (clones conversation)\n\
                      • `/clear` - Clear conversation\n\
                      • `/rewind` - Show history with numbers, `/rewind N` to rewind\n\
@@ -7504,6 +7565,58 @@ impl App {
             session.model = Some(self.provider.model());
             self.session = session;
             self.provider_session_id = None;
+            return;
+        }
+
+        // Handle /save command - bookmark the current session
+        if trimmed == "/save" || trimmed.starts_with("/save ") {
+            let label = trimmed.strip_prefix("/save").unwrap().trim();
+            let label = if label.is_empty() {
+                None
+            } else {
+                Some(label.to_string())
+            };
+            self.session.mark_saved(label.clone());
+            if let Err(e) = self.session.save() {
+                self.push_display_message(DisplayMessage::error(format!(
+                    "Failed to save session: {}",
+                    e
+                )));
+                return;
+            }
+            let name = self.session.display_name().to_string();
+            let msg = if let Some(ref lbl) = self.session.save_label {
+                format!(
+                    "📌 Session **{}** saved as \"**{}**\". It will appear at the top of `/resume`.",
+                    name, lbl,
+                )
+            } else {
+                format!(
+                    "📌 Session **{}** saved. It will appear at the top of `/resume`.",
+                    name,
+                )
+            };
+            self.push_display_message(DisplayMessage::system(msg));
+            self.set_status_notice("Session saved");
+            return;
+        }
+
+        // Handle /unsave command - remove bookmark
+        if trimmed == "/unsave" {
+            self.session.unmark_saved();
+            if let Err(e) = self.session.save() {
+                self.push_display_message(DisplayMessage::error(format!(
+                    "Failed to save session: {}",
+                    e
+                )));
+                return;
+            }
+            let name = self.session.display_name().to_string();
+            self.push_display_message(DisplayMessage::system(format!(
+                "Removed bookmark from session **{}**.",
+                name,
+            )));
+            self.set_status_notice("Bookmark removed");
             return;
         }
 
@@ -11870,6 +11983,8 @@ impl App {
         new_session.is_canary = old_session.is_canary;
         new_session.testing_build = old_session.testing_build.clone();
         new_session.is_debug = old_session.is_debug;
+        new_session.saved = old_session.saved;
+        new_session.save_label = old_session.save_label.clone();
         new_session.working_dir = old_session.working_dir.clone();
 
         self.clear_provider_messages();
@@ -13831,6 +13946,8 @@ impl App {
             ("/rebuild".into(), "Full rebuild (git pull + build + tests)"),
             ("/update".into(), "Check for and install latest release"),
             ("/resume".into(), "Open session picker"),
+            ("/save".into(), "Bookmark session for easy access"),
+            ("/unsave".into(), "Remove bookmark from session"),
             ("/split".into(), "Split session into a new window"),
             ("/quit".into(), "Exit jcode"),
             ("/auth".into(), "Show authentication status"),
@@ -13989,6 +14106,7 @@ impl App {
                 | "/swarm"
                 | "/rewind"
                 | "/config"
+                | "/save"
         )
     }
 
