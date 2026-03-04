@@ -348,6 +348,8 @@ fn is_overview_mergeable(kind: WidgetKind) -> bool {
             | WidgetKind::SwarmStatus
             | WidgetKind::BackgroundTasks
             | WidgetKind::ModelInfo
+            | WidgetKind::UsageLimits
+            | WidgetKind::GitStatus
     )
 }
 
@@ -873,6 +875,22 @@ impl InfoWidgetData {
                     sections += 1;
                 }
                 if self.queue_mode.is_some() {
+                    sections += 1;
+                }
+                if self
+                    .usage_info
+                    .as_ref()
+                    .map(|u| u.available)
+                    .unwrap_or(false)
+                {
+                    sections += 1;
+                }
+                if self
+                    .git_info
+                    .as_ref()
+                    .map(|g| g.is_interesting())
+                    .unwrap_or(false)
+                {
                     sections += 1;
                 }
                 // Only useful as a "join" mode when there are multiple sections.
@@ -3088,8 +3106,16 @@ fn compact_memory_height(data: &InfoWidgetData) -> u16 {
 
 fn compact_model_height(data: &InfoWidgetData) -> u16 {
     if data.model.is_some() {
-        // 1 line for model, +1 if we have session info
-        let mut lines = 1;
+        let mut lines = 1u16;
+        let has_provider = data
+            .provider_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .is_some();
+        if has_provider || data.auth_method != AuthMethod::Unknown {
+            lines += 1;
+        }
         if data.session_count.is_some() || data.session_name.is_some() {
             lines += 1;
         }
@@ -4901,7 +4927,6 @@ fn render_model_info(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static>> {
         return Vec::new();
     };
 
-    // Extract short model name (e.g., "claude-opus-4-5-20251101" -> "opus-4.5")
     let short_name = shorten_model_name(model);
     let max_len = inner.width.saturating_sub(2) as usize;
 
@@ -4920,7 +4945,6 @@ fn render_model_info(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static>> {
         ),
     ];
 
-    // Add reasoning effort if present
     if let Some(effort) = &data.reasoning_effort {
         let effort_short = match effort.as_str() {
             "xhigh" => "xhi",
@@ -4939,7 +4963,58 @@ fn render_model_info(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static>> {
 
     let mut lines = vec![Line::from(spans)];
 
-    // Add session info line if we have session count/name.
+    // Provider + auth on one line: "anthropic · OAuth" or "openrouter · API Key"
+    let has_provider = data
+        .provider_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .is_some();
+    let has_auth = data.auth_method != AuthMethod::Unknown;
+
+    if has_provider || has_auth {
+        let mut detail_spans: Vec<Span> = Vec::new();
+
+        if let Some(provider) = data
+            .provider_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            detail_spans.push(Span::styled(
+                provider.to_lowercase(),
+                Style::default().fg(rgb(140, 180, 255)),
+            ));
+        }
+
+        if has_auth {
+            let (icon, label, _color) = match data.auth_method {
+                AuthMethod::AnthropicOAuth => ("🔐", "OAuth", rgb(255, 160, 100)),
+                AuthMethod::AnthropicApiKey => ("🔑", "API Key", rgb(180, 180, 190)),
+                AuthMethod::OpenAIOAuth => ("🔐", "OAuth", rgb(100, 200, 180)),
+                AuthMethod::OpenAIApiKey => ("🔑", "API Key", rgb(180, 180, 190)),
+                AuthMethod::OpenRouterApiKey => ("🔑", "API Key", rgb(140, 180, 255)),
+                AuthMethod::CopilotOAuth => ("🔐", "OAuth", rgb(110, 200, 140)),
+                AuthMethod::Unknown => unreachable!(),
+            };
+            if !detail_spans.is_empty() {
+                detail_spans.push(Span::styled(
+                    " · ",
+                    Style::default().fg(rgb(80, 80, 90)),
+                ));
+            }
+            detail_spans.push(Span::styled(
+                format!("{} {}", icon, label),
+                Style::default().fg(rgb(140, 140, 150)),
+            ));
+        }
+
+        if !detail_spans.is_empty() {
+            lines.push(Line::from(detail_spans));
+        }
+    }
+
+    // Session info line
     if data.session_count.is_some() || data.session_name.is_some() {
         let mut parts = Vec::new();
 
