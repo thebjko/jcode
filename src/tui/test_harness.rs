@@ -2,6 +2,7 @@
 //!
 //! Comprehensive testing infrastructure for autonomous TUI testing.
 //! Provides deterministic clock, event replay, log bundles, and headless rendering.
+#![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;

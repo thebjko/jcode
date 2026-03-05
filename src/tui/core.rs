@@ -2,6 +2,7 @@
 //!
 //! This module contains the common display state, input handling,
 //! and helper methods used by both local and remote TUI modes.
+#![allow(dead_code)]
 
 use super::markdown::IncrementalMarkdownRenderer;
 use super::{DisplayMessage, ProcessingStatus};
