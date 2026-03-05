@@ -104,6 +104,13 @@ pub fn has_copilot_credentials() -> bool {
 }
 
 fn copilot_config_dir() -> PathBuf {
+    if let Ok(path) = std::env::var("JCODE_HOME") {
+        return PathBuf::from(path)
+            .join("external")
+            .join(".config")
+            .join("github-copilot");
+    }
+
     if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
         PathBuf::from(xdg).join("github-copilot")
     } else if cfg!(windows) {
@@ -623,6 +630,28 @@ mod tests {
         assert_eq!(loaded, "gho_newtoken");
 
         std::env::remove_var("XDG_CONFIG_HOME");
+    }
+
+    #[test]
+    fn copilot_config_dir_uses_jcode_home_external_dir() {
+        let dir = TempDir::new().unwrap();
+        let prev = std::env::var_os("JCODE_HOME");
+        std::env::set_var("JCODE_HOME", dir.path());
+
+        let path = copilot_config_dir();
+        assert_eq!(
+            path,
+            dir.path()
+                .join("external")
+                .join(".config")
+                .join("github-copilot")
+        );
+
+        if let Some(prev) = prev {
+            std::env::set_var("JCODE_HOME", prev);
+        } else {
+            std::env::remove_var("JCODE_HOME");
+        }
     }
 
     #[test]
