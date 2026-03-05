@@ -9768,15 +9768,18 @@ impl App {
 
         let redirect_uri = format!("http://localhost:{}/callback", port);
 
-        let auth_url = format!(
-            "{}?code=true&client_id={}&response_type=code&redirect_uri={}&scope={}&code_challenge={}&code_challenge_method=S256&state={}",
-            crate::auth::oauth::claude::AUTHORIZE_URL,
-            crate::auth::oauth::claude::CLIENT_ID,
-            urlencoding::encode(&redirect_uri),
-            urlencoding::encode(crate::auth::oauth::claude::SCOPES),
-            challenge,
-            verifier,
+        let auth_url = crate::auth::oauth::claude_auth_url(&redirect_uri, &challenge, &verifier);
+        let manual_auth_url = crate::auth::oauth::claude_auth_url(
+            crate::auth::oauth::claude::REDIRECT_URI,
+            &challenge,
+            &verifier,
         );
+        let qr_section = crate::login_qr::markdown_section(
+            &manual_auth_url,
+            "No browser on this machine? Scan this on another device, finish login there, then paste the full callback URL here:",
+        )
+        .map(|section| format!("\n\n{section}"))
+        .unwrap_or_default();
 
         let _ = open::that(&auth_url);
 
@@ -9785,8 +9788,8 @@ impl App {
              Opening browser for authentication...\n\n\
              Waiting for callback on port {}...\n\
              If the browser didn't open, visit:\n{}\n\n\
-             Or paste the authorization code here to complete manually.",
-            port, auth_url
+             Or paste the authorization code here to complete manually.{}",
+            port, auth_url, qr_section
         )));
         self.set_status_notice("Login: waiting for browser...");
         self.pending_login = Some(PendingLogin::Claude {
@@ -9855,15 +9858,17 @@ impl App {
         let hash = hasher.finalize();
         let challenge = URL_SAFE_NO_PAD.encode(hash);
 
-        let auth_url = format!(
-            "{}?code=true&client_id={}&response_type=code&redirect_uri={}&scope={}&code_challenge={}&code_challenge_method=S256&state={}",
-            crate::auth::oauth::claude::AUTHORIZE_URL,
-            crate::auth::oauth::claude::CLIENT_ID,
-            urlencoding::encode(crate::auth::oauth::claude::REDIRECT_URI),
-            urlencoding::encode(crate::auth::oauth::claude::SCOPES),
-            challenge,
-            verifier,
+        let auth_url = crate::auth::oauth::claude_auth_url(
+            crate::auth::oauth::claude::REDIRECT_URI,
+            &challenge,
+            &verifier,
         );
+        let qr_section = crate::login_qr::markdown_section(
+            &auth_url,
+            "Scan this on another device if this machine has no browser:",
+        )
+        .map(|section| format!("\n\n{section}"))
+        .unwrap_or_default();
 
         let _ = open::that(&auth_url);
 
@@ -9871,8 +9876,8 @@ impl App {
             "**Claude OAuth Login**\n\n\
              Opening browser for authentication...\n\n\
              If the browser didn't open, visit:\n{}\n\n\
-             After logging in, copy the authorization code and **paste it here**.",
-            auth_url
+             After logging in, copy the callback URL or authorization code and **paste it here**.{}",
+            auth_url, qr_section
         )));
         self.set_status_notice("Login: paste code...");
         self.pending_login = Some(PendingLogin::Claude {
@@ -9903,15 +9908,17 @@ impl App {
         let hash = hasher.finalize();
         let challenge = URL_SAFE_NO_PAD.encode(hash);
 
-        let auth_url = format!(
-            "{}?code=true&client_id={}&response_type=code&redirect_uri={}&scope={}&code_challenge={}&code_challenge_method=S256&state={}",
-            crate::auth::oauth::claude::AUTHORIZE_URL,
-            crate::auth::oauth::claude::CLIENT_ID,
-            urlencoding::encode(crate::auth::oauth::claude::REDIRECT_URI),
-            urlencoding::encode(crate::auth::oauth::claude::SCOPES),
-            challenge,
-            verifier,
+        let auth_url = crate::auth::oauth::claude_auth_url(
+            crate::auth::oauth::claude::REDIRECT_URI,
+            &challenge,
+            &verifier,
         );
+        let qr_section = crate::login_qr::markdown_section(
+            &auth_url,
+            "Scan this on another device if this machine has no browser:",
+        )
+        .map(|section| format!("\n\n{section}"))
+        .unwrap_or_default();
 
         let _ = open::that(&auth_url);
 
@@ -9919,8 +9926,8 @@ impl App {
             "**Claude OAuth Login** (account: `{}`)\n\n\
              Opening browser for authentication...\n\n\
              If the browser didn't open, visit:\n{}\n\n\
-             After logging in, copy the authorization code and **paste it here**.",
-            label, auth_url
+             After logging in, copy the callback URL or authorization code and **paste it here**.{}",
+            label, auth_url, qr_section
         )));
         self.set_status_notice(&format!("Login [{}]: paste code...", label));
         self.pending_login = Some(PendingLogin::ClaudeAccount {
@@ -10333,14 +10340,22 @@ impl App {
             Bus::global().publish(BusEvent::LoginCompleted(LoginCompleted {
                 provider: "copilot_code".to_string(),
                 success: true,
-                message: format!(
-                    "**GitHub Copilot Login**\n\n\
-                     Your code: **{}**{}\n\n\
-                     Opening browser to {} ...\n\
-                     Paste the code there and authorize.\n\n\
-                     Waiting for authorization... (type `/cancel` to abort)",
-                    user_code, clipboard_msg, verification_uri
-                ),
+                message: {
+                    let qr_section = crate::login_qr::markdown_section(
+                        &verification_uri,
+                        "Scan this on another device to open the GitHub verification page:",
+                    )
+                    .map(|section| format!("\n\n{section}"))
+                    .unwrap_or_default();
+                    format!(
+                        "**GitHub Copilot Login**\n\n\
+                         Your code: **{}**{}\n\n\
+                         Opening browser to {} ...\n\
+                         Paste the code there and authorize.{}\n\n\
+                         Waiting for authorization... (type `/cancel` to abort)",
+                        user_code, clipboard_msg, verification_uri, qr_section
+                    )
+                },
             }));
 
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -10720,8 +10735,10 @@ impl App {
         label: &str,
         redirect_uri: Option<String>,
     ) -> Result<String, String> {
-        let redirect_uri =
+        let fallback_redirect_uri =
             redirect_uri.unwrap_or_else(|| crate::auth::oauth::claude::REDIRECT_URI.to_string());
+        let redirect_uri =
+            crate::auth::oauth::claude_redirect_uri_for_input(input.trim(), &fallback_redirect_uri);
         let oauth_tokens =
             crate::auth::oauth::exchange_claude_code(&verifier, input.trim(), &redirect_uri)
                 .await

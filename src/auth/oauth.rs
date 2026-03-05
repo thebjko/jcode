@@ -6,7 +6,7 @@ use anyhow::Result;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, IsTerminal, Write};
 use std::net::TcpListener;
 
 /// Claude Code OAuth configuration
@@ -166,38 +166,127 @@ pub async fn wait_for_callback_async(port: u16, expected_state: &str) -> Result<
 /// Perform OAuth login for Claude
 pub async fn login_claude() -> Result<OAuthTokens> {
     let (verifier, challenge) = generate_pkce();
-    let _state = generate_state();
+    if let Ok(code) = std::env::var("JCODE_CLAUDE_AUTH_CODE") {
+        let trimmed = code.trim();
+        if trimmed.is_empty() {
+            anyhow::bail!("JCODE_CLAUDE_AUTH_CODE is set but empty");
+        }
+        eprintln!("Exchanging code for tokens...");
+        return exchange_claude_code(&verifier, trimmed, claude::REDIRECT_URI).await;
+    }
 
-    // Build authorization URL (matching OpenCode's format)
-    let auth_url = format!(
-        "{}?code=true&client_id={}&response_type=code&redirect_uri={}&scope={}&code_challenge={}&code_challenge_method=S256&state={}",
-        claude::AUTHORIZE_URL,
-        claude::CLIENT_ID,
-        urlencoding::encode(claude::REDIRECT_URI),
-        urlencoding::encode(claude::SCOPES),
-        challenge,
-        verifier  // state is the verifier in OpenCode's implementation
-    );
+    if !std::io::stdin().is_terminal() {
+        anyhow::bail!(
+            "Claude login needs an authorization code from stdin. Re-run in an interactive terminal, or set JCODE_CLAUDE_AUTH_CODE."
+        );
+    }
+
+    // Try local callback first for a fully automatic flow.
+    if let Ok(listener) = std::net::TcpListener::bind("127.0.0.1:0") {
+        let port = listener.local_addr()?.port();
+        drop(listener);
+
+        let redirect_uri = format!("http://localhost:{}/callback", port);
+        let auth_url = claude_auth_url(&redirect_uri, &challenge, &verifier);
+        let manual_auth_url = claude_auth_url(claude::REDIRECT_URI, &challenge, &verifier);
+
+        eprintln!("\nOpen this URL in your browser:\n");
+        eprintln!("{}\n", auth_url);
+        if let Some(qr) = crate::login_qr::indented_section(
+            &manual_auth_url,
+            "No browser on this machine? Scan this QR on another device, finish login there, then paste the full callback URL back here:",
+            "    ",
+        ) {
+            eprintln!("{qr}\n");
+        }
+        eprintln!("Opening browser for Claude login...\n");
+        let browser_opened = open::that(&auth_url).is_ok();
+        if browser_opened {
+            eprintln!(
+                "Waiting up to 120s for automatic callback on {}",
+                redirect_uri
+            );
+        } else {
+            eprintln!(
+                "Couldn't open a browser on this machine. Use the QR code or manual URL above, then paste the callback URL here.\n"
+            );
+        }
+
+        if browser_opened {
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(120),
+                wait_for_callback_async(port, &verifier),
+            )
+            .await
+            {
+                Ok(Ok(code)) => {
+                    eprintln!("Received callback. Exchanging code for tokens...");
+                    return exchange_claude_code(&verifier, &code, &redirect_uri).await;
+                }
+                Ok(Err(err)) => {
+                    eprintln!(
+                        "Automatic callback failed ({err}). Falling back to manual code paste."
+                    );
+                }
+                Err(_) => {
+                    eprintln!("Timed out waiting for callback. Falling back to manual code paste.");
+                }
+            }
+        }
+
+        eprintln!("Paste the authorization code (or callback URL) here:\n");
+        eprint!("> ");
+        std::io::stdout().flush()?;
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input)?;
+        let trimmed = input.trim();
+        if trimmed.is_empty() {
+            anyhow::bail!("No authorization code entered.");
+        }
+        eprintln!("Exchanging code for tokens...");
+        let selected_redirect_uri = claude_redirect_uri_for_input(trimmed, &redirect_uri);
+        return exchange_claude_code(&verifier, trimmed, &selected_redirect_uri).await;
+    }
+
+    // Last-resort manual flow if localhost callback binding is unavailable.
+    let auth_url = claude_auth_url(claude::REDIRECT_URI, &challenge, &verifier);
 
     eprintln!("\nOpen this URL in your browser:\n");
     eprintln!("{}\n", auth_url);
+    if let Some(qr) = crate::login_qr::indented_section(
+        &auth_url,
+        "Scan this QR on another device if this machine has no browser:",
+        "    ",
+    ) {
+        eprintln!("{qr}\n");
+    }
     eprintln!("Opening browser for Claude login...\n");
-
-    // Try to open browser
     let _ = open::that(&auth_url);
-
-    eprintln!("After logging in, you'll see a page with an authorization code.");
-    eprintln!("Copy and paste the code here:\n");
+    eprintln!("After logging in, copy and paste the callback URL or code here:\n");
     eprint!("> ");
     std::io::stdout().flush()?;
 
     let mut input = String::new();
     std::io::stdin().read_line(&mut input)?;
-    let input = input.trim();
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!("No authorization code entered.");
+    }
 
     eprintln!("Exchanging code for tokens...");
+    exchange_claude_code(&verifier, trimmed, claude::REDIRECT_URI).await
+}
 
-    exchange_claude_code(&verifier, input, claude::REDIRECT_URI).await
+pub fn claude_auth_url(redirect_uri: &str, challenge: &str, state: &str) -> String {
+    format!(
+        "{}?code=true&client_id={}&response_type=code&redirect_uri={}&scope={}&code_challenge={}&code_challenge_method=S256&state={}",
+        claude::AUTHORIZE_URL,
+        claude::CLIENT_ID,
+        urlencoding::encode(redirect_uri),
+        urlencoding::encode(claude::SCOPES),
+        challenge,
+        state
+    )
 }
 
 /// Parse Claude auth input.
@@ -226,11 +315,37 @@ fn parse_claude_code_input(input: &str) -> Result<(String, Option<String>)> {
         (trimmed.to_string(), None)
     };
 
-    if raw_code.contains('#') {
+    let (code, state) = if raw_code.contains('#') {
         let parts: Vec<&str> = raw_code.splitn(2, '#').collect();
-        Ok((parts[0].to_string(), Some(parts[1].to_string())))
+        (parts[0].to_string(), Some(parts[1].to_string()))
     } else {
-        Ok((raw_code, state_from_query))
+        (raw_code, state_from_query)
+    };
+
+    if code.trim().is_empty() {
+        anyhow::bail!("No authorization code provided");
+    }
+
+    Ok((code, state))
+}
+
+pub fn claude_redirect_uri_for_input(input: &str, fallback_redirect_uri: &str) -> String {
+    let trimmed = input.trim();
+    let Ok(url) = url::Url::parse(trimmed) else {
+        return fallback_redirect_uri.to_string();
+    };
+
+    let Ok(expected_manual) = url::Url::parse(claude::REDIRECT_URI) else {
+        return fallback_redirect_uri.to_string();
+    };
+
+    if url.scheme() == expected_manual.scheme()
+        && url.host_str() == expected_manual.host_str()
+        && url.path() == expected_manual.path()
+    {
+        claude::REDIRECT_URI.to_string()
+    } else {
+        fallback_redirect_uri.to_string()
     }
 }
 
@@ -241,13 +356,18 @@ async fn exchange_claude_code_at_url(
     redirect_uri: &str,
 ) -> Result<OAuthTokens> {
     let (code, state_from_callback) = parse_claude_code_input(input)?;
-    // Anthropic's token endpoint expects `state`; callback mode gives it via query,
-    // manual mode can omit it, so we fall back to the verifier value used in auth URL.
-    let state = state_from_callback
-        .as_deref()
-        .filter(|s| !s.is_empty())
-        .unwrap_or(verifier)
-        .to_string();
+    // Anthropic's token endpoint expects `state`.
+    // We bind state to the PKCE verifier in the auth URL; if callback input
+    // includes a non-empty state, it must match to avoid CSRF or stale-code mixups.
+    let state = match state_from_callback.as_deref().filter(|s| !s.is_empty()) {
+        Some(callback_state) if callback_state != verifier => {
+            anyhow::bail!(
+                "OAuth state mismatch. Start login again and use the latest callback/code."
+            )
+        }
+        Some(callback_state) => callback_state.to_string(),
+        None => verifier.to_string(),
+    };
 
     let client = reqwest::Client::new();
     let params = vec![
@@ -550,6 +670,7 @@ pub fn save_openai_tokens(tokens: &OAuthTokens) -> Result<()> {
     let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("No home directory"))?;
     let creds_dir = home.join(".codex");
     std::fs::create_dir_all(&creds_dir)?;
+    crate::platform::set_directory_permissions_owner_only(&creds_dir)?;
 
     #[derive(Serialize)]
     struct AuthFile {
@@ -1418,6 +1539,34 @@ mod tests {
         assert_eq!(state, Some("mystate".to_string()));
     }
 
+    #[test]
+    fn parse_code_rejects_empty_input() {
+        let err = parse_claude_code_input("   ").expect_err("empty input should fail");
+        assert!(err.to_string().contains("No authorization code provided"));
+    }
+
+    #[test]
+    fn parse_code_rejects_empty_code_query_param() {
+        let err = parse_claude_code_input("code=&state=abc")
+            .expect_err("empty code query parameter should fail");
+        assert!(err.to_string().contains("No authorization code provided"));
+    }
+
+    #[test]
+    fn claude_redirect_uri_uses_manual_callback_for_console_url() {
+        let selected = claude_redirect_uri_for_input(
+            "https://console.anthropic.com/oauth/code/callback?code=abc&state=xyz",
+            "http://localhost:9999/callback",
+        );
+        assert_eq!(selected, claude::REDIRECT_URI);
+    }
+
+    #[test]
+    fn claude_redirect_uri_keeps_localhost_fallback_for_raw_code() {
+        let selected = claude_redirect_uri_for_input("abc123", "http://localhost:9999/callback");
+        assert_eq!(selected, "http://localhost:9999/callback");
+    }
+
     // ========================
     // Mock server integration: Claude exchange
     // ========================
@@ -1498,7 +1647,7 @@ mod tests {
         let url = format!("http://127.0.0.1:{}/v1/oauth/token", port);
         let _ = exchange_claude_code_at_url(
             &url,
-            "verifier_fallback",
+            "query_state",
             "https://example.com/callback?code=test_code&state=query_state",
             "https://r",
         )
@@ -1512,6 +1661,23 @@ mod tests {
                 .collect();
         assert_eq!(pairs.get("state").unwrap(), "query_state");
         assert_eq!(pairs.get("code").unwrap(), "test_code");
+    }
+
+    #[tokio::test]
+    async fn claude_exchange_rejects_state_mismatch() {
+        let result = exchange_claude_code_at_url(
+            "http://127.0.0.1:1/v1/oauth/token",
+            "expected_state",
+            "https://example.com/callback?code=test_code&state=wrong_state",
+            "https://r",
+        )
+        .await;
+
+        let err = result.expect_err("state mismatch should fail before token exchange");
+        assert!(
+            err.to_string().contains("OAuth state mismatch"),
+            "unexpected error: {err}"
+        );
     }
 
     #[tokio::test]
