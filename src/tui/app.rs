@@ -10979,8 +10979,6 @@ impl App {
             "gpt-5.4",
             "gpt-5.4[1m]",
             "gpt-5.4-pro",
-            "gpt-5.3-codex-spark",
-            "gpt-5.3-codex",
             "claude-opus-4-6",
             "claude-opus-4-6[1m]",
             "claude-opus-4.6",
@@ -10996,15 +10994,9 @@ impl App {
             "claude-sonnet-4-6[1m]",
         ];
 
-        const OPENAI_OAUTH_ONLY_MODELS: &[&str] = &[
-            "gpt-5.4",
-            "gpt-5.4[1m]",
-            "gpt-5.4-pro",
-            "gpt-5.3-codex-spark",
-            "gpt-5.3-codex",
-        ];
+        const OPENAI_OAUTH_ONLY_MODELS: &[&str] = &["gpt-5.4", "gpt-5.4[1m]", "gpt-5.4-pro"];
 
-        const COPILOT_OAUTH_MODELS: &[&str] = &["claude-opus-4.6", "gpt-5.4", "gpt-5.3-codex"];
+        const COPILOT_OAUTH_MODELS: &[&str] = &["claude-opus-4.6", "gpt-5.4"];
 
         fn recommendation_rank(name: &str, recommended_models: &[&str]) -> usize {
             recommended_models
@@ -16804,21 +16796,30 @@ mod tests {
 
         assert_eq!(model_names.first().copied(), Some("gpt-5.2"));
 
-        let gpt54 = model_names
+        let gpt54 = picker
+            .models
             .iter()
-            .position(|name| *name == "gpt-5.4")
+            .position(|model| model.name == "gpt-5.4")
             .expect("gpt-5.4 should be present");
-        let gpt54_pro = model_names
+        let gpt54_pro = picker
+            .models
             .iter()
-            .position(|name| *name == "gpt-5.4-pro")
+            .position(|model| model.name == "gpt-5.4-pro")
             .expect("gpt-5.4-pro should be present");
-        let spark = model_names
+        let claude_opus = picker
+            .models
             .iter()
-            .position(|name| *name == "gpt-5.3-codex-spark")
+            .position(|model| model.name == "claude-opus-4-6")
+            .expect("claude-opus-4-6 should be present");
+        let spark = picker
+            .models
+            .iter()
+            .position(|model| model.name == "gpt-5.3-codex-spark")
             .expect("gpt-5.3-codex-spark should be present");
-        let codex = model_names
+        let codex = picker
+            .models
             .iter()
-            .position(|name| *name == "gpt-5.3-codex")
+            .position(|model| model.name == "gpt-5.3-codex")
             .expect("gpt-5.3-codex should be present");
 
         assert!(
@@ -16827,14 +16828,22 @@ mod tests {
             model_names
         );
         assert!(
-            gpt54_pro < spark,
-            "gpt-5.4-pro should rank ahead of gpt-5.3-codex-spark, got {:?}",
+            gpt54_pro < claude_opus,
+            "gpt-5.4-pro should rank ahead of claude-opus-4-6, got {:?}",
             model_names
         );
         assert!(
-            spark < codex,
-            "gpt-5.3-codex-spark should rank ahead of gpt-5.3-codex, got {:?}",
+            claude_opus < spark,
+            "claude-opus-4-6 should rank ahead of non-recommended gpt-5.3-codex-spark, got {:?}",
             model_names
+        );
+        assert!(
+            !picker.models[spark].recommended,
+            "gpt-5.3-codex-spark should not be recommended"
+        );
+        assert!(
+            !picker.models[codex].recommended,
+            "gpt-5.3-codex should not be recommended"
         );
     }
 
