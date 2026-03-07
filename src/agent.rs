@@ -98,8 +98,7 @@ impl InterruptSignal {
     }
 
     pub fn fire(&self) {
-        self.flag
-            .store(true, std::sync::atomic::Ordering::SeqCst);
+        self.flag.store(true, std::sync::atomic::Ordering::SeqCst);
         self.notify.notify_waiters();
     }
 
@@ -108,8 +107,7 @@ impl InterruptSignal {
     }
 
     pub fn reset(&self) {
-        self.flag
-            .store(false, std::sync::atomic::Ordering::SeqCst);
+        self.flag.store(false, std::sync::atomic::Ordering::SeqCst);
     }
 
     pub async fn notified(&self) {
@@ -466,6 +464,28 @@ impl Agent {
         let compaction = self.registry.compaction();
         if let Ok(mut manager) = compaction.try_write() {
             manager.update_observed_input_tokens(observed);
+            manager.push_token_snapshot(observed);
+        };
+    }
+
+    /// Push an embedding snapshot for the semantic compaction mode.
+    /// Called after each assistant turn with a short text snippet.
+    /// No-op if the embedding model is unavailable or mode is not semantic.
+    fn push_embedding_snapshot_if_semantic(&mut self, text: &str) {
+        use crate::config::CompactionMode;
+        let is_semantic = {
+            let compaction = self.registry.compaction();
+            compaction
+                .try_read()
+                .map(|m| m.mode() == CompactionMode::Semantic)
+                .unwrap_or(false)
+        };
+        if !is_semantic {
+            return;
+        }
+        let compaction = self.registry.compaction();
+        if let Ok(mut manager) = compaction.try_write() {
+            manager.push_embedding_snapshot(text);
         };
     }
 
@@ -1069,10 +1089,10 @@ impl Agent {
 
     pub fn available_models_display(&self) -> Vec<String> {
         self.provider.available_models_display()
-    pub fn model_routes(&self) -> Vec<crate::provider::ModelRoute> {
-        self.provider.model_routes()
     }
 
+    pub fn model_routes(&self) -> Vec<crate::provider::ModelRoute> {
+        self.provider.model_routes()
     }
 
     pub fn registry(&self) -> Registry {
@@ -2260,6 +2280,7 @@ impl Agent {
                 });
                 let message_id =
                     self.add_message_ext(Role::Assistant, content_blocks, None, token_usage);
+                self.push_embedding_snapshot_if_semantic(&text_content);
                 self.session.save()?;
                 Some(message_id)
             } else {
@@ -2985,6 +3006,7 @@ impl Agent {
                 });
                 let message_id =
                     self.add_message_ext(Role::Assistant, content_blocks, None, token_usage);
+                self.push_embedding_snapshot_if_semantic(&text_content);
                 self.session.save()?;
                 Some(message_id)
             } else {
@@ -3692,6 +3714,7 @@ impl Agent {
                 });
                 let message_id =
                     self.add_message_ext(Role::Assistant, content_blocks, None, token_usage);
+                self.push_embedding_snapshot_if_semantic(&text_content);
                 self.session.save()?;
                 Some(message_id)
             } else {

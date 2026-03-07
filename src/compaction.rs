@@ -7,12 +7,20 @@
 //! The CompactionManager does NOT store its own copy of messages. Instead,
 //! callers pass `&[Message]` references when needed. The manager tracks how
 //! many messages from the front have been compacted via `compacted_count`.
+//!
+//! ## Compaction Modes
+//!
+//! - **Reactive** (default): compact when context hits a fixed threshold (80%).
+//! - **Proactive**: compact early based on predicted EWMA token growth rate.
+//! - **Semantic**: compact based on embedding-detected topic shifts and
+//!   relevance scoring. Falls back to proactive if embeddings are unavailable.
 
 #![allow(dead_code)]
 
 use crate::message::{ContentBlock, Message, Role};
 use crate::provider::Provider;
 use anyhow::Result;
+use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::task::JoinHandle;
 
@@ -45,6 +53,19 @@ const CHARS_PER_TOKEN: usize = 4;
 /// These are not counted in message content but do count toward the context limit.
 /// Estimated conservatively: ~8k tokens for system prompt + ~10k for 50+ tools.
 const SYSTEM_OVERHEAD_TOKENS: usize = 18_000;
+
+// ── Proactive mode constants ────────────────────────────────────────────────
+
+/// Rolling window size for token history (proactive/semantic modes)
+const TOKEN_HISTORY_WINDOW: usize = 20;
+
+// ── Semantic mode constants ─────────────────────────────────────────────────
+
+/// Maximum characters to embed per message (first N chars capture semantic content)
+const EMBED_MAX_CHARS_PER_MSG: usize = 512;
+
+/// Rolling window of per-turn embeddings used for topic-shift detection
+const EMBEDDING_HISTORY_WINDOW: usize = 10;
 
 const SUMMARY_PROMPT: &str = r#"Summarize our conversation so you can continue this work later.
 
@@ -121,10 +142,37 @@ pub struct CompactionManager {
 
     /// Last compaction event (if any)
     last_compaction: Option<CompactionEvent>,
+
+    // ── Mode & strategy ────────────────────────────────────────────────────
+
+    /// Active compaction mode (set from config at construction)
+    mode: crate::config::CompactionMode,
+
+    /// Config snapshot for mode-specific parameters
+    compaction_config: crate::config::CompactionConfig,
+
+    // ── Proactive mode state ───────────────────────────────────────────────
+
+    /// Rolling window of observed token counts, one entry per turn snapshot.
+    /// Used to compute EWMA growth rate for proactive compaction.
+    token_history: VecDeque<u64>,
+
+    /// Total turns elapsed since the last successful compaction.
+    /// Used as a cooldown anti-signal.
+    turns_since_last_compact: usize,
+
+    // ── Semantic mode state ────────────────────────────────────────────────
+
+    /// Per-turn embedding snapshots for topic-shift detection.
+    /// Each entry is the L2-normalized embedding of the last assistant message
+    /// of that turn (truncated to EMBED_MAX_CHARS_PER_MSG for speed).
+    embedding_history: VecDeque<Vec<f32>>,
 }
 
 impl CompactionManager {
     pub fn new() -> Self {
+        let cfg = crate::config::config().compaction.clone();
+        let mode = cfg.mode.clone();
         Self {
             compacted_count: 0,
             active_summary: None,
@@ -134,6 +182,11 @@ impl CompactionManager {
             token_budget: DEFAULT_TOKEN_BUDGET,
             observed_input_tokens: None,
             last_compaction: None,
+            mode,
+            compaction_config: cfg,
+            token_history: VecDeque::with_capacity(TOKEN_HISTORY_WINDOW + 1),
+            turns_since_last_compact: 0,
+            embedding_history: VecDeque::with_capacity(EMBEDDING_HISTORY_WINDOW + 1),
         }
     }
 
@@ -168,6 +221,291 @@ impl CompactionManager {
     /// updated yet can still call `add_message(msg)`.
     pub fn add_message(&mut self, _message: Message) {
         self.notify_message_added();
+    }
+
+    // ── Token snapshot (proactive mode) ────────────────────────────────────
+
+    /// Record the observed token count after a completed turn.
+    ///
+    /// Called by the agent after `update_compaction_usage_from_stream`.
+    /// Pushes the value into the rolling history window used by the proactive
+    /// and semantic modes. Also increments the cooldown counter.
+    pub fn push_token_snapshot(&mut self, tokens: u64) {
+        self.token_history.push_back(tokens);
+        if self.token_history.len() > TOKEN_HISTORY_WINDOW {
+            self.token_history.pop_front();
+        }
+        self.turns_since_last_compact += 1;
+    }
+
+    /// Record an embedding snapshot for the current turn (semantic mode).
+    ///
+    /// `text` should be a short representation of the turn's assistant output
+    /// (first EMBED_MAX_CHARS_PER_MSG chars). Silently skipped if the
+    /// embedding model is unavailable.
+    pub fn push_embedding_snapshot(&mut self, text: &str) {
+        let snippet: String = text.chars().take(EMBED_MAX_CHARS_PER_MSG).collect();
+        match crate::embedding::embed(&snippet) {
+            Ok(emb) => {
+                self.embedding_history.push_back(emb);
+                if self.embedding_history.len() > EMBEDDING_HISTORY_WINDOW {
+                    self.embedding_history.pop_front();
+                }
+            }
+            Err(_) => {}
+        }
+    }
+
+    // ── Anti-signal guard (shared by proactive + semantic) ──────────────────
+
+    /// Returns `true` when any anti-signal fires and we should NOT compact
+    /// proactively right now.
+    ///
+    /// Anti-signals are universal guards applied before the mode-specific
+    /// trigger logic. They prevent wasted work and respect user intent.
+    fn anti_signals_block(&self, all_messages: &[Message]) -> bool {
+        let cfg = &self.compaction_config;
+
+        // 1. Already compacting — never double-trigger.
+        if self.pending_task.is_some() {
+            return true;
+        }
+
+        // 2. Context below the proactive floor — too early regardless of trend.
+        let usage = self.context_usage_with(all_messages);
+        if usage < cfg.proactive_floor {
+            return true;
+        }
+
+        // 3. Not enough token history to project from.
+        if self.token_history.len() < cfg.min_samples {
+            return true;
+        }
+
+        // 4. Growth has stalled: last stall_window snapshots show no increase.
+        //    If tokens haven't grown, there's no urgency.
+        if self.token_history.len() >= cfg.stall_window {
+            let recent: Vec<u64> = self
+                .token_history
+                .iter()
+                .rev()
+                .take(cfg.stall_window)
+                .cloned()
+                .collect();
+            let oldest = recent[recent.len() - 1];
+            let newest = recent[0];
+            if newest <= oldest {
+                return true;
+            }
+        }
+
+        // 5. Cooldown: too soon after the last compaction.
+        if self.turns_since_last_compact < cfg.min_turns_between_compactions {
+            return true;
+        }
+
+        false
+    }
+
+    // ── Proactive mode trigger ──────────────────────────────────────────────
+
+    /// Returns `true` if the proactive strategy thinks we should compact now.
+    ///
+    /// Uses an EWMA over the token history to project forward `lookahead_turns`
+    /// turns. If the projected token count would exceed the 80% threshold,
+    /// it's time to compact before we get there.
+    fn should_compact_proactively(&self, all_messages: &[Message]) -> bool {
+        if self.anti_signals_block(all_messages) {
+            return false;
+        }
+
+        let cfg = &self.compaction_config;
+        let budget = self.token_budget as f64;
+        let threshold = COMPACTION_THRESHOLD as f64 * budget;
+
+        // Compute EWMA of per-turn token deltas.
+        // We need at least 2 snapshots to get a delta.
+        let snapshots: Vec<u64> = self.token_history.iter().cloned().collect();
+        if snapshots.len() < 2 {
+            return false;
+        }
+
+        let alpha = cfg.ewma_alpha as f64;
+        let mut ewma_delta: f64 = (snapshots[1] as f64) - (snapshots[0] as f64);
+        ewma_delta = ewma_delta.max(0.0);
+
+        for i in 2..snapshots.len() {
+            let delta = ((snapshots[i] as f64) - (snapshots[i - 1] as f64)).max(0.0);
+            ewma_delta = alpha * delta + (1.0 - alpha) * ewma_delta;
+        }
+
+        let current = *snapshots.last().unwrap() as f64;
+        let projected = current + ewma_delta * cfg.lookahead_turns as f64;
+
+        crate::logging::info(&format!(
+            "[compaction/proactive] current={:.0} ewma_delta={:.1}/turn projected@{}turns={:.0} threshold={:.0}",
+            current, ewma_delta, cfg.lookahead_turns, projected, threshold
+        ));
+
+        projected >= threshold
+    }
+
+    // ── Semantic mode trigger ───────────────────────────────────────────────
+
+    /// Returns `true` if the semantic strategy detects a topic shift or
+    /// predicts we should compact now.
+    ///
+    /// Topic-shift detection: compares the mean embedding of the oldest half
+    /// of the history window against the newest half. A low cosine similarity
+    /// between the two clusters indicates a topic boundary was crossed —
+    /// the previous topic is complete and safe to summarize.
+    ///
+    /// Falls back to proactive logic if embeddings are unavailable.
+    fn should_compact_semantic(&self, all_messages: &[Message]) -> bool {
+        if self.anti_signals_block(all_messages) {
+            return false;
+        }
+
+        // Need enough embedding history to split into two halves.
+        let history_len = self.embedding_history.len();
+        if history_len < 4 {
+            // Fall back to proactive trigger.
+            return self.should_compact_proactively(all_messages);
+        }
+
+        let cfg = &self.compaction_config;
+        let half = history_len / 2;
+
+        let old_embeddings: Vec<&Vec<f32>> =
+            self.embedding_history.iter().take(half).collect();
+        let new_embeddings: Vec<&Vec<f32>> =
+            self.embedding_history.iter().skip(half).collect();
+
+        let dim = old_embeddings[0].len();
+
+        // Compute mean embedding for each half.
+        let mean_old = mean_embedding(&old_embeddings, dim);
+        let mean_new = mean_embedding(&new_embeddings, dim);
+
+        let similarity =
+            crate::embedding::cosine_similarity(&mean_old, &mean_new);
+
+        crate::logging::info(&format!(
+            "[compaction/semantic] topic similarity (old vs new half) = {:.3} (threshold={:.2})",
+            similarity, cfg.topic_shift_threshold
+        ));
+
+        if similarity < cfg.topic_shift_threshold {
+            crate::logging::info(
+                "[compaction/semantic] Topic shift detected — triggering proactive compaction",
+            );
+            return true;
+        }
+
+        // No topic shift — still fall back to proactive growth check.
+        self.should_compact_proactively(all_messages)
+    }
+
+    /// Build a relevance-scored keep set for semantic compaction.
+    ///
+    /// Embeds the last `goal_window_turns` messages to represent the current
+    /// goal, then scores all active messages by cosine similarity. Returns the
+    /// cutoff index: messages before the cutoff will be summarized, messages at
+    /// or after are kept verbatim.
+    ///
+    /// Messages above `relevance_keep_threshold` anywhere in the history are
+    /// pulled out of the summarize set. Falls back to the standard recency
+    /// cutoff if embeddings fail.
+    fn semantic_cutoff(&self, active: &[Message]) -> usize {
+        let cfg = &self.compaction_config;
+        let standard_cutoff = active.len().saturating_sub(RECENT_TURNS_TO_KEEP);
+        if standard_cutoff == 0 {
+            return 0;
+        }
+
+        // Build goal text from recent turns.
+        let goal_turns = cfg.goal_window_turns.min(active.len());
+        let goal_text: String = active[active.len() - goal_turns..]
+            .iter()
+            .flat_map(|m| m.content.iter())
+            .filter_map(|b| match b {
+                ContentBlock::Text { text, .. } => {
+                    Some(text.chars().take(200).collect::<String>())
+                }
+                ContentBlock::ToolResult { content, .. } => {
+                    Some(content.chars().take(100).collect::<String>())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        if goal_text.is_empty() {
+            return standard_cutoff;
+        }
+
+        let goal_emb = match crate::embedding::embed(&goal_text) {
+            Ok(e) => e,
+            Err(_) => return standard_cutoff,
+        };
+
+        // Score each candidate message (those before standard_cutoff).
+        let mut high_relevance: std::collections::HashSet<usize> =
+            std::collections::HashSet::new();
+
+        for (idx, msg) in active[..standard_cutoff].iter().enumerate() {
+            let text: String = msg
+                .content
+                .iter()
+                .filter_map(|b| match b {
+                    ContentBlock::Text { text, .. } => {
+                        Some(text.chars().take(EMBED_MAX_CHARS_PER_MSG).collect::<String>())
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+
+            if text.is_empty() {
+                continue;
+            }
+
+            if let Ok(emb) = crate::embedding::embed(&text) {
+                let sim = crate::embedding::cosine_similarity(&goal_emb, &emb);
+                if sim >= cfg.relevance_keep_threshold {
+                    high_relevance.insert(idx);
+                }
+            }
+        }
+
+        if high_relevance.is_empty() {
+            return standard_cutoff;
+        }
+
+        // Find the latest high-relevance message before standard_cutoff.
+        // We can't have gaps in the summarized range (tool call integrity),
+        // so we move the cutoff up to just before the earliest high-relevance
+        // message in the tail of the compaction range.
+        let mut adjusted_cutoff = standard_cutoff;
+        for &idx in &high_relevance {
+            if idx < adjusted_cutoff {
+                adjusted_cutoff = idx;
+            }
+        }
+
+        // Ensure we actually compact something meaningful.
+        if adjusted_cutoff < 2 {
+            return standard_cutoff;
+        }
+
+        crate::logging::info(&format!(
+            "[compaction/semantic] relevance scoring: {} high-relevance msgs kept, cutoff {} -> {}",
+            high_relevance.len(),
+            standard_cutoff,
+            adjusted_cutoff
+        ));
+
+        adjusted_cutoff
     }
 
     /// Get the active (uncompacted) messages from a full message list.
@@ -257,10 +595,23 @@ impl CompactionManager {
 
     /// Check if we should start compaction
     pub fn should_compact_with(&self, all_messages: &[Message]) -> bool {
+        use crate::config::CompactionMode;
         let active = self.active_messages(all_messages);
-        self.pending_task.is_none()
-            && self.context_usage_with(all_messages) >= COMPACTION_THRESHOLD
-            && active.len() > RECENT_TURNS_TO_KEEP
+        match self.mode {
+            CompactionMode::Reactive => {
+                self.pending_task.is_none()
+                    && self.context_usage_with(all_messages) >= COMPACTION_THRESHOLD
+                    && active.len() > RECENT_TURNS_TO_KEEP
+            }
+            CompactionMode::Proactive => {
+                active.len() > RECENT_TURNS_TO_KEEP
+                    && self.should_compact_proactively(all_messages)
+            }
+            CompactionMode::Semantic => {
+                active.len() > RECENT_TURNS_TO_KEEP
+                    && self.should_compact_semantic(all_messages)
+            }
+        }
     }
 
     /// Start background compaction if needed
@@ -275,8 +626,12 @@ impl CompactionManager {
 
         let active = self.active_messages(all_messages);
 
-        // Calculate cutoff within active messages — keep last N turns verbatim
-        let mut cutoff = active.len().saturating_sub(RECENT_TURNS_TO_KEEP);
+        // Calculate cutoff within active messages.
+        // Semantic mode uses relevance scoring; other modes use recency.
+        let mut cutoff = match self.mode {
+            crate::config::CompactionMode::Semantic => self.semantic_cutoff(active),
+            _ => active.len().saturating_sub(RECENT_TURNS_TO_KEEP),
+        };
         if cutoff == 0 {
             return;
         }
@@ -291,6 +646,11 @@ impl CompactionManager {
         let messages_to_summarize: Vec<Message> = active[..cutoff].to_vec();
         let msg_count = messages_to_summarize.len();
         let existing_summary = self.active_summary.clone();
+        let mode_label = match self.mode {
+            crate::config::CompactionMode::Reactive => "reactive",
+            crate::config::CompactionMode::Proactive => "proactive",
+            crate::config::CompactionMode::Semantic => "semantic",
+        };
 
         self.pending_cutoff = cutoff;
 
@@ -299,7 +659,8 @@ impl CompactionManager {
             let start = std::time::Instant::now();
             let result = generate_summary(provider, messages_to_summarize, existing_summary).await;
             crate::logging::info(&format!(
-                "Compaction finished in {:.2}s ({} messages summarized)",
+                "Compaction ({}) finished in {:.2}s ({} messages summarized)",
+                mode_label,
                 start.elapsed().as_secs_f64(),
                 msg_count,
             ));
@@ -526,6 +887,10 @@ impl CompactionManager {
                 });
                 self.observed_input_tokens = None;
 
+                // Reset cooldown counter so proactive/semantic modes don't
+                // fire again immediately after a successful compaction.
+                self.turns_since_last_compact = 0;
+
                 self.pending_cutoff = 0;
             }
             Ok(Err(e)) => {
@@ -606,6 +971,11 @@ impl CompactionManager {
     /// Check if compaction is in progress
     pub fn is_compacting(&self) -> bool {
         self.pending_task.is_some()
+    }
+
+    /// Get the active compaction mode
+    pub fn mode(&self) -> crate::config::CompactionMode {
+        self.mode.clone()
     }
 
     /// Get the number of compacted (summarized) messages
@@ -863,6 +1233,31 @@ pub struct CompactionStats {
     pub effective_tokens: usize,
     pub observed_input_tokens: Option<u64>,
     pub context_usage: f32,
+}
+
+/// Compute the mean (centroid) embedding of a set of embedding vectors.
+/// The result is L2-normalized so it can be compared with cosine similarity.
+fn mean_embedding(embeddings: &[&Vec<f32>], dim: usize) -> Vec<f32> {
+    let mut mean = vec![0f32; dim];
+    for emb in embeddings {
+        for (i, v) in emb.iter().enumerate() {
+            if i < dim {
+                mean[i] += v;
+            }
+        }
+    }
+    let n = embeddings.len().max(1) as f32;
+    for v in &mut mean {
+        *v /= n;
+    }
+    // L2-normalize so cosine_similarity (dot product) is meaningful.
+    let norm: f32 = mean.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if norm > 0.0 {
+        for v in &mut mean {
+            *v /= norm;
+        }
+    }
+    mean
 }
 
 /// Generate summary using the provider
