@@ -1,10 +1,10 @@
 #![allow(dead_code)]
 
 mod debug;
+mod headless;
 
-use self::debug::{
-    handle_debug_client, ClientConnectionInfo, ClientDebugState, DebugJob,
-};
+use self::debug::{handle_debug_client, ClientConnectionInfo, ClientDebugState, DebugJob};
+use self::headless::create_headless_session;
 use crate::agent::{Agent, StreamError};
 use crate::ambient_runner::AmbientRunnerHandle;
 use crate::build;
@@ -4298,15 +4298,25 @@ async fn handle_client(
                             // Already the coordinator
                             true
                         } else if role == "coordinator" && target_session == req_session_id {
-                            // Self-promotion: allowed if current coordinator has no active session
+                            // Self-promotion: allowed if current coordinator's event channel
+                            // is closed (zombie from a previous server instance) or has no
+                            // active agent session.
                             drop(members);
-                            let coordinator_active = if let Some(ref coord_id) = current_coordinator
-                            {
-                                sessions.read().await.contains_key(coord_id)
-                            } else {
-                                false
-                            };
-                            !coordinator_active
+                            let coordinator_is_zombie =
+                                if let Some(ref coord_id) = current_coordinator {
+                                    let channel_closed = {
+                                        let m = swarm_members.read().await;
+                                        m.get(coord_id)
+                                            .map(|mb| mb.event_tx.is_closed())
+                                            .unwrap_or(true)
+                                    };
+                                    let not_in_sessions =
+                                        !sessions.read().await.contains_key(coord_id);
+                                    channel_closed || not_in_sessions
+                                } else {
+                                    true
+                                };
+                            coordinator_is_zombie
                         } else {
                             false
                         }
@@ -5664,192 +5674,6 @@ fn summarize_plan_items(items: &[PlanItem], max_items: usize) -> String {
         summary.push_str(&format!(" (+{} more)", items.len() - max_items.max(1)));
     }
     summary
-}
-
-/// Create a headless session (no TUI client needed)
-async fn create_headless_session(
-    sessions: &Arc<RwLock<HashMap<String, Arc<Mutex<Agent>>>>>,
-    global_session_id: &Arc<RwLock<String>>,
-    provider_template: &Arc<dyn Provider>,
-    command: &str,
-    swarm_members: &Arc<RwLock<HashMap<String, SwarmMember>>>,
-    swarms_by_id: &Arc<RwLock<HashMap<String, HashSet<String>>>>,
-    swarm_coordinators: &Arc<RwLock<HashMap<String, String>>>,
-    _swarm_plans: &Arc<RwLock<HashMap<String, VersionedPlan>>>,
-    model_override: Option<String>,
-    mcp_pool: Option<Arc<crate::mcp::SharedMcpPool>>,
-) -> Result<String> {
-    let memory_enabled = crate::config::config().features.memory;
-    let swarm_enabled = crate::config::config().features.swarm;
-
-    // Parse optional working directory from command: create_session:/path/to/dir
-    let working_dir = if let Some(path_str) = command.strip_prefix("create_session:") {
-        let path_str = path_str.trim();
-        if !path_str.is_empty() {
-            Some(std::path::PathBuf::from(path_str))
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
-    // Fork the provider for this session
-    let provider = provider_template.fork();
-    let registry = Registry::new(provider.clone()).await;
-
-    // Enable test mode for memory tools (isolated storage for debug sessions)
-    registry.enable_memory_test_mode().await;
-
-    // Check if this should be a selfdev session BEFORE creating agent
-    // (registry is moved into agent, so we need to register tools first)
-    let should_selfdev = is_selfdev_env()
-        || working_dir
-            .as_ref()
-            .map(|d| crate::build::is_jcode_repo(d) || is_jcode_repo_or_parent(d))
-            .unwrap_or(false);
-
-    if should_selfdev {
-        registry.register_selfdev_tools().await;
-    }
-
-    // Register MCP tools for headless sessions (no event channel).
-    // Use the shared pool if available to avoid spawning duplicate MCP server processes.
-    registry
-        .register_mcp_tools(None, mcp_pool, Some("headless".to_string()))
-        .await;
-
-    // Create a new agent
-    let mut new_agent = Agent::new(Arc::clone(&provider), registry);
-    new_agent.set_memory_enabled(memory_enabled);
-    let client_session_id = new_agent.session_id().to_string();
-
-    if let Some(model) = model_override {
-        if let Err(e) = new_agent.set_model(&model) {
-            crate::logging::warn(&format!(
-                "Failed to set headless session model override '{}': {}",
-                model, e
-            ));
-        }
-    }
-
-    // Apply working dir for headless sessions (if provided)
-    if let Some(ref dir) = working_dir {
-        if let Some(path) = dir.to_str() {
-            new_agent.set_working_dir(path);
-        }
-    }
-
-    // Mark as debug/test session (created via debug socket)
-    new_agent.set_debug(true);
-
-    if let Some(ref dir) = working_dir {
-        if let Some(dir_str) = dir.to_str() {
-            new_agent.set_working_dir(dir_str);
-        } else {
-            new_agent.set_working_dir(&dir.display().to_string());
-        }
-    }
-
-    // Enable self-dev mode if determined above
-    if should_selfdev {
-        new_agent.set_canary("self-dev");
-    }
-
-    // Set as current session if none exists
-    {
-        let mut current = global_session_id.write().await;
-        if current.is_empty() {
-            *current = client_session_id.clone();
-        }
-    }
-
-    // Add to sessions map
-    let agent = Arc::new(Mutex::new(new_agent));
-    {
-        let mut sessions_guard = sessions.write().await;
-        sessions_guard.insert(client_session_id.clone(), agent);
-    }
-
-    // Calculate swarm_id and register as swarm member
-    let swarm_id = if swarm_enabled {
-        swarm_id_for_dir(working_dir.clone())
-    } else {
-        None
-    };
-    let friendly_name = crate::id::extract_session_name(&client_session_id)
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| client_session_id[..8.min(client_session_id.len())].to_string());
-
-    // Create an event channel for this headless session.
-    // Spawn a drain task so sends succeed (headless sessions have no TUI consumer).
-    let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<ServerEvent>();
-    tokio::spawn(async move {
-        while event_rx.recv().await.is_some() {
-            // Drain events to keep channel alive
-        }
-    });
-
-    // Register as swarm member
-    {
-        let now = Instant::now();
-        let mut members = swarm_members.write().await;
-        members.insert(
-            client_session_id.clone(),
-            SwarmMember {
-                session_id: client_session_id.clone(),
-                event_tx: event_tx.clone(),
-                working_dir: working_dir.clone(),
-                swarm_id: swarm_id.clone(),
-                swarm_enabled,
-                status: "ready".to_string(),
-                detail: None,
-                friendly_name: Some(friendly_name.clone()),
-                role: "agent".to_string(),
-                joined_at: now,
-                last_status_change: now,
-            },
-        );
-    }
-
-    // Add to swarm by swarm_id (separate scope to avoid holding swarm_members lock)
-    if let Some(ref id) = swarm_id {
-        let mut swarms = swarms_by_id.write().await;
-        swarms
-            .entry(id.clone())
-            .or_insert_with(HashSet::new)
-            .insert(client_session_id.clone());
-    }
-
-    // Set up coordinator if needed
-    let mut is_new_coordinator = false;
-    if let Some(ref id) = swarm_id {
-        let mut coordinators = swarm_coordinators.write().await;
-        if coordinators.get(id).is_none() {
-            coordinators.insert(id.clone(), client_session_id.clone());
-            is_new_coordinator = true;
-        }
-    }
-    // Update role separately to avoid nested lock
-    if is_new_coordinator {
-        let mut members = swarm_members.write().await;
-        if let Some(m) = members.get_mut(&client_session_id) {
-            m.role = "coordinator".to_string();
-        }
-    }
-
-    // Broadcast status to the swarm; plan attachment is explicit via comm_resync_plan.
-    if let Some(ref id) = swarm_id {
-        broadcast_swarm_status(id, swarm_members, swarms_by_id).await;
-    }
-
-    Ok(serde_json::json!({
-        "session_id": client_session_id,
-        "working_dir": working_dir,
-        "swarm_id": swarm_id,
-        "friendly_name": friendly_name,
-    })
-    .to_string())
 }
 
 async fn run_swarm_task(
