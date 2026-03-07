@@ -440,6 +440,13 @@ fn load_disk_cache() -> Option<Vec<ModelInfo>> {
     }
 }
 
+pub fn load_model_pricing_disk_cache_public(model_id: &str) -> Option<ModelPricing> {
+    load_disk_cache()?
+        .into_iter()
+        .find(|model| model.id == model_id)
+        .map(|model| model.pricing)
+}
+
 /// Look up the `created` timestamp for a model from the disk cache.
 /// Tries exact match first, then common provider-prefixed variants
 /// (e.g. "claude-opus-4-6" → "anthropic/claude-opus-4.6").

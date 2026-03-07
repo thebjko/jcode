@@ -249,6 +249,7 @@ pub struct RouteOption {
     pub api_method: String,
     pub available: bool,
     pub detail: String,
+    pub estimated_reference_cost_micros: Option<u64>,
 }
 
 pub(crate) const REDRAW_IDLE: Duration = Duration::from_millis(250);

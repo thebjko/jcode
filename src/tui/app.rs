@@ -10969,11 +10969,12 @@ impl App {
                     api_method: r.api_method.clone(),
                     available: r.available,
                     detail: r.detail.clone(),
+                    estimated_reference_cost_micros: r.estimated_reference_cost_micros(),
                 });
         }
 
         // Sort routes within each model: available first, then oauth > api-key > openrouter
-        fn route_sort_key(r: &super::RouteOption) -> (u8, u8, String) {
+        fn route_sort_key(r: &super::RouteOption) -> (u8, u8, u64, String) {
             let avail = if r.available { 0 } else { 1 };
             let method = match r.api_method.as_str() {
                 "claude-oauth" | "openai-oauth" => 0,
@@ -10982,7 +10983,8 @@ impl App {
                 "openrouter" => 3,
                 _ => 4,
             };
-            (avail, method, r.provider.clone())
+            let cheapness = r.estimated_reference_cost_micros.unwrap_or(u64::MAX);
+            (avail, method, cheapness, r.provider.clone())
         }
 
         const RECOMMENDED_MODELS: &[&str] = &[
@@ -16586,6 +16588,32 @@ mod tests {
         assert_eq!(app.diagram_index, 2);
 
         crate::tui::mermaid::clear_active_diagrams();
+    }
+
+    #[test]
+    fn test_mouse_scroll_over_diff_pane_scrolls_side_panel() {
+        let mut app = create_test_app();
+        app.diff_mode = crate::config::DiffDisplayMode::File;
+        app.diff_pane_scroll = 5;
+        app.diff_pane_focus = false;
+        app.diff_pane_auto_scroll = true;
+
+        crate::tui::ui::record_layout_snapshot(
+            Rect::new(0, 0, 40, 20),
+            None,
+            Some(Rect::new(40, 0, 20, 20)),
+        );
+
+        app.handle_mouse_event(MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 45,
+            row: 5,
+            modifiers: KeyModifiers::empty(),
+        });
+
+        assert_eq!(app.diff_pane_scroll, 8);
+        assert!(app.diff_pane_focus);
+        assert!(!app.diff_pane_auto_scroll);
     }
 
     #[test]
