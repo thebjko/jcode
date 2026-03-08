@@ -6,6 +6,9 @@ use super::client_comm::{
     handle_comm_unsubscribe_channel,
 };
 use super::client_state::{handle_get_history, handle_get_state, send_history};
+use super::comm_plan::{
+    handle_comm_approve_plan, handle_comm_propose_plan, handle_comm_reject_plan,
+};
 use super::provider_control::{
     handle_cycle_model, handle_notify_auth_changed, handle_set_model, handle_set_premium_mode,
     handle_switch_anthropic_account,
@@ -14,15 +17,13 @@ use super::reload::{do_server_reload_with_progress, normalize_model_arg, provide
 use super::{
     broadcast_swarm_plan, broadcast_swarm_status, create_headless_session, is_jcode_repo_or_parent,
     is_selfdev_env, record_swarm_event, record_swarm_event_for_session, remove_plan_participant,
-    remove_session_from_swarm, rename_plan_participant, socket_path, summarize_plan_items,
-    swarm_id_for_dir, truncate_detail, update_member_status, ClientConnectionInfo,
-    ClientDebugState, FileAccess, SharedContext, SwarmEvent, SwarmEventType, SwarmMember,
-    VersionedPlan,
+    remove_session_from_swarm, rename_plan_participant, socket_path, swarm_id_for_dir,
+    truncate_detail, update_member_status, ClientConnectionInfo, ClientDebugState, FileAccess,
+    SharedContext, SwarmEvent, SwarmEventType, SwarmMember, VersionedPlan,
 };
 use crate::agent::{Agent, StreamError};
 use crate::bus::{Bus, BusEvent};
 use crate::id;
-use crate::plan::PlanItem;
 use crate::protocol::{decode_request, encode_event, NotificationType, Request, ServerEvent};
 use crate::provider::Provider;
 use crate::tool::Registry;
@@ -1424,211 +1425,22 @@ pub(super) async fn handle_client(
                 session_id: req_session_id,
                 items,
             } => {
-                let swarm_id = {
-                    let members = swarm_members.read().await;
-                    members
-                        .get(&req_session_id)
-                        .and_then(|m| m.swarm_id.clone())
-                };
-
-                let swarm_id = match swarm_id.as_ref() {
-                    Some(sid) => sid.clone(),
-                    None => {
-                        let _ = client_event_tx.send(ServerEvent::Error {
-                            id,
-                            message: "Not in a swarm.".to_string(),
-                            retry_after_secs: None,
-                        });
-                        continue;
-                    }
-                };
-
-                let (from_name, coordinator_id) = {
-                    let members = swarm_members.read().await;
-                    let from_name = members
-                        .get(&req_session_id)
-                        .and_then(|m| m.friendly_name.clone());
-                    let coordinators = swarm_coordinators.read().await;
-                    let coordinator_id = coordinators.get(&swarm_id).cloned();
-                    (from_name, coordinator_id)
-                };
-                let from_label = from_name
-                    .clone()
-                    .unwrap_or_else(|| req_session_id.chars().take(8).collect());
-
-                let Some(coordinator_id) = coordinator_id else {
-                    let _ = client_event_tx.send(ServerEvent::Error {
-                        id,
-                        message: "No coordinator for this swarm.".to_string(),
-                        retry_after_secs: None,
-                    });
-                    continue;
-                };
-
-                if coordinator_id == req_session_id {
-                    let (version, participant_ids) = {
-                        let mut plans = swarm_plans.write().await;
-                        let vp = plans
-                            .entry(swarm_id.clone())
-                            .or_insert_with(VersionedPlan::new);
-                        vp.participants.insert(req_session_id.clone());
-                        for item in &items {
-                            if let Some(owner) = &item.assigned_to {
-                                vp.participants.insert(owner.clone());
-                            }
-                        }
-                        vp.items = items.clone();
-                        vp.version += 1;
-                        (vp.version, vp.participants.clone())
-                    };
-
-                    let members = swarm_members.read().await;
-                    let agent_sessions = sessions.read().await;
-                    let notification_msg = format!(
-                        "Plan updated by {} ({} items, v{})",
-                        from_label,
-                        items.len(),
-                        version
-                    );
-                    for sid in participant_ids {
-                        if sid == req_session_id {
-                            continue;
-                        }
-                        if let Some(member) = members.get(&sid) {
-                            let _ = member.event_tx.send(ServerEvent::Notification {
-                                from_session: req_session_id.clone(),
-                                from_name: from_name.clone(),
-                                notification_type: NotificationType::Message {
-                                    scope: Some("plan".to_string()),
-                                    channel: None,
-                                },
-                                message: notification_msg.clone(),
-                            });
-                        }
-                        if let Some(agent) = agent_sessions.get(&sid) {
-                            if let Ok(agent) = agent.try_lock() {
-                                agent.queue_soft_interrupt(notification_msg.clone(), false);
-                            }
-                        }
-                    }
-
-                    broadcast_swarm_plan(
-                        &swarm_id,
-                        Some("coordinator_direct_update".to_string()),
-                        &swarm_plans,
-                        &swarm_members,
-                        &swarms_by_id,
-                    )
-                    .await;
-                    record_swarm_event(
-                        &event_history,
-                        &event_counter,
-                        &swarm_event_tx,
-                        req_session_id.clone(),
-                        from_name.clone(),
-                        Some(swarm_id.clone()),
-                        SwarmEventType::PlanUpdate {
-                            swarm_id: swarm_id.clone(),
-                            item_count: items.len(),
-                        },
-                    )
-                    .await;
-
-                    let _ = client_event_tx.send(ServerEvent::Done { id });
-                    continue;
-                }
-
-                let proposal_key = format!("plan_proposal:{}", req_session_id);
-                let proposal_value =
-                    serde_json::to_string(&items).unwrap_or_else(|_| "[]".to_string());
-                {
-                    let mut ctx = shared_context.write().await;
-                    let swarm_ctx = ctx.entry(swarm_id.clone()).or_insert_with(HashMap::new);
-                    let now = Instant::now();
-                    swarm_ctx.insert(
-                        proposal_key.clone(),
-                        SharedContext {
-                            key: proposal_key.clone(),
-                            value: proposal_value,
-                            from_session: req_session_id.clone(),
-                            from_name: from_name.clone(),
-                            created_at: now,
-                            updated_at: now,
-                        },
-                    );
-                }
-                record_swarm_event(
+                handle_comm_propose_plan(
+                    id,
+                    req_session_id,
+                    items,
+                    &client_event_tx,
+                    &swarm_members,
+                    &swarms_by_id,
+                    &shared_context,
+                    &swarm_plans,
+                    &swarm_coordinators,
+                    &sessions,
                     &event_history,
                     &event_counter,
                     &swarm_event_tx,
-                    req_session_id.clone(),
-                    from_name.clone(),
-                    Some(swarm_id.clone()),
-                    SwarmEventType::PlanProposal {
-                        swarm_id: swarm_id.clone(),
-                        proposer_session: req_session_id.clone(),
-                        item_count: items.len(),
-                    },
                 )
                 .await;
-
-                let summary = summarize_plan_items(&items, 3);
-                let notification_msg = format!(
-                    "Plan proposal from {} ({} items). Summary: {}. Review with communicate read key '{}'.",
-                    from_label,
-                    items.len(),
-                    summary,
-                    proposal_key
-                );
-
-                let members = swarm_members.read().await;
-                let agent_sessions = sessions.read().await;
-                if let Some(member) = members.get(&coordinator_id) {
-                    let _ = member.event_tx.send(ServerEvent::Notification {
-                        from_session: req_session_id.clone(),
-                        from_name: from_name.clone(),
-                        notification_type: NotificationType::Message {
-                            scope: Some("plan_proposal".to_string()),
-                            channel: None,
-                        },
-                        message: notification_msg.clone(),
-                    });
-                    let _ = member.event_tx.send(ServerEvent::SwarmPlanProposal {
-                        swarm_id: swarm_id.clone(),
-                        proposer_session: req_session_id.clone(),
-                        proposer_name: from_name.clone(),
-                        items: items.clone(),
-                        summary: summary.clone(),
-                        proposal_key: proposal_key.clone(),
-                    });
-                }
-                if let Some(agent) = agent_sessions.get(&coordinator_id) {
-                    if let Ok(agent) = agent.try_lock() {
-                        agent.queue_soft_interrupt(notification_msg.clone(), false);
-                    }
-                }
-
-                if let Some(member) = members.get(&req_session_id) {
-                    let _ = member.event_tx.send(ServerEvent::Notification {
-                        from_session: req_session_id.clone(),
-                        from_name: from_name.clone(),
-                        notification_type: NotificationType::Message {
-                            scope: Some("plan_proposal".to_string()),
-                            channel: None,
-                        },
-                        message: "Plan proposal sent to coordinator (not yet applied).".to_string(),
-                    });
-                }
-                if let Some(agent) = agent_sessions.get(&req_session_id) {
-                    if let Ok(agent) = agent.try_lock() {
-                        agent.queue_soft_interrupt(
-                            "Plan proposal sent to coordinator (not yet applied).".to_string(),
-                            false,
-                        );
-                    }
-                }
-
-                let _ = client_event_tx.send(ServerEvent::Done { id });
             }
 
             Request::CommApprovePlan {
@@ -1636,154 +1448,22 @@ pub(super) async fn handle_client(
                 session_id: req_session_id,
                 proposer_session,
             } => {
-                // Verify the requester is the coordinator
-                let (swarm_id, is_coordinator) = {
-                    let members = swarm_members.read().await;
-                    let swarm_id = members
-                        .get(&req_session_id)
-                        .and_then(|m| m.swarm_id.clone());
-                    let is_coordinator = if let Some(ref sid) = swarm_id {
-                        let coordinators = swarm_coordinators.read().await;
-                        coordinators
-                            .get(sid)
-                            .map(|c| c == &req_session_id)
-                            .unwrap_or(false)
-                    } else {
-                        false
-                    };
-                    (swarm_id, is_coordinator)
-                };
-
-                if !is_coordinator {
-                    let _ = client_event_tx.send(ServerEvent::Error {
-                        id,
-                        message: "Only the coordinator can approve plan proposals.".to_string(),
-                        retry_after_secs: None,
-                    });
-                    continue;
-                }
-
-                let swarm_id = match swarm_id.as_ref() {
-                    Some(sid) => sid.clone(),
-                    None => {
-                        let _ = client_event_tx.send(ServerEvent::Error {
-                            id,
-                            message: "Not in a swarm.".to_string(),
-                            retry_after_secs: None,
-                        });
-                        continue;
-                    }
-                };
-
-                // Read proposal from shared context
-                let proposal_key = format!("plan_proposal:{}", proposer_session);
-                let proposal_value = {
-                    let ctx = shared_context.read().await;
-                    ctx.get(&swarm_id)
-                        .and_then(|sc| sc.get(&proposal_key))
-                        .map(|c| c.value.clone())
-                };
-
-                let proposal = match proposal_value {
-                    Some(v) => v,
-                    None => {
-                        let _ = client_event_tx.send(ServerEvent::Error {
-                            id,
-                            message: format!(
-                                "No pending plan proposal from session '{}'",
-                                proposer_session
-                            ),
-                            retry_after_secs: None,
-                        });
-                        continue;
-                    }
-                };
-
-                // Parse and apply to swarm_plans
-                if let Ok(items) = serde_json::from_str::<Vec<PlanItem>>(&proposal) {
-                    let participant_ids = {
-                        let mut plans = swarm_plans.write().await;
-                        let vp = plans
-                            .entry(swarm_id.clone())
-                            .or_insert_with(VersionedPlan::new);
-                        vp.items.extend(items.clone());
-                        vp.version += 1;
-                        vp.participants.insert(req_session_id.clone());
-                        vp.participants.insert(proposer_session.clone());
-                        for item in &items {
-                            if let Some(owner) = &item.assigned_to {
-                                vp.participants.insert(owner.clone());
-                            }
-                        }
-                        vp.participants.clone()
-                    };
-
-                    // Remove proposal from shared context
-                    {
-                        let mut ctx = shared_context.write().await;
-                        if let Some(swarm_ctx) = ctx.get_mut(&swarm_id) {
-                            swarm_ctx.remove(&proposal_key);
-                        }
-                    }
-
-                    broadcast_swarm_plan(
-                        &swarm_id,
-                        Some("proposal_approved".to_string()),
-                        &swarm_plans,
-                        &swarm_members,
-                        &swarms_by_id,
-                    )
-                    .await;
-                    record_swarm_event(
-                        &event_history,
-                        &event_counter,
-                        &swarm_event_tx,
-                        req_session_id.clone(),
-                        None,
-                        Some(swarm_id.clone()),
-                        SwarmEventType::PlanUpdate {
-                            swarm_id: swarm_id.clone(),
-                            item_count: items.len(),
-                        },
-                    )
-                    .await;
-
-                    let coordinator_name = {
-                        let members = swarm_members.read().await;
-                        members
-                            .get(&req_session_id)
-                            .and_then(|m| m.friendly_name.clone())
-                    };
-
-                    let members = swarm_members.read().await;
-                    let agent_sessions = sessions.read().await;
-                    for sid in participant_ids {
-                        if let Some(member) = members.get(&sid) {
-                            let msg = format!(
-                                "Plan approved by coordinator: {} items added from {}",
-                                items.len(),
-                                proposer_session
-                            );
-                            let _ = member.event_tx.send(ServerEvent::Notification {
-                                from_session: req_session_id.clone(),
-                                from_name: coordinator_name.clone(),
-                                notification_type: NotificationType::Message {
-                                    scope: Some("plan".to_string()),
-                                    channel: None,
-                                },
-                                message: msg.clone(),
-                            });
-
-                            if let Some(agent) = agent_sessions.get(&sid) {
-                                if let Ok(agent) = agent.try_lock() {
-                                    agent.queue_soft_interrupt(msg.clone(), false);
-                                }
-                            }
-                        }
-                    }
-                }
-
-                let _ = client_event_tx.send(ServerEvent::Done { id });
+                handle_comm_approve_plan(
+                    id,
+                    req_session_id,
+                    proposer_session,
+                    &client_event_tx,
+                    &swarm_members,
+                    &swarms_by_id,
+                    &shared_context,
+                    &swarm_plans,
+                    &swarm_coordinators,
+                    &sessions,
+                    &event_history,
+                    &event_counter,
+                    &swarm_event_tx,
+                )
+                .await;
             }
 
             Request::CommRejectPlan {
@@ -1792,124 +1472,21 @@ pub(super) async fn handle_client(
                 proposer_session,
                 reason,
             } => {
-                // Verify the requester is the coordinator
-                let (_swarm_id, is_coordinator) = {
-                    let members = swarm_members.read().await;
-                    let swarm_id = members
-                        .get(&req_session_id)
-                        .and_then(|m| m.swarm_id.clone());
-                    let is_coordinator = if let Some(ref sid) = swarm_id {
-                        let coordinators = swarm_coordinators.read().await;
-                        coordinators
-                            .get(sid)
-                            .map(|c| c == &req_session_id)
-                            .unwrap_or(false)
-                    } else {
-                        false
-                    };
-                    (swarm_id, is_coordinator)
-                };
-
-                if !is_coordinator {
-                    let _ = client_event_tx.send(ServerEvent::Error {
-                        id,
-                        message: "Only the coordinator can reject plan proposals.".to_string(),
-                        retry_after_secs: None,
-                    });
-                    continue;
-                }
-
-                let swarm_id = match swarm_id {
-                    Some(ref sid) => sid.clone(),
-                    None => {
-                        let _ = client_event_tx.send(ServerEvent::Error {
-                            id,
-                            message: "Not in a swarm.".to_string(),
-                            retry_after_secs: None,
-                        });
-                        continue;
-                    }
-                };
-
-                // Check if proposal exists
-                let proposal_key = format!("plan_proposal:{}", proposer_session);
-                let proposal_exists = {
-                    let ctx = shared_context.read().await;
-                    ctx.get(&swarm_id)
-                        .and_then(|sc| sc.get(&proposal_key))
-                        .is_some()
-                };
-
-                if !proposal_exists {
-                    let _ = client_event_tx.send(ServerEvent::Error {
-                        id,
-                        message: format!(
-                            "No pending plan proposal from session '{}'",
-                            proposer_session
-                        ),
-                        retry_after_secs: None,
-                    });
-                    continue;
-                }
-
-                // Remove proposal from shared context
-                {
-                    let mut ctx = shared_context.write().await;
-                    if let Some(swarm_ctx) = ctx.get_mut(&swarm_id) {
-                        swarm_ctx.remove(&proposal_key);
-                    }
-                }
-
-                // Notify the proposer
-                let coordinator_name = {
-                    let members = swarm_members.read().await;
-                    members
-                        .get(&req_session_id)
-                        .and_then(|m| m.friendly_name.clone())
-                };
-
-                let members = swarm_members.read().await;
-                let agent_sessions = sessions.read().await;
-                if let Some(member) = members.get(&proposer_session) {
-                    let reason_msg = reason
-                        .as_ref()
-                        .map(|r| format!(": {}", r))
-                        .unwrap_or_default();
-                    let msg = format!(
-                        "Your plan proposal was rejected by the coordinator{}",
-                        reason_msg
-                    );
-                    let _ = member.event_tx.send(ServerEvent::Notification {
-                        from_session: req_session_id.clone(),
-                        from_name: coordinator_name.clone(),
-                        notification_type: NotificationType::Message {
-                            scope: Some("dm".to_string()),
-                            channel: None,
-                        },
-                        message: msg.clone(),
-                    });
-
-                    if let Some(agent) = agent_sessions.get(&proposer_session) {
-                        if let Ok(agent) = agent.try_lock() {
-                            agent.queue_soft_interrupt(msg, false);
-                        }
-                    }
-                }
-                record_swarm_event(
+                handle_comm_reject_plan(
+                    id,
+                    req_session_id,
+                    proposer_session,
+                    reason,
+                    &client_event_tx,
+                    &swarm_members,
+                    &shared_context,
+                    &swarm_coordinators,
+                    &sessions,
                     &event_history,
                     &event_counter,
                     &swarm_event_tx,
-                    req_session_id.clone(),
-                    coordinator_name,
-                    Some(swarm_id.clone()),
-                    SwarmEventType::Notification {
-                        notification_type: "plan_rejected".to_string(),
-                        message: proposer_session.clone(),
-                    },
                 )
                 .await;
-
-                let _ = client_event_tx.send(ServerEvent::Done { id });
             }
 
             Request::CommSpawn {
