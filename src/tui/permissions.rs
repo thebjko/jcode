@@ -1,5 +1,5 @@
-use crate::safety::{self, PermissionRequest, Urgency};
 use super::color_support::rgb;
+use crate::safety::{self, PermissionRequest, Urgency};
 use anyhow::Result;
 use chrono::Utc;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -203,10 +203,7 @@ impl PermissionsApp {
                 ),
                 Span::styled(action_text, action_style),
                 Span::raw(padding),
-                Span::styled(
-                    format!("{} ", age),
-                    Style::default().fg(rgb(100, 100, 110)),
-                ),
+                Span::styled(format!("{} ", age), Style::default().fg(rgb(100, 100, 110))),
             ]));
 
             let desc_text = truncate(&req.description, area.width.saturating_sub(8) as usize);
@@ -235,10 +232,7 @@ impl PermissionsApp {
 
     fn render_separator(&self, frame: &mut Frame, area: Rect) {
         let sep = "─".repeat(area.width as usize);
-        let line = Line::from(Span::styled(
-            sep,
-            Style::default().fg(rgb(60, 60, 70)),
-        ));
+        let line = Line::from(Span::styled(sep, Style::default().fg(rgb(60, 60, 70))));
         frame.render_widget(Paragraph::new(vec![line]), area);
     }
 
@@ -368,10 +362,7 @@ impl PermissionsApp {
 
         lines.push(Line::from(vec![
             Span::styled(" ID: ", label_style),
-            Span::styled(
-                req.id.clone(),
-                Style::default().fg(rgb(100, 100, 110)),
-            ),
+            Span::styled(req.id.clone(), Style::default().fg(rgb(100, 100, 110))),
         ]));
 
         lines.push(Line::from(vec![
@@ -430,9 +421,7 @@ impl PermissionsApp {
                 let mut s = vec![
                     Span::styled(
                         format!(" {} ", key),
-                        Style::default()
-                            .fg(rgb(30, 30, 35))
-                            .bg(rgb(140, 180, 255)),
+                        Style::default().fg(rgb(30, 30, 35)).bg(rgb(140, 180, 255)),
                     ),
                     Span::styled(
                         format!(" {} ", desc),

@@ -288,7 +288,8 @@ impl MemoryAgent {
                             ));
                             ss.turns_since_extraction = 0;
                             drop(ss);
-                            self.extract_from_context(&prev_context, "topic change").await;
+                            self.extract_from_context(&prev_context, "topic change")
+                                .await;
                             let ss = self.session_state(session_id);
                             ss.surfaced_memories.clear();
                             memory::clear_injected_memories(session_id);
@@ -379,7 +380,9 @@ impl MemoryAgent {
 
         let candidate_ids: Vec<String> = new_candidates.iter().map(|(e, _)| e.id.clone()).collect();
 
-        let relevant = self.evaluate_candidates(session_id, &context, new_candidates).await?;
+        let relevant = self
+            .evaluate_candidates(session_id, &context, new_candidates)
+            .await?;
 
         let verified_ids: Vec<String> = relevant.iter().map(|e| e.id.clone()).collect();
         let rejected_ids: Vec<String> = candidate_ids
@@ -623,19 +626,19 @@ impl MemoryAgent {
                 &context_owned
             };
             match self.memory_manager.find_similar(context_summary, 0.25, 80) {
-                Ok(similar) if !similar.is_empty() => {
-                    similar.into_iter().map(|(entry, _score)| entry.content).collect()
-                }
-                _ => {
-                    self.memory_manager
-                        .list_all()
-                        .unwrap_or_default()
-                        .into_iter()
-                        .filter(|e| e.active)
-                        .take(40)
-                        .map(|e| e.content)
-                        .collect()
-                }
+                Ok(similar) if !similar.is_empty() => similar
+                    .into_iter()
+                    .map(|(entry, _score)| entry.content)
+                    .collect(),
+                _ => self
+                    .memory_manager
+                    .list_all()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|e| e.active)
+                    .take(40)
+                    .map(|e| e.content)
+                    .collect(),
             }
         };
 

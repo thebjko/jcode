@@ -61,11 +61,7 @@ impl GmailClient {
         Ok(msg)
     }
 
-    pub async fn list_threads(
-        &self,
-        query: Option<&str>,
-        max_results: u32,
-    ) -> Result<ThreadList> {
+    pub async fn list_threads(&self, query: Option<&str>, max_results: u32) -> Result<ThreadList> {
         let token = self.token().await?;
         let mut url = format!("{}/threads?maxResults={}", GMAIL_API_BASE, max_results);
 
@@ -81,10 +77,7 @@ impl GmailClient {
 
     pub async fn get_thread(&self, id: &str) -> Result<Thread> {
         let token = self.token().await?;
-        let url = format!(
-            "{}/threads/{}?format=metadata",
-            GMAIL_API_BASE, id
-        );
+        let url = format!("{}/threads/{}?format=metadata", GMAIL_API_BASE, id);
         let resp = self.http.get(&url).bearer_auth(&token).send().await?;
         handle_error(&resp).await?;
         let thread: Thread = resp.json().await?;
@@ -122,12 +115,14 @@ impl GmailClient {
             to, subject
         );
         if let Some(reply_to) = in_reply_to {
-            headers.push_str(&format!("In-Reply-To: {}\r\nReferences: {}\r\n", reply_to, reply_to));
+            headers.push_str(&format!(
+                "In-Reply-To: {}\r\nReferences: {}\r\n",
+                reply_to, reply_to
+            ));
         }
 
         let raw = format!("{}\r\n{}", headers, body);
-        let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .encode(raw.as_bytes());
+        let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(raw.as_bytes());
 
         let mut message = serde_json::json!({ "raw": encoded });
         if let Some(tid) = thread_id {
@@ -181,12 +176,14 @@ impl GmailClient {
             to, subject
         );
         if let Some(reply_to) = in_reply_to {
-            headers.push_str(&format!("In-Reply-To: {}\r\nReferences: {}\r\n", reply_to, reply_to));
+            headers.push_str(&format!(
+                "In-Reply-To: {}\r\nReferences: {}\r\n",
+                reply_to, reply_to
+            ));
         }
 
         let raw = format!("{}\r\n{}", headers, body);
-        let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .encode(raw.as_bytes());
+        let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(raw.as_bytes());
 
         let mut message = serde_json::json!({ "raw": encoded });
         if let Some(tid) = thread_id {
@@ -329,7 +326,8 @@ impl Message {
 
     #[allow(dead_code)]
     pub fn message_id(&self) -> Option<&str> {
-        self.header("Message-ID").or_else(|| self.header("Message-Id"))
+        self.header("Message-ID")
+            .or_else(|| self.header("Message-Id"))
     }
 
     pub fn body_text(&self) -> Option<String> {
@@ -357,9 +355,7 @@ impl MessagePayload {
                         {
                             return String::from_utf8(bytes).ok();
                         }
-                        if let Ok(bytes) =
-                            base64::engine::general_purpose::URL_SAFE.decode(data)
-                        {
+                        if let Ok(bytes) = base64::engine::general_purpose::URL_SAFE.decode(data) {
                             return String::from_utf8(bytes).ok();
                         }
                     }

@@ -327,18 +327,42 @@ impl IncrementalMarkdownRenderer {
 
 // Colors matching ui.rs palette
 use super::color_support::rgb;
-fn code_bg() -> Color { rgb(45, 45, 45) }
-fn code_fg() -> Color { rgb(180, 180, 180) }
-fn math_fg() -> Color { rgb(130, 210, 235) }
-fn link_fg() -> Color { rgb(120, 180, 240) }
-fn html_fg() -> Color { rgb(140, 140, 150) }
-fn text_color() -> Color { rgb(200, 200, 195) }
-fn bold_color() -> Color { rgb(240, 240, 235) }
-fn heading_h1_color() -> Color { rgb(255, 215, 100) }
-fn heading_h2_color() -> Color { rgb(240, 190, 90) }
-fn heading_h3_color() -> Color { rgb(220, 170, 80) }
-fn heading_color() -> Color { rgb(200, 155, 75) }
-fn md_dim_color() -> Color { rgb(100, 100, 100) }
+fn code_bg() -> Color {
+    rgb(45, 45, 45)
+}
+fn code_fg() -> Color {
+    rgb(180, 180, 180)
+}
+fn math_fg() -> Color {
+    rgb(130, 210, 235)
+}
+fn link_fg() -> Color {
+    rgb(120, 180, 240)
+}
+fn html_fg() -> Color {
+    rgb(140, 140, 150)
+}
+fn text_color() -> Color {
+    rgb(200, 200, 195)
+}
+fn bold_color() -> Color {
+    rgb(240, 240, 235)
+}
+fn heading_h1_color() -> Color {
+    rgb(255, 215, 100)
+}
+fn heading_h2_color() -> Color {
+    rgb(240, 190, 90)
+}
+fn heading_h3_color() -> Color {
+    rgb(220, 170, 80)
+}
+fn heading_color() -> Color {
+    rgb(200, 155, 75)
+}
+fn md_dim_color() -> Color {
+    rgb(100, 100, 100)
+}
 const RULE_LEN: usize = 24;
 
 #[derive(Debug, Clone, Copy)]
@@ -472,7 +496,9 @@ fn math_display_lines(math: &str) -> Vec<Line<'static>> {
     out.push(Line::from(Span::styled("└─", dim)));
     out
 }
-fn table_color() -> Color { rgb(150, 150, 150) }
+fn table_color() -> Color {
+    rgb(150, 150, 150)
+}
 
 /// Render markdown text to styled ratatui Lines
 pub fn render_markdown(text: &str) -> Vec<Line<'static>> {
@@ -1041,7 +1067,8 @@ pub fn render_markdown_with_width(text: &str, max_width: Option<usize>) -> Vec<L
             Event::Html(html) => {
                 flush_current_line(&mut lines, &mut current_spans);
                 for raw in html.lines() {
-                    let span = Span::styled(raw.to_string(), Style::default().fg(html_fg()).italic());
+                    let span =
+                        Span::styled(raw.to_string(), Style::default().fg(html_fg()).italic());
                     lines.push(with_blockquote_prefix(Line::from(span), blockquote_depth));
                 }
             }
@@ -1934,7 +1961,8 @@ pub fn render_markdown_lazy(
             Event::Html(html) => {
                 flush_current_line(&mut lines, &mut current_spans);
                 for raw in html.lines() {
-                    let span = Span::styled(raw.to_string(), Style::default().fg(html_fg()).italic());
+                    let span =
+                        Span::styled(raw.to_string(), Style::default().fg(html_fg()).italic());
                     lines.push(with_blockquote_prefix(Line::from(span), blockquote_depth));
                 }
             }

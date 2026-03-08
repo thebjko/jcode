@@ -12,8 +12,7 @@ use crate::bus::{Bus, BusEvent};
 use crate::id;
 use crate::plan::PlanItem;
 use crate::protocol::{
-    decode_request, encode_event, AgentInfo, FeatureToggle, NotificationType, Request,
-    ServerEvent,
+    decode_request, encode_event, AgentInfo, FeatureToggle, NotificationType, Request, ServerEvent,
 };
 use crate::provider::Provider;
 use crate::session::Session;

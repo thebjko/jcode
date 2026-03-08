@@ -121,8 +121,14 @@ mod search_regex {
         };
     }
 
-    static_regex!(result_link, r#"<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>([^<]*)</a>"#);
-    static_regex!(result_snippet, r#"<a[^>]*class="result__snippet"[^>]*>([^<]*(?:<[^>]*>[^<]*)*)</a>"#);
+    static_regex!(
+        result_link,
+        r#"<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>([^<]*)</a>"#
+    );
+    static_regex!(
+        result_snippet,
+        r#"<a[^>]*class="result__snippet"[^>]*>([^<]*(?:<[^>]*>[^<]*)*)</a>"#
+    );
     static_regex!(tag, r"<[^>]+>");
 }
 

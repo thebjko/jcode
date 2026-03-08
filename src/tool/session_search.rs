@@ -225,9 +225,7 @@ fn search_sessions_blocking(
                         for block in &msg.content {
                             let text = match block {
                                 crate::message::ContentBlock::Text { text, .. } => text,
-                                crate::message::ContentBlock::ToolResult { content, .. } => {
-                                    content
-                                }
+                                crate::message::ContentBlock::ToolResult { content, .. } => content,
                                 _ => continue,
                             };
 
@@ -236,8 +234,7 @@ fn search_sessions_blocking(
                                 continue;
                             }
 
-                            let snippet =
-                                extract_snippet(text, &text_lower, query_lower, 200);
+                            let snippet = extract_snippet(text, &text_lower, query_lower, 200);
                             let role = match msg.role {
                                 crate::message::Role::User => "user",
                                 crate::message::Role::Assistant => "assistant",
@@ -266,8 +263,7 @@ fn search_sessions_blocking(
     });
 
     // Merge results from all threads
-    let mut results: Vec<SearchResult> =
-        all_results.into_iter().flatten().collect();
+    let mut results: Vec<SearchResult> = all_results.into_iter().flatten().collect();
 
     // Sort by score descending, take top `limit`
     results.sort_unstable_by(|a, b| {

@@ -3796,10 +3796,7 @@ mod tests {
         assert!(request["input"].is_array());
         assert!(request["tools"].is_array());
         assert_eq!(request["max_output_tokens"], serde_json::json!(16384));
-        assert_eq!(
-            request["reasoning"],
-            serde_json::json!({"effort": "high"})
-        );
+        assert_eq!(request["reasoning"], serde_json::json!({"effort": "high"}));
         assert_eq!(request["tool_choice"], "auto");
     }
 

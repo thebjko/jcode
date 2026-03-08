@@ -15,8 +15,8 @@ fn main() {
         "git_hash",
         ["rev-parse", "--short", "HEAD"],
     )
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "unknown".to_string());
+    .filter(|value| !value.is_empty())
+    .unwrap_or_else(|| "unknown".to_string());
 
     // Get git commit date (full datetime with timezone for accurate age calculation)
     let git_date = env_or_metadata_or_git(
@@ -24,8 +24,8 @@ fn main() {
         "git_date",
         ["log", "-1", "--format=%ci"],
     )
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "unknown".to_string());
+    .filter(|value| !value.is_empty())
+    .unwrap_or_else(|| "unknown".to_string());
 
     let dirty = match std::env::var("JCODE_BUILD_GIT_DIRTY") {
         Ok(value) => matches!(
@@ -33,7 +33,12 @@ fn main() {
             "1" | "true" | "yes" | "dirty"
         ),
         Err(_) => metadata_value("git_dirty")
-            .map(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "dirty"))
+            .map(|value| {
+                matches!(
+                    value.trim().to_ascii_lowercase().as_str(),
+                    "1" | "true" | "yes" | "dirty"
+                )
+            })
             .or_else(|| git_output(["status", "--porcelain"]).map(|output| !output.is_empty()))
             .unwrap_or(false),
     };
@@ -44,7 +49,7 @@ fn main() {
         "git_tag",
         ["describe", "--tags", "--always"],
     )
-        .unwrap_or_default();
+    .unwrap_or_default();
 
     // Get recent commit messages with version tag decorations.
     // Format: "hash|decorations|subject" per line (pipe-delimited to avoid

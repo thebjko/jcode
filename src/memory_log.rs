@@ -75,7 +75,6 @@ struct LogEntry {
     detail: Option<serde_json::Value>,
 }
 
-
 fn current_session_id() -> Option<String> {
     crate::logging::current_session()
 }
@@ -160,10 +159,7 @@ pub fn log_event(kind: &MemoryEventKind) {
             })),
         ),
 
-        MemoryEventKind::MaintenanceStarted {
-            verified,
-            rejected,
-        } => (
+        MemoryEventKind::MaintenanceStarted { verified, rejected } => (
             "maintenance_started",
             Some(serde_json::json!({
                 "verified": verified,
@@ -220,10 +216,9 @@ pub fn log_event(kind: &MemoryEventKind) {
             Some(serde_json::json!({ "count": count })),
         ),
 
-        MemoryEventKind::Error { message } => (
-            "error",
-            Some(serde_json::json!({ "message": message })),
-        ),
+        MemoryEventKind::Error { message } => {
+            ("error", Some(serde_json::json!({ "message": message })))
+        }
 
         MemoryEventKind::ToolRemembered {
             content,
@@ -246,10 +241,9 @@ pub fn log_event(kind: &MemoryEventKind) {
             })),
         ),
 
-        MemoryEventKind::ToolForgot { id } => (
-            "tool_forgot",
-            Some(serde_json::json!({ "id": id })),
-        ),
+        MemoryEventKind::ToolForgot { id } => {
+            ("tool_forgot", Some(serde_json::json!({ "id": id })))
+        }
 
         MemoryEventKind::ToolTagged { id, tags } => (
             "tool_tagged",
@@ -267,10 +261,9 @@ pub fn log_event(kind: &MemoryEventKind) {
             })),
         ),
 
-        MemoryEventKind::ToolListed { count } => (
-            "tool_listed",
-            Some(serde_json::json!({ "count": count })),
-        ),
+        MemoryEventKind::ToolListed { count } => {
+            ("tool_listed", Some(serde_json::json!({ "count": count })))
+        }
     };
 
     write_log(event, detail);
@@ -368,5 +361,3 @@ pub fn log_candidate_filter(
         })),
     );
 }
-
-

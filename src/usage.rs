@@ -206,21 +206,26 @@ const PROVIDER_USAGE_CACHE_TTL: Duration = Duration::from_secs(120);
 /// Returns a list of ProviderUsage, one per provider that has credentials.
 /// Results are cached for 2 minutes to avoid hitting rate limits.
 pub async fn fetch_all_provider_usage() -> Vec<ProviderUsage> {
-    let cache = PROVIDER_USAGE_CACHE
-        .get_or_init(|| std::sync::Mutex::new(HashMap::new()));
+    let cache = PROVIDER_USAGE_CACHE.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
 
     let now = Instant::now();
     let all_fresh = if let Ok(map) = cache.lock() {
-        !map.is_empty() && map.values().all(|(fetched_at, report)| {
-            let ttl = if report.error.as_ref().map(|e| {
-                e.contains("429") || e.contains("rate limit") || e.contains("Rate limited")
-            }).unwrap_or(false) {
-                RATE_LIMIT_BACKOFF
-            } else {
-                PROVIDER_USAGE_CACHE_TTL
-            };
-            now.duration_since(*fetched_at) < ttl
-        })
+        !map.is_empty()
+            && map.values().all(|(fetched_at, report)| {
+                let ttl = if report
+                    .error
+                    .as_ref()
+                    .map(|e| {
+                        e.contains("429") || e.contains("rate limit") || e.contains("Rate limited")
+                    })
+                    .unwrap_or(false)
+                {
+                    RATE_LIMIT_BACKOFF
+                } else {
+                    PROVIDER_USAGE_CACHE_TTL
+                };
+                now.duration_since(*fetched_at) < ttl
+            })
     } else {
         false
     };

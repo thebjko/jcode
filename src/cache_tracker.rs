@@ -37,8 +37,10 @@ pub struct CacheViolation {
     /// Number of messages at time of violation
     pub message_count: usize,
     /// Expected prefix hash
+    #[allow(dead_code)]
     pub expected_hash: String,
     /// Actual prefix hash
+    #[allow(dead_code)]
     pub actual_hash: String,
     /// Human-readable reason
     pub reason: String,
@@ -163,6 +165,7 @@ impl CacheTracker {
     }
 
     /// Get the last violation if any
+    #[allow(dead_code)]
     pub fn last_violation(&self) -> Option<&CacheViolation> {
         self.last_violation.as_ref()
     }

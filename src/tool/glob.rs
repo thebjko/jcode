@@ -62,10 +62,7 @@ impl Tool for GlobTool {
             return Err(anyhow::anyhow!("Directory not found: {}", base_path));
         }
 
-        let results = tokio::task::spawn_blocking(move || {
-            glob_blocking(&base, &pattern)
-        })
-        .await??;
+        let results = tokio::task::spawn_blocking(move || glob_blocking(&base, &pattern)).await??;
 
         let mut output = String::new();
         output.push_str(&format!(
@@ -93,10 +90,7 @@ impl Tool for GlobTool {
     }
 }
 
-fn glob_blocking(
-    base: &Path,
-    pattern: &str,
-) -> Result<Vec<(String, std::time::SystemTime)>> {
+fn glob_blocking(base: &Path, pattern: &str) -> Result<Vec<(String, std::time::SystemTime)>> {
     let glob_pattern = glob::Pattern::new(pattern)?;
 
     let collect_limit = MAX_RESULTS * 2;
@@ -108,7 +102,12 @@ fn glob_blocking(
         .git_ignore(true)
         .git_global(true)
         .git_exclude(true)
-        .threads(std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).min(8))
+        .threads(
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4)
+                .min(8),
+        )
         .build_parallel();
 
     let base_owned = base.to_path_buf();
@@ -151,10 +150,7 @@ fn glob_blocking(
                     .unwrap_or(std::time::UNIX_EPOCH);
 
                 count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                results
-                    .lock()
-                    .unwrap()
-                    .push((path_str.to_string(), mtime));
+                results.lock().unwrap().push((path_str.to_string(), mtime));
             }
 
             ignore::WalkState::Continue

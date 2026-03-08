@@ -1138,7 +1138,10 @@ mod tests {
                 timeout_secs,
                 ..
             } => {
-                assert!(session_ids.is_empty(), "session_ids should default to empty");
+                assert!(
+                    session_ids.is_empty(),
+                    "session_ids should default to empty"
+                );
                 assert_eq!(timeout_secs, None, "timeout_secs should default to None");
             }
             _ => panic!("expected CommAwaitMembers"),

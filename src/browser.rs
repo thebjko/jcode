@@ -108,11 +108,17 @@ pub fn ensure_browser_session(session_id: &str) -> Option<String> {
                 }
                 std::thread::sleep(std::time::Duration::from_millis(100));
             }
-            eprintln!("[browser] session '{}' did not start within 5s", session_name);
+            eprintln!(
+                "[browser] session '{}' did not start within 5s",
+                session_name
+            );
             None
         }
         Err(e) => {
-            eprintln!("[browser] Failed to start browser session '{}': {}", session_name, e);
+            eprintln!(
+                "[browser] Failed to start browser session '{}': {}",
+                session_name, e
+            );
             None
         }
     }
@@ -128,9 +134,7 @@ fn sanitize_session_name(session_id: &str) -> String {
 
 pub fn is_browser_command(command: &str) -> bool {
     let trimmed = command.trim_start();
-    trimmed.starts_with("browser ")
-        || trimmed == "browser"
-        || trimmed.starts_with("browser\t")
+    trimmed.starts_with("browser ") || trimmed == "browser" || trimmed.starts_with("browser\t")
 }
 
 pub fn is_setup_complete() -> bool {
@@ -384,7 +388,11 @@ fn get_platform_asset_name() -> String {
         all(target_os = "windows", target_arch = "x86_64"),
     )))]
     {
-        format!("browser-{}-{}", std::env::consts::OS, std::env::consts::ARCH)
+        format!(
+            "browser-{}-{}",
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        )
     }
 }
 
@@ -441,10 +449,7 @@ fn install_native_host_manifest() -> Result<bool> {
         ]
     });
 
-    std::fs::write(
-        &manifest_path,
-        serde_json::to_string_pretty(&manifest)?,
-    )?;
+    std::fs::write(&manifest_path, serde_json::to_string_pretty(&manifest)?)?;
 
     Ok(true)
 }
@@ -515,10 +520,7 @@ async fn install_extension() -> Result<String> {
     let mut msg = String::new();
 
     if !xpi.exists() {
-        return Err(anyhow::anyhow!(
-            "XPI file not found at {}",
-            xpi.display()
-        ));
+        return Err(anyhow::anyhow!("XPI file not found at {}", xpi.display()));
     }
 
     // Try to open Firefox with the XPI to trigger install prompt
@@ -532,9 +534,7 @@ async fn install_extension() -> Result<String> {
     }
     #[cfg(target_os = "macos")]
     {
-        let _ = tokio::process::Command::new("open")
-            .arg(&xpi_url)
-            .spawn();
+        let _ = tokio::process::Command::new("open").arg(&xpi_url).spawn();
     }
     #[cfg(target_os = "windows")]
     {
@@ -570,7 +570,9 @@ mod tests {
     #[test]
     fn test_is_browser_command() {
         assert!(is_browser_command("browser ping"));
-        assert!(is_browser_command("browser navigate '{\"url\": \"https://example.com\"}'"));
+        assert!(is_browser_command(
+            "browser navigate '{\"url\": \"https://example.com\"}'"
+        ));
         assert!(is_browser_command("browser"));
         assert!(is_browser_command("  browser ping"));
         assert!(is_browser_command("browser\tping"));

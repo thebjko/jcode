@@ -1,8 +1,8 @@
 use ratatui::style::Color;
 use std::sync::OnceLock;
 
-use ratatui::layout::Rect;
 use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ColorCapability {
@@ -216,7 +216,11 @@ mod tests {
     #[test]
     fn test_dim_gray() {
         let idx = rgb_to_xterm256(80, 80, 80);
-        assert!(idx >= 232 && idx <= 255, "Expected grayscale for dim, got {}", idx);
+        assert!(
+            idx >= 232 && idx <= 255,
+            "Expected grayscale for dim, got {}",
+            idx
+        );
     }
 
     #[test]

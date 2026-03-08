@@ -114,11 +114,7 @@ impl Tool for GrepTool {
     }
 }
 
-fn grep_blocking(
-    base: &Path,
-    pattern: &str,
-    include: Option<&str>,
-) -> Result<Vec<GrepResult>> {
+fn grep_blocking(base: &Path, pattern: &str, include: Option<&str>) -> Result<Vec<GrepResult>> {
     let regex = Regex::new(pattern)?;
     let include_pattern = include.map(|p| glob::Pattern::new(p)).transpose()?;
 
@@ -130,7 +126,12 @@ fn grep_blocking(
         .git_ignore(true)
         .git_global(true)
         .git_exclude(true)
-        .threads(std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).min(8))
+        .threads(
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4)
+                .min(8),
+        )
         .build_parallel();
 
     let base_owned = base.to_path_buf();

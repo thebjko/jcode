@@ -1,9 +1,9 @@
 use crate::agent::Agent;
-use crate::provider::Provider;
 use crate::protocol::ServerEvent;
+use crate::provider::Provider;
 use crate::server::{
-    SwarmMember, VersionedPlan, broadcast_swarm_status, is_jcode_repo_or_parent, is_selfdev_env,
-    swarm_id_for_dir,
+    broadcast_swarm_status, is_jcode_repo_or_parent, is_selfdev_env, swarm_id_for_dir, SwarmMember,
+    VersionedPlan,
 };
 use crate::tool::Registry;
 use anyhow::Result;

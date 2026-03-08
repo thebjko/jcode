@@ -144,7 +144,6 @@ pub struct CompactionManager {
     last_compaction: Option<CompactionEvent>,
 
     // ── Mode & strategy ────────────────────────────────────────────────────
-
     /// Active compaction mode (set from config at construction)
     mode: crate::config::CompactionMode,
 
@@ -152,7 +151,6 @@ pub struct CompactionManager {
     compaction_config: crate::config::CompactionConfig,
 
     // ── Proactive mode state ───────────────────────────────────────────────
-
     /// Rolling window of observed token counts, one entry per turn snapshot.
     /// Used to compute EWMA growth rate for proactive compaction.
     token_history: VecDeque<u64>,
@@ -162,7 +160,6 @@ pub struct CompactionManager {
     turns_since_last_compact: usize,
 
     // ── Semantic mode state ────────────────────────────────────────────────
-
     /// Per-turn embedding snapshots for topic-shift detection.
     /// Each entry is the L2-normalized embedding of the last assistant message
     /// of that turn (truncated to EMBED_MAX_CHARS_PER_MSG for speed).
@@ -376,10 +373,8 @@ impl CompactionManager {
         let cfg = &self.compaction_config;
         let half = history_len / 2;
 
-        let old_embeddings: Vec<&Vec<f32>> =
-            self.embedding_history.iter().take(half).collect();
-        let new_embeddings: Vec<&Vec<f32>> =
-            self.embedding_history.iter().skip(half).collect();
+        let old_embeddings: Vec<&Vec<f32>> = self.embedding_history.iter().take(half).collect();
+        let new_embeddings: Vec<&Vec<f32>> = self.embedding_history.iter().skip(half).collect();
 
         let dim = old_embeddings[0].len();
 
@@ -387,8 +382,7 @@ impl CompactionManager {
         let mean_old = mean_embedding(&old_embeddings, dim);
         let mean_new = mean_embedding(&new_embeddings, dim);
 
-        let similarity =
-            crate::embedding::cosine_similarity(&mean_old, &mean_new);
+        let similarity = crate::embedding::cosine_similarity(&mean_old, &mean_new);
 
         crate::logging::info(&format!(
             "[compaction/semantic] topic similarity (old vs new half) = {:.3} (threshold={:.2})",
@@ -429,9 +423,7 @@ impl CompactionManager {
             .iter()
             .flat_map(|m| m.content.iter())
             .filter_map(|b| match b {
-                ContentBlock::Text { text, .. } => {
-                    Some(text.chars().take(200).collect::<String>())
-                }
+                ContentBlock::Text { text, .. } => Some(text.chars().take(200).collect::<String>()),
                 ContentBlock::ToolResult { content, .. } => {
                     Some(content.chars().take(100).collect::<String>())
                 }
@@ -450,17 +442,18 @@ impl CompactionManager {
         };
 
         // Score each candidate message (those before standard_cutoff).
-        let mut high_relevance: std::collections::HashSet<usize> =
-            std::collections::HashSet::new();
+        let mut high_relevance: std::collections::HashSet<usize> = std::collections::HashSet::new();
 
         for (idx, msg) in active[..standard_cutoff].iter().enumerate() {
             let text: String = msg
                 .content
                 .iter()
                 .filter_map(|b| match b {
-                    ContentBlock::Text { text, .. } => {
-                        Some(text.chars().take(EMBED_MAX_CHARS_PER_MSG).collect::<String>())
-                    }
+                    ContentBlock::Text { text, .. } => Some(
+                        text.chars()
+                            .take(EMBED_MAX_CHARS_PER_MSG)
+                            .collect::<String>(),
+                    ),
                     _ => None,
                 })
                 .collect::<Vec<_>>()
@@ -604,12 +597,10 @@ impl CompactionManager {
                     && active.len() > RECENT_TURNS_TO_KEEP
             }
             CompactionMode::Proactive => {
-                active.len() > RECENT_TURNS_TO_KEEP
-                    && self.should_compact_proactively(all_messages)
+                active.len() > RECENT_TURNS_TO_KEEP && self.should_compact_proactively(all_messages)
             }
             CompactionMode::Semantic => {
-                active.len() > RECENT_TURNS_TO_KEEP
-                    && self.should_compact_semantic(all_messages)
+                active.len() > RECENT_TURNS_TO_KEEP && self.should_compact_semantic(all_messages)
             }
         }
     }

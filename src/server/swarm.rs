@@ -522,7 +522,9 @@ fn parse_swarm_tasks(text: &str) -> Vec<SwarmTaskSpec> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_swarm_tasks, remove_session_from_swarm, summarize_plan_items, truncate_detail};
+    use super::{
+        parse_swarm_tasks, remove_session_from_swarm, summarize_plan_items, truncate_detail,
+    };
     use crate::plan::PlanItem;
     use crate::protocol::{NotificationType, ServerEvent};
     use crate::server::{SwarmMember, VersionedPlan};

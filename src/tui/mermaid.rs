@@ -12,8 +12,8 @@
 //! - Skip redundant renders when nothing changed
 //! - Clear only on render failure, not before every render
 
-use image::DynamicImage;
 use super::color_support::rgb;
+use image::DynamicImage;
 use mermaid_rs_renderer::{
     config::{LayoutConfig, RenderConfig},
     layout::compute_layout,
@@ -2153,8 +2153,16 @@ fn render_image_widget_fit_inner(
 
     {
         let mut state = IMAGE_STATE.lock().unwrap();
-        let target_mode = if scale_up { ResizeMode::Scale } else { ResizeMode::Fit };
-        let resize = if scale_up { Resize::Scale(None) } else { Resize::Fit(None) };
+        let target_mode = if scale_up {
+            ResizeMode::Scale
+        } else {
+            ResizeMode::Fit
+        };
+        let resize = if scale_up {
+            Resize::Scale(None)
+        } else {
+            Resize::Fit(None)
+        };
         let needs_reset = state
             .get(&hash)
             .map(|s| {
@@ -2171,13 +2179,8 @@ fn render_image_widget_fit_inner(
         if let Some(img_state) = state.get_mut(hash) {
             img_state.resize_mode = target_mode;
             img_state.last_viewport = None;
-            if !render_stateful_image_safe(
-                hash,
-                render_area,
-                buf,
-                &mut img_state.protocol,
-                resize,
-            ) {
+            if !render_stateful_image_safe(hash, render_area, buf, &mut img_state.protocol, resize)
+            {
                 return 0;
             }
             img_state.last_area = Some(render_area);
@@ -2188,8 +2191,16 @@ fn render_image_widget_fit_inner(
     if let Some(path) = path {
         if let Some(Some(picker)) = PICKER.get() {
             if let Ok(img) = image::open(&path) {
-                let target_mode = if scale_up { ResizeMode::Scale } else { ResizeMode::Fit };
-                let resize = if scale_up { Resize::Scale(None) } else { Resize::Fit(None) };
+                let target_mode = if scale_up {
+                    ResizeMode::Scale
+                } else {
+                    ResizeMode::Fit
+                };
+                let resize = if scale_up {
+                    Resize::Scale(None)
+                } else {
+                    Resize::Fit(None)
+                };
                 let protocol = picker.new_resize_protocol(img);
 
                 let mut state = IMAGE_STATE.lock().unwrap();

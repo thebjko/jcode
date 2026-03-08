@@ -344,93 +344,98 @@ impl BashTool {
 
         let notify = params.notify;
         let info = crate::background::global()
-            .spawn_with_notify("bash", &ctx.session_id, notify, move |output_path| async move {
-                let mut cmd = build_shell_command(&command);
-                cmd.kill_on_drop(true)
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped());
-                if let Some(ref dir) = working_dir {
-                    cmd.current_dir(dir);
-                }
-                let mut child = cmd
-                    .spawn()
-                    .map_err(|e| anyhow::anyhow!("Failed to spawn command: {}", e))?;
+            .spawn_with_notify(
+                "bash",
+                &ctx.session_id,
+                notify,
+                move |output_path| async move {
+                    let mut cmd = build_shell_command(&command);
+                    cmd.kill_on_drop(true)
+                        .stdout(Stdio::piped())
+                        .stderr(Stdio::piped());
+                    if let Some(ref dir) = working_dir {
+                        cmd.current_dir(dir);
+                    }
+                    let mut child = cmd
+                        .spawn()
+                        .map_err(|e| anyhow::anyhow!("Failed to spawn command: {}", e))?;
 
-                // Stream output to file
-                let mut file = tokio::fs::File::create(&output_path)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("Failed to create output file: {}", e))?;
+                    // Stream output to file
+                    let mut file = tokio::fs::File::create(&output_path)
+                        .await
+                        .map_err(|e| anyhow::anyhow!("Failed to create output file: {}", e))?;
 
-                // Read stdout and stderr truly concurrently using select!
-                // Sequential reads can deadlock if the unread pipe fills up.
-                let stdout = child.stdout.take();
-                let stderr = child.stderr.take();
+                    // Read stdout and stderr truly concurrently using select!
+                    // Sequential reads can deadlock if the unread pipe fills up.
+                    let stdout = child.stdout.take();
+                    let stderr = child.stderr.take();
 
-                let mut stdout_lines = stdout.map(|s| BufReader::new(s).lines());
-                let mut stderr_lines = stderr.map(|s| BufReader::new(s).lines());
-                let mut stdout_done = stdout_lines.is_none();
-                let mut stderr_done = stderr_lines.is_none();
+                    let mut stdout_lines = stdout.map(|s| BufReader::new(s).lines());
+                    let mut stderr_lines = stderr.map(|s| BufReader::new(s).lines());
+                    let mut stdout_done = stdout_lines.is_none();
+                    let mut stderr_done = stderr_lines.is_none();
 
-                while !stdout_done || !stderr_done {
-                    tokio::select! {
-                        line = async {
-                            match stdout_lines.as_mut() {
-                                Some(r) => r.next_line().await,
-                                None => std::future::pending().await,
-                            }
-                        }, if !stdout_done => {
-                            match line {
-                                Ok(Some(line)) => {
-                                    let line_with_newline = format!("{}\n", line);
-                                    file.write_all(line_with_newline.as_bytes()).await.ok();
-                                    file.flush().await.ok();
+                    while !stdout_done || !stderr_done {
+                        tokio::select! {
+                            line = async {
+                                match stdout_lines.as_mut() {
+                                    Some(r) => r.next_line().await,
+                                    None => std::future::pending().await,
                                 }
-                                _ => { stdout_done = true; }
-                            }
-                        }
-                        line = async {
-                            match stderr_lines.as_mut() {
-                                Some(r) => r.next_line().await,
-                                None => std::future::pending().await,
-                            }
-                        }, if !stderr_done => {
-                            match line {
-                                Ok(Some(line)) => {
-                                    let line_with_newline = format!("[stderr] {}\n", line);
-                                    file.write_all(line_with_newline.as_bytes()).await.ok();
-                                    file.flush().await.ok();
+                            }, if !stdout_done => {
+                                match line {
+                                    Ok(Some(line)) => {
+                                        let line_with_newline = format!("{}\n", line);
+                                        file.write_all(line_with_newline.as_bytes()).await.ok();
+                                        file.flush().await.ok();
+                                    }
+                                    _ => { stdout_done = true; }
                                 }
-                                _ => { stderr_done = true; }
+                            }
+                            line = async {
+                                match stderr_lines.as_mut() {
+                                    Some(r) => r.next_line().await,
+                                    None => std::future::pending().await,
+                                }
+                            }, if !stderr_done => {
+                                match line {
+                                    Ok(Some(line)) => {
+                                        let line_with_newline = format!("[stderr] {}\n", line);
+                                        file.write_all(line_with_newline.as_bytes()).await.ok();
+                                        file.flush().await.ok();
+                                    }
+                                    _ => { stderr_done = true; }
+                                }
                             }
                         }
                     }
-                }
 
-                let status = child.wait().await?;
-                let exit_code = status.code();
+                    let status = child.wait().await?;
+                    let exit_code = status.code();
 
-                // Write final status line
-                let status_line = format!(
-                    "\n--- Command finished with exit code: {} ---\n",
-                    exit_code.unwrap_or(-1)
-                );
-                file.write_all(status_line.as_bytes()).await.ok();
+                    // Write final status line
+                    let status_line = format!(
+                        "\n--- Command finished with exit code: {} ---\n",
+                        exit_code.unwrap_or(-1)
+                    );
+                    file.write_all(status_line.as_bytes()).await.ok();
 
-                if status.success() {
-                    Ok(TaskResult {
-                        exit_code,
-                        error: None,
-                    })
-                } else {
-                    Ok(TaskResult {
-                        exit_code,
-                        error: Some(format!(
-                            "Command exited with code {}",
-                            exit_code.unwrap_or(-1)
-                        )),
-                    })
-                }
-            })
+                    if status.success() {
+                        Ok(TaskResult {
+                            exit_code,
+                            error: None,
+                        })
+                    } else {
+                        Ok(TaskResult {
+                            exit_code,
+                            error: Some(format!(
+                                "Command exited with code {}",
+                                exit_code.unwrap_or(-1)
+                            )),
+                        })
+                    }
+                },
+            )
             .await;
 
         let notify_msg = if notify {

@@ -6,8 +6,7 @@
 
 use crate::agent::{Agent, SoftInterruptQueue};
 use crate::ambient::{
-    self, AmbientCycleResult, AmbientLock, AmbientManager, AmbientState, AmbientStatus,
-    CycleStatus,
+    self, AmbientCycleResult, AmbientLock, AmbientManager, AmbientState, AmbientStatus, CycleStatus,
 };
 use crate::ambient_scheduler::{AdaptiveScheduler, AmbientSchedulerConfig};
 use crate::config::config;
@@ -74,26 +73,31 @@ impl AmbientRunnerHandle {
     }
 
     /// Update the count of active user sessions (for pause-on-active logic).
+    #[allow(dead_code)]
     pub async fn set_active_user_sessions(&self, count: usize) {
         *self.inner.active_user_sessions.write().await = count;
     }
 
     /// Get current ambient state snapshot.
+    #[allow(dead_code)]
     pub async fn state(&self) -> AmbientState {
         self.inner.state.read().await.clone()
     }
 
     /// Get queue count.
+    #[allow(dead_code)]
     pub async fn queue_count(&self) -> usize {
         *self.inner.queue_count.read().await
     }
 
     /// Get next queue preview.
+    #[allow(dead_code)]
     pub async fn next_queue_preview(&self) -> Option<String> {
         self.inner.next_queue_preview.read().await.clone()
     }
 
     /// Check if the runner loop is active.
+    #[allow(dead_code)]
     pub async fn is_running(&self) -> bool {
         *self.inner.running.read().await
     }

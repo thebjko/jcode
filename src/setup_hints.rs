@@ -564,9 +564,7 @@ fn nudge_alacritty(state: &mut SetupHintsState) -> bool {
                 }
                 Err(e) => {
                     eprintln!("  \x1b[31m✗\x1b[0m Failed to install Alacritty: {}", e);
-                    eprintln!(
-                        "    Install manually: https://alacritty.org/"
-                    );
+                    eprintln!("    Install manually: https://alacritty.org/");
                     eprintln!();
                     false
                 }
@@ -696,7 +694,9 @@ pub fn run_setup_hotkey() -> Result<()> {
 
     let mut installed_alacritty = false;
     if !already_using_alacritty && !is_alacritty_installed() {
-        eprintln!("  Alacritty is the fastest terminal emulator (GPU-accelerated, lowest latency).");
+        eprintln!(
+            "  Alacritty is the fastest terminal emulator (GPU-accelerated, lowest latency)."
+        );
         eprint!("  Install Alacritty? \x1b[32m[y]\x1b[0m/\x1b[90m[n]\x1b[0m: ");
         let _ = io::stderr().flush();
         let choice = read_choice();
@@ -828,8 +828,8 @@ fn create_desktop_shortcut(state: &mut SetupHintsState) -> Result<()> {
             (exe_path.to_string(), String::new())
         };
 
-        let desktop_dir = std::env::var("USERPROFILE")
-            .unwrap_or_else(|_| "C:\\Users\\Default".into());
+        let desktop_dir =
+            std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\Users\\Default".into());
         let shortcut_path = format!("{}\\Desktop\\jcode.lnk", desktop_dir);
 
         let ps_script = format!(
@@ -856,10 +856,7 @@ Write-Output "OK"
             if stdout.contains("OK") {
                 state.desktop_shortcut_created = true;
                 let _ = state.save();
-                crate::logging::info(&format!(
-                    "Created desktop shortcut: {}",
-                    shortcut_path
-                ));
+                crate::logging::info(&format!("Created desktop shortcut: {}", shortcut_path));
             }
         }
     }
@@ -880,18 +877,11 @@ Write-Output "OK"
 
         let terminal = detect_macos_terminal();
         let launch_script = match terminal {
-            MacTerminalKind::Ghostty => format!(
-                "#!/bin/bash\nopen -a Ghostty --args -e \"{}\"\n",
-                exe_path
-            ),
-            MacTerminalKind::Alacritty => format!(
-                "#!/bin/bash\nalacritty -e \"{}\"\n",
-                exe_path
-            ),
-            _ => format!(
-                "#!/bin/bash\nopen -a Terminal \"{}\"\n",
-                exe_path
-            ),
+            MacTerminalKind::Ghostty => {
+                format!("#!/bin/bash\nopen -a Ghostty --args -e \"{}\"\n", exe_path)
+            }
+            MacTerminalKind::Alacritty => format!("#!/bin/bash\nalacritty -e \"{}\"\n", exe_path),
+            _ => format!("#!/bin/bash\nopen -a Terminal \"{}\"\n", exe_path),
         };
 
         let launcher_path = macos_dir.join("jcode");
@@ -926,10 +916,7 @@ Write-Output "OK"
         state.desktop_shortcut_created = true;
         let _ = state.save();
 
-        crate::logging::info(&format!(
-            "Created macOS app bundle: {}",
-            app_dir.display()
-        ));
+        crate::logging::info(&format!("Created macOS app bundle: {}", app_dir.display()));
     }
 
     #[cfg(not(any(windows, target_os = "macos")))]

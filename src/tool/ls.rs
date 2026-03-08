@@ -148,12 +148,10 @@ fn collect_entries(
         })
         .collect();
 
-    typed_items.sort_by(|(a, a_dir), (b, b_dir)| {
-        match (*a_dir, *b_dir) {
-            (true, false) => std::cmp::Ordering::Less,
-            (false, true) => std::cmp::Ordering::Greater,
-            _ => a.file_name().cmp(&b.file_name()),
-        }
+    typed_items.sort_by(|(a, a_dir), (b, b_dir)| match (*a_dir, *b_dir) {
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        _ => a.file_name().cmp(&b.file_name()),
     });
 
     for (item, is_dir) in typed_items {

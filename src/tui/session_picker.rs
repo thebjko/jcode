@@ -3,8 +3,8 @@
 //! Shows a list of sessions on the left, with a preview of the selected session's
 //! conversation on the right. Sessions are grouped by server for multi-server support.
 
-use crate::id::{extract_session_name, session_icon};
 use super::color_support::rgb;
+use crate::id::{extract_session_name, session_icon};
 use crate::message::Role;
 use crate::registry::{self, ServerInfo};
 use crate::session::{self, CrashedSessionsInfo, Session, SessionStatus};
@@ -1358,23 +1358,15 @@ impl SessionPicker {
         let (status_icon, status_color, time_label) = match &session.status {
             SessionStatus::Active => ("▶", rgb(100, 200, 100), "active".to_string()),
             SessionStatus::Closed => ("✓", DIM, format!("closed {}", time_ago)),
-            SessionStatus::Crashed { .. } => (
-                "💥",
-                rgb(220, 100, 100),
-                format!("crashed {}", time_ago),
-            ),
+            SessionStatus::Crashed { .. } => {
+                ("💥", rgb(220, 100, 100), format!("crashed {}", time_ago))
+            }
             SessionStatus::Reloaded => ("🔄", USER_CLR, format!("reloaded {}", time_ago)),
-            SessionStatus::Compacted => (
-                "📦",
-                rgb(255, 193, 7),
-                format!("compacted {}", time_ago),
-            ),
+            SessionStatus::Compacted => ("📦", rgb(255, 193, 7), format!("compacted {}", time_ago)),
             SessionStatus::RateLimited => ("⏳", ACCENT, format!("rate-limited {}", time_ago)),
-            SessionStatus::Error { .. } => (
-                "❌",
-                rgb(220, 100, 100),
-                format!("errored {}", time_ago),
-            ),
+            SessionStatus::Error { .. } => {
+                ("❌", rgb(220, 100, 100), format!("errored {}", time_ago))
+            }
         };
 
         // Line 1: icon + name + status + time context
@@ -1418,10 +1410,7 @@ impl SessionPicker {
         };
         let line2 = Line::from(vec![
             Span::styled("     ", Style::default()),
-            Span::styled(
-                title_display,
-                Style::default().fg(rgb(180, 180, 180)),
-            ),
+            Span::styled(title_display, Style::default().fg(rgb(180, 180, 180))),
         ]);
 
         // Line 3: stats - user msgs, assistant msgs, tokens
@@ -1548,10 +1537,7 @@ impl SessionPicker {
                                     .fg(SAVED_COLOR)
                                     .add_modifier(Modifier::BOLD),
                             ),
-                            Span::styled(
-                                format!("  {}", session_count),
-                                Style::default().fg(DIM),
-                            ),
+                            Span::styled(format!("  {}", session_count), Style::default().fg(DIM)),
                         ]);
                         ListItem::new(vec![line1])
                     }
@@ -1758,9 +1744,7 @@ impl SessionPicker {
                 "Compacted (context too large)".to_string(),
                 rgb(255, 193, 7),
             ),
-            SessionStatus::RateLimited => {
-                ("⏳", "Rate limited".to_string(), rgb(186, 139, 255))
-            }
+            SessionStatus::RateLimited => ("⏳", "Rate limited".to_string(), rgb(186, 139, 255)),
             SessionStatus::Error { message } => {
                 let text = format!("Error: {}", safe_truncate(message, 40));
                 ("❌", text, rgb(220, 100, 100))
@@ -2113,10 +2097,7 @@ impl SessionPicker {
                 ),
                 Span::styled(cursor_char, Style::default().fg(rgb(186, 139, 255))),
                 if self.search_active {
-                    Span::styled(
-                        "  Esc to clear",
-                        Style::default().fg(rgb(60, 60, 60)),
-                    )
+                    Span::styled("  Esc to clear", Style::default().fg(rgb(60, 60, 60)))
                 } else {
                     Span::styled("  / to edit", Style::default().fg(rgb(60, 60, 60)))
                 },

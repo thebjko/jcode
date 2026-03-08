@@ -171,17 +171,13 @@ mod html_regex {
 
     pub fn h_open() -> &'static [Regex; 6] {
         H_OPEN.get_or_init(|| {
-            std::array::from_fn(|i| {
-                Regex::new(&format!(r"(?i)<h{}[^>]*>", i + 1)).unwrap()
-            })
+            std::array::from_fn(|i| Regex::new(&format!(r"(?i)<h{}[^>]*>", i + 1)).unwrap())
         })
     }
 
     pub fn h_close() -> &'static [Regex; 6] {
         H_CLOSE.get_or_init(|| {
-            std::array::from_fn(|i| {
-                Regex::new(&format!(r"(?i)</h{}>", i + 1)).unwrap()
-            })
+            std::array::from_fn(|i| Regex::new(&format!(r"(?i)</h{}>", i + 1)).unwrap())
         })
     }
 }
@@ -209,7 +205,9 @@ fn html_to_text(html: &str) -> String {
     text = text.replace("&quot;", "\"");
     text = text.replace("&#39;", "'");
 
-    text = html_regex::whitespace().replace_all(&text, "\n\n").to_string();
+    text = html_regex::whitespace()
+        .replace_all(&text, "\n\n")
+        .to_string();
 
     text.trim().to_string()
 }
@@ -234,7 +232,9 @@ fn html_to_markdown(html: &str) -> String {
     md = html_regex::strong().replace_all(&md, "**$1**").to_string();
     md = html_regex::em().replace_all(&md, "*$1*").to_string();
     md = html_regex::code().replace_all(&md, "`$1`").to_string();
-    md = html_regex::pre_code().replace_all(&md, "\n```\n$1\n```\n").to_string();
+    md = html_regex::pre_code()
+        .replace_all(&md, "\n```\n$1\n```\n")
+        .to_string();
     md = html_regex::li().replace_all(&md, "\n- ").to_string();
 
     md = md.replace("<br>", "\n");
@@ -251,7 +251,9 @@ fn html_to_markdown(html: &str) -> String {
     md = md.replace("&quot;", "\"");
     md = md.replace("&#39;", "'");
 
-    md = html_regex::whitespace().replace_all(&md, "\n\n").to_string();
+    md = html_regex::whitespace()
+        .replace_all(&md, "\n\n")
+        .to_string();
 
     md.trim().to_string()
 }
