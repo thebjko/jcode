@@ -4367,16 +4367,7 @@ impl App {
 
         // Shift+Enter: does opposite of queue_mode during processing
         if code == KeyCode::Enter && modifiers.contains(KeyModifiers::SHIFT) {
-            if !self.input.is_empty() {
-                match self.send_action(true) {
-                    SendAction::Submit => self.submit_input(),
-                    SendAction::Queue => self.queue_message(),
-                    SendAction::Interleave => {
-                        let prepared = input::take_prepared_input(self);
-                        input::stage_local_interleave(self, prepared.expanded);
-                    }
-                }
-            }
+            input::handle_shift_enter(self);
             return Ok(());
         }
 
@@ -4395,109 +4386,13 @@ impl App {
             }
         }
 
-        match code {
-            KeyCode::Enter => {
-                if self.activate_model_picker_from_preview() {
-                    return Ok(());
-                }
-                if !self.input.is_empty() {
-                    match self.send_action(false) {
-                        SendAction::Submit => self.submit_input(),
-                        SendAction::Queue => self.queue_message(),
-                        SendAction::Interleave => {
-                            let prepared = input::take_prepared_input(self);
-                            input::stage_local_interleave(self, prepared.expanded);
-                        }
-                    }
-                }
-            }
-            KeyCode::Char(c) => {
-                if self.input.is_empty() && !self.is_processing && self.display_messages.is_empty()
-                {
-                    if let Some(digit) = c.to_digit(10) {
-                        let suggestions = self.suggestion_prompts();
-                        let idx = digit as usize;
-                        if idx >= 1 && idx <= suggestions.len() {
-                            let (_label, prompt) = &suggestions[idx - 1];
-                            if !prompt.starts_with('/') {
-                                self.input = prompt.clone();
-                                self.cursor_pos = self.input.len();
-                                self.follow_chat_bottom();
-                                return Ok(());
-                            }
-                        }
-                    }
-                }
-                self.input.insert(self.cursor_pos, c);
-                self.cursor_pos += c.len_utf8();
-                self.reset_tab_completion();
-                self.sync_model_picker_preview_from_input();
-            }
-            KeyCode::Backspace => {
-                if self.cursor_pos > 0 {
-                    let prev = super::core::prev_char_boundary(&self.input, self.cursor_pos);
-                    self.input.drain(prev..self.cursor_pos);
-                    self.cursor_pos = prev;
-                    self.reset_tab_completion();
-                    self.sync_model_picker_preview_from_input();
-                }
-            }
-            KeyCode::Delete => {
-                if self.cursor_pos < self.input.len() {
-                    let next = super::core::next_char_boundary(&self.input, self.cursor_pos);
-                    self.input.drain(self.cursor_pos..next);
-                    self.reset_tab_completion();
-                    self.sync_model_picker_preview_from_input();
-                }
-            }
-            KeyCode::Left => {
-                if self.cursor_pos > 0 {
-                    self.cursor_pos = super::core::prev_char_boundary(&self.input, self.cursor_pos);
-                }
-            }
-            KeyCode::Right => {
-                if self.cursor_pos < self.input.len() {
-                    self.cursor_pos = super::core::next_char_boundary(&self.input, self.cursor_pos);
-                }
-            }
-            KeyCode::Home => self.cursor_pos = 0,
-            KeyCode::End => self.cursor_pos = self.input.len(),
-            KeyCode::Tab => {
-                // Autocomplete command suggestions
-                self.autocomplete();
-            }
-            KeyCode::Up | KeyCode::PageUp => {
-                let inc = if code == KeyCode::PageUp { 10 } else { 1 };
-                self.scroll_up(inc);
-            }
-            KeyCode::Down | KeyCode::PageDown => {
-                let dec = if code == KeyCode::PageDown { 10 } else { 1 };
-                self.scroll_down(dec);
-            }
-            KeyCode::Esc => {
-                if self
-                    .picker_state
-                    .as_ref()
-                    .map(|p| p.preview)
-                    .unwrap_or(false)
-                {
-                    self.picker_state = None;
-                    self.input.clear();
-                    self.cursor_pos = 0;
-                } else if self.is_processing {
-                    // Interrupt generation
-                    self.cancel_requested = true;
-                    self.interleave_message = None;
-                    self.pending_soft_interrupts.clear();
-                } else {
-                    // Reset scroll to bottom and clear input
-                    self.follow_chat_bottom();
-                    self.input.clear();
-                    self.cursor_pos = 0;
-                    self.sync_model_picker_preview_from_input();
-                }
-            }
-            _ => {}
+        if code == KeyCode::Enter {
+            input::handle_enter(self);
+            return Ok(());
+        }
+
+        if input::handle_basic_key(self, code) {
+            return Ok(());
         }
 
         Ok(())

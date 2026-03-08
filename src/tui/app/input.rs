@@ -1,4 +1,5 @@
 use super::{App, SendAction};
+use crossterm::event::KeyCode;
 
 pub(super) struct PreparedInput {
     pub raw_input: String,
@@ -136,6 +137,140 @@ pub(super) fn send_action(app: &App, shift: bool) -> SendAction {
         SendAction::Queue
     } else {
         SendAction::Interleave
+    }
+}
+
+pub(super) fn handle_shift_enter(app: &mut App) {
+    if app.input.is_empty() {
+        return;
+    }
+    match send_action(app, true) {
+        SendAction::Submit => app.submit_input(),
+        SendAction::Queue => queue_message(app),
+        SendAction::Interleave => {
+            let prepared = take_prepared_input(app);
+            stage_local_interleave(app, prepared.expanded);
+        }
+    }
+}
+
+pub(super) fn handle_enter(app: &mut App) -> bool {
+    if app.activate_model_picker_from_preview() {
+        return true;
+    }
+    if !app.input.is_empty() {
+        match send_action(app, false) {
+            SendAction::Submit => app.submit_input(),
+            SendAction::Queue => queue_message(app),
+            SendAction::Interleave => {
+                let prepared = take_prepared_input(app);
+                stage_local_interleave(app, prepared.expanded);
+            }
+        }
+    }
+    true
+}
+
+pub(super) fn handle_basic_key(app: &mut App, code: KeyCode) -> bool {
+    match code {
+        KeyCode::Char(c) => {
+            if app.input.is_empty() && !app.is_processing && app.display_messages.is_empty() {
+                if let Some(digit) = c.to_digit(10) {
+                    let suggestions = app.suggestion_prompts();
+                    let idx = digit as usize;
+                    if idx >= 1 && idx <= suggestions.len() {
+                        let (_label, prompt) = &suggestions[idx - 1];
+                        if !prompt.starts_with('/') {
+                            app.input = prompt.clone();
+                            app.cursor_pos = app.input.len();
+                            app.follow_chat_bottom();
+                            return true;
+                        }
+                    }
+                }
+            }
+            app.input.insert(app.cursor_pos, c);
+            app.cursor_pos += c.len_utf8();
+            app.reset_tab_completion();
+            app.sync_model_picker_preview_from_input();
+            true
+        }
+        KeyCode::Backspace => {
+            if app.cursor_pos > 0 {
+                let prev = super::super::core::prev_char_boundary(&app.input, app.cursor_pos);
+                app.input.drain(prev..app.cursor_pos);
+                app.cursor_pos = prev;
+                app.reset_tab_completion();
+                app.sync_model_picker_preview_from_input();
+            }
+            true
+        }
+        KeyCode::Delete => {
+            if app.cursor_pos < app.input.len() {
+                let next = super::super::core::next_char_boundary(&app.input, app.cursor_pos);
+                app.input.drain(app.cursor_pos..next);
+                app.reset_tab_completion();
+                app.sync_model_picker_preview_from_input();
+            }
+            true
+        }
+        KeyCode::Left => {
+            if app.cursor_pos > 0 {
+                app.cursor_pos = super::super::core::prev_char_boundary(&app.input, app.cursor_pos);
+            }
+            true
+        }
+        KeyCode::Right => {
+            if app.cursor_pos < app.input.len() {
+                app.cursor_pos = super::super::core::next_char_boundary(&app.input, app.cursor_pos);
+            }
+            true
+        }
+        KeyCode::Home => {
+            app.cursor_pos = 0;
+            true
+        }
+        KeyCode::End => {
+            app.cursor_pos = app.input.len();
+            true
+        }
+        KeyCode::Tab => {
+            app.autocomplete();
+            true
+        }
+        KeyCode::Up | KeyCode::PageUp => {
+            let inc = if code == KeyCode::PageUp { 10 } else { 1 };
+            app.scroll_up(inc);
+            true
+        }
+        KeyCode::Down | KeyCode::PageDown => {
+            let dec = if code == KeyCode::PageDown { 10 } else { 1 };
+            app.scroll_down(dec);
+            true
+        }
+        KeyCode::Esc => {
+            if app
+                .picker_state
+                .as_ref()
+                .map(|p| p.preview)
+                .unwrap_or(false)
+            {
+                app.picker_state = None;
+                app.input.clear();
+                app.cursor_pos = 0;
+            } else if app.is_processing {
+                app.cancel_requested = true;
+                app.interleave_message = None;
+                app.pending_soft_interrupts.clear();
+            } else {
+                app.follow_chat_bottom();
+                app.input.clear();
+                app.cursor_pos = 0;
+                app.sync_model_picker_preview_from_input();
+            }
+            true
+        }
+        _ => false,
     }
 }
 
