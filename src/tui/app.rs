@@ -32,6 +32,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tokio::time::interval;
 
+mod input;
 mod local;
 mod remote;
 mod replay;
@@ -4522,119 +4523,22 @@ impl App {
     /// then falls back to HTML clipboard for <img> URLs, then arboard text.
     /// Used by both Ctrl+V and Alt+V handlers in both local and remote mode.
     fn paste_image_from_clipboard(&mut self) {
-        if let Some((media_type, base64_data)) = clipboard_image() {
-            let size_kb = base64_data.len() / 1024;
-            self.pending_images.push((media_type.clone(), base64_data));
-            let n = self.pending_images.len();
-            let placeholder = format!("[image {}]", n);
-            self.input.insert_str(self.cursor_pos, &placeholder);
-            self.cursor_pos += placeholder.len();
-            self.sync_model_picker_preview_from_input();
-            self.set_status_notice(&format!("Pasted {} ({} KB)", media_type, size_kb));
-        } else if let Ok(mut cb) = arboard::Clipboard::new() {
-            if let Ok(text) = cb.get_text() {
-                if let Some(url) = extract_image_url(&text) {
-                    self.set_status_notice("Downloading image...");
-                    if let Some((media_type, base64_data)) = download_image_url(&url) {
-                        let size_kb = base64_data.len() / 1024;
-                        self.pending_images.push((media_type.clone(), base64_data));
-                        let n = self.pending_images.len();
-                        let placeholder = format!("[image {}]", n);
-                        self.input.insert_str(self.cursor_pos, &placeholder);
-                        self.cursor_pos += placeholder.len();
-                        self.sync_model_picker_preview_from_input();
-                        self.set_status_notice(&format!("Pasted {} ({} KB)", media_type, size_kb));
-                    } else {
-                        self.set_status_notice("Failed to download image");
-                    }
-                } else {
-                    self.handle_paste(text);
-                }
-            } else {
-                self.set_status_notice("No image in clipboard");
-            }
-        } else {
-            self.set_status_notice("No image in clipboard");
-        }
+        input::paste_image_from_clipboard(self);
     }
 
     /// Queue a message to be sent later
     /// Handle bracketed paste: store text content (image URLs are still detected inline)
     fn handle_paste(&mut self, text: String) {
-        // Note: clipboard_image() is NOT checked here. Bracketed paste events from the
-        // terminal always deliver text. Checking clipboard_image() here caused a bug where
-        // text pastes were misidentified as images when the clipboard also had image data
-        // (common on Wayland where apps advertise multiple MIME types). Image pasting is
-        // handled by paste_image_from_clipboard() (Ctrl+V / Alt+V) instead.
-
-        // Check if pasted text contains an image URL (e.g., Discord <img src="...">)
-        if let Some(url) = extract_image_url(&text) {
-            crate::logging::info(&format!("Downloading image from pasted URL: {}", url));
-            self.set_status_notice("Downloading image...");
-            if let Some((media_type, base64_data)) = download_image_url(&url) {
-                let size_kb = base64_data.len() / 1024;
-                self.pending_images.push((media_type.clone(), base64_data));
-                let n = self.pending_images.len();
-                let placeholder = format!("[image {}]", n);
-                self.input.insert_str(self.cursor_pos, &placeholder);
-                self.cursor_pos += placeholder.len();
-                self.sync_model_picker_preview_from_input();
-                self.set_status_notice(&format!("Pasted {} ({} KB)", media_type, size_kb));
-                return;
-            } else {
-                self.set_status_notice("Failed to download image");
-            }
-        }
-
-        crate::logging::info(&format!(
-            "Text paste: {} chars, {} lines",
-            text.len(),
-            text.lines().count()
-        ));
-
-        let line_count = text.lines().count().max(1);
-        if line_count < 5 {
-            self.input.insert_str(self.cursor_pos, &text);
-            self.cursor_pos += text.len();
-        } else {
-            self.pasted_contents.push(text);
-            let placeholder = format!(
-                "[pasted {} line{}]",
-                line_count,
-                if line_count == 1 { "" } else { "s" }
-            );
-            self.input.insert_str(self.cursor_pos, &placeholder);
-            self.cursor_pos += placeholder.len();
-        }
-        self.sync_model_picker_preview_from_input();
+        input::handle_paste(self, text);
     }
 
     /// Expand paste placeholders in input with actual content
     fn expand_paste_placeholders(&mut self, input: &str) -> String {
-        let mut result = input.to_string();
-        // Replace placeholders in reverse order to preserve indices
-        for content in self.pasted_contents.iter().rev() {
-            let line_count = content.lines().count().max(1);
-            let placeholder = format!(
-                "[pasted {} line{}]",
-                line_count,
-                if line_count == 1 { "" } else { "s" }
-            );
-            // Use rfind to match last occurrence (since we iterate in reverse)
-            if let Some(pos) = result.rfind(&placeholder) {
-                result.replace_range(pos..pos + placeholder.len(), content);
-            }
-        }
-        result
+        input::expand_paste_placeholders(self, input)
     }
 
     fn queue_message(&mut self) {
-        let content = std::mem::take(&mut self.input);
-        let expanded = self.expand_paste_placeholders(&content);
-        self.pasted_contents.clear();
-        self.pending_images.clear();
-        self.cursor_pos = 0;
-        self.queued_messages.push(expanded);
+        input::queue_message(self);
     }
 
     /// Send an interleave message immediately to the server as a soft interrupt.
@@ -4651,55 +4555,11 @@ impl App {
     /// Priority: pending soft interrupts first, then interleave, then queued.
     /// Returns true if pending soft interrupts were retrieved (caller should cancel on server).
     fn retrieve_pending_message_for_edit(&mut self) -> bool {
-        if !self.input.is_empty() {
-            return false;
-        }
-        let mut parts: Vec<String> = Vec::new();
-        let mut had_pending = false;
-
-        if !self.pending_soft_interrupts.is_empty() {
-            parts.extend(std::mem::take(&mut self.pending_soft_interrupts));
-            had_pending = true;
-        }
-        if let Some(msg) = self.interleave_message.take() {
-            if !msg.is_empty() {
-                parts.push(msg);
-            }
-        }
-        parts.extend(std::mem::take(&mut self.queued_messages));
-
-        if !parts.is_empty() {
-            self.input = parts.join("\n\n");
-            self.cursor_pos = self.input.len();
-            let count = parts.len();
-            self.set_status_notice(&format!(
-                "Retrieved {} pending message{} for editing",
-                count,
-                if count == 1 { "" } else { "s" }
-            ));
-        }
-        had_pending
+        input::retrieve_pending_message_for_edit(self)
     }
 
     fn send_action(&self, shift: bool) -> SendAction {
-        if !self.is_processing {
-            return SendAction::Submit;
-        }
-        // Slash commands should always be processed immediately, not queued/interleaved
-        if self.input.trim().starts_with('/') {
-            return SendAction::Submit;
-        }
-        if shift {
-            if self.queue_mode {
-                SendAction::Interleave
-            } else {
-                SendAction::Queue
-            }
-        } else if self.queue_mode {
-            SendAction::Queue
-        } else {
-            SendAction::Interleave
-        }
+        input::send_action(self, shift)
     }
 
     fn insert_thought_line(&mut self, line: String) {
