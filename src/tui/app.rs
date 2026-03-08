@@ -4114,337 +4114,42 @@ impl App {
 
     /// Run the TUI in remote mode, connecting to a server
     pub async fn run_remote(mut self, mut terminal: DefaultTerminal) -> Result<RunResult> {
-        use super::backend::RemoteConnection;
-
         let mut event_stream = EventStream::new();
         let mut redraw_period = super::redraw_interval(&self);
         let mut redraw_interval = interval(redraw_period);
-        let mut reconnect_attempts = 0u32;
-        let mut disconnect_msg_idx: Option<usize> = None;
-        let mut disconnect_start: Option<std::time::Instant> = None;
+        let mut remote_state = remote::RemoteRunState::default();
 
         'outer: loop {
             let session_to_resume = self.reconnect_target_session_id();
 
-            let mut remote = match RemoteConnection::connect_with_session(
+            let mut remote = match remote::connect_with_retry(
+                &mut self,
+                &mut terminal,
+                &mut event_stream,
+                &mut remote_state,
                 session_to_resume.as_deref(),
             )
-            .await
+            .await?
             {
-                Ok(r) => {
-                    if let Some(idx) = disconnect_msg_idx.take() {
-                        if idx < self.display_messages.len() {
-                            self.display_messages.remove(idx);
-                        }
-                    }
-                    disconnect_start = None;
-                    r
-                }
-                Err(e) => {
-                    if reconnect_attempts == 0 && !self.server_spawning {
-                        return Err(anyhow::anyhow!(
-                            "Failed to connect to server. Is `jcode serve` running? Error: {}",
-                            e
-                        ));
-                    }
-                    // When server_spawning, treat the first failure as a reconnect
-                    // so the TUI shows while we wait for the server to start
-                    let is_initial_server_start = self.server_spawning && reconnect_attempts == 0;
-                    if self.server_spawning && reconnect_attempts == 0 {
-                        reconnect_attempts = 1;
-                        self.server_spawning = false;
-                    }
-                    reconnect_attempts += 1;
-
-                    let elapsed = disconnect_start
-                        .get_or_insert_with(std::time::Instant::now)
-                        .elapsed();
-                    let elapsed_str = if elapsed.as_secs() < 60 {
-                        format!("{}s", elapsed.as_secs())
-                    } else {
-                        format!("{}m {}s", elapsed.as_secs() / 60, elapsed.as_secs() % 60)
-                    };
-
-                    let session_name = self
-                        .remote_session_id
-                        .as_ref()
-                        .and_then(|id| crate::id::extract_session_name(id))
-                        .or_else(|| {
-                            self.resume_session_id
-                                .as_ref()
-                                .and_then(|id| crate::id::extract_session_name(id))
-                        });
-                    let resume_hint = if let Some(name) = &session_name {
-                        format!("  Resume later: jcode --resume {}", name)
-                    } else {
-                        String::new()
-                    };
-
-                    let msg_content = if is_initial_server_start {
-                        "⏳ Starting server...".to_string()
-                    } else {
-                        format!(
-                            "⚡ Connection lost — retrying ({})\n  {}\n{}",
-                            elapsed_str, e, resume_hint,
-                        )
-                    };
-
-                    if let Some(idx) = disconnect_msg_idx {
-                        if idx < self.display_messages.len() {
-                            self.display_messages[idx].content = msg_content;
-                        }
-                    } else {
-                        self.push_display_message(DisplayMessage {
-                            role: "system".to_string(),
-                            content: msg_content,
-                            tool_calls: Vec::new(),
-                            duration_secs: None,
-                            title: None,
-                            tool_data: None,
-                        });
-                        disconnect_msg_idx = Some(self.display_messages.len() - 1);
-                    }
-                    terminal.draw(|frame| crate::tui::ui::draw(frame, &self))?;
-
-                    let backoff = if reconnect_attempts <= 2 {
-                        // Fast retries for the first couple attempts (likely a reload)
-                        Duration::from_millis(100)
-                    } else {
-                        // Exponential backoff for persistent disconnects
-                        Duration::from_secs((1u64 << (reconnect_attempts - 2).min(5)).min(30))
-                    };
-                    let sleep = tokio::time::sleep(backoff);
-                    tokio::pin!(sleep);
-                    loop {
-                        tokio::select! {
-                            _ = &mut sleep => break,
-                            event = event_stream.next() => {
-                                if let Some(Ok(Event::Key(key))) = event {
-                                    if key.kind == KeyEventKind::Press {
-                                        if key.code == KeyCode::Char('c')
-                                            && key.modifiers.contains(KeyModifiers::CONTROL)
-                                        {
-                                            break 'outer;
-                                        }
-                                        if let Some(amount) = self
-                                            .scroll_keys
-                                            .scroll_amount(key.code.clone(), key.modifiers)
-                                        {
-                                            if amount < 0 {
-                                                self.scroll_up((-amount) as usize);
-                                            } else {
-                                                self.scroll_down(amount as usize);
-                                            }
-                                            terminal
-                                                .draw(|frame| crate::tui::ui::draw(frame, &self))?;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    continue;
-                }
+                remote::ConnectOutcome::Connected(remote) => remote,
+                remote::ConnectOutcome::Retry => continue,
+                remote::ConnectOutcome::Quit => break 'outer,
             };
 
-            crate::logging::info(&format!(
-                "Reload check: session_to_resume={:?}, remote_session_id={:?}, reconnect_attempts={}",
-                session_to_resume, self.remote_session_id, reconnect_attempts
-            ));
-            let has_reload_ctx_for_session = session_to_resume
-                .as_deref()
-                .and_then(|sid| {
-                    let result = ReloadContext::peek_for_session(sid);
-                    crate::logging::info(&format!(
-                        "Reload peek_for_session({}) = {:?}",
-                        sid,
-                        result.as_ref().map(|r| r.is_some())
-                    ));
-                    result.ok().flatten()
-                })
-                .is_some();
-
-            // Check for per-session client-reload-pending marker (written when a
-            // client re-exec breaks out before queuing the continuation message).
-            let has_client_reload_marker = session_to_resume
-                .as_deref()
-                .and_then(|sid| {
-                    let jcode_dir = crate::storage::jcode_dir().ok()?;
-                    let marker = jcode_dir.join(format!("client-reload-pending-{}", sid));
-                    if marker.exists() {
-                        let info = std::fs::read_to_string(&marker).ok()?;
-                        let _ = std::fs::remove_file(&marker);
-                        crate::logging::info(&format!(
-                            "Found client-reload-pending marker for {}, injecting reload info",
-                            sid
-                        ));
-                        if self.reload_info.is_empty() {
-                            for line in info.lines() {
-                                let trimmed = line.trim();
-                                if !trimmed.is_empty() {
-                                    self.reload_info.push(trimmed.to_string());
-                                }
-                            }
-                        }
-                        Some(())
-                    } else {
-                        None
-                    }
-                })
-                .is_some();
-
-            // Show reconnection message if applicable
-            if reconnect_attempts > 0 {
-                if self.reload_info.is_empty() {
-                    if let Ok(jcode_dir) = crate::storage::jcode_dir() {
-                        let info_path = jcode_dir.join("reload-info");
-                        if info_path.exists() {
-                            if let Ok(info) = std::fs::read_to_string(&info_path) {
-                                let _ = std::fs::remove_file(&info_path);
-                                let trimmed = info.trim();
-                                if let Some(hash) = trimmed.strip_prefix("reload:") {
-                                    self.reload_info
-                                        .push(format!("Reloaded with build {}", hash.trim()));
-                                } else if let Some(hash) = trimmed.strip_prefix("rebuild:") {
-                                    self.reload_info
-                                        .push(format!("Rebuilt and reloaded ({})", hash.trim()));
-                                } else if !trimmed.is_empty() {
-                                    self.reload_info.push(trimmed.to_string());
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Check if client also needs to reload (newer binary available)
-                if self.has_newer_binary() {
-                    self.push_display_message(DisplayMessage::system(
-                        "Server reloaded. Reloading client with newer binary...".to_string(),
-                    ));
-                    terminal.draw(|frame| crate::tui::ui::draw(frame, &self))?;
-                    let session_id = self
-                        .remote_session_id
-                        .clone()
-                        .unwrap_or_else(|| crate::id::new_id("ses"));
-                    // Save a per-session marker so the re-exec'd client knows to
-                    // send a reload continuation message.  Without this, the
-                    // continuation is lost because we break out before queuing it,
-                    // and the re-exec'd client connects fresh (reconnect_attempts=0)
-                    // with no reload-info file (already consumed above).
-                    if has_reload_ctx_for_session || !self.reload_info.is_empty() {
-                        if let Ok(jcode_dir) = crate::storage::jcode_dir() {
-                            let marker =
-                                jcode_dir.join(format!("client-reload-pending-{}", session_id));
-                            let info = if self.reload_info.is_empty() {
-                                "reload".to_string()
-                            } else {
-                                self.reload_info.join("\n")
-                            };
-                            let _ = std::fs::write(&marker, &info);
-                            crate::logging::info(&format!(
-                                "Wrote client-reload-pending marker for {} before re-exec",
-                                session_id
-                            ));
-                        }
-                    }
-                    self.save_input_for_reload(&session_id);
-                    self.reload_requested = Some(session_id);
-                    self.should_quit = true;
-                    break 'outer;
-                }
-
-                // Build success message with reload info if available
-                let reload_details = if !self.reload_info.is_empty() {
-                    format!("\n  {}", self.reload_info.join("\n  "))
-                } else if has_reload_ctx_for_session {
-                    "\n  Reload context restored".to_string()
-                } else {
-                    String::new()
-                };
-
-                self.push_display_message(DisplayMessage::system(format!(
-                    "✓ Reconnected successfully.{}",
-                    reload_details
-                )));
+            match remote::handle_post_connect(
+                &mut self,
+                &mut terminal,
+                &mut remote,
+                &mut remote_state,
+                session_to_resume.as_deref(),
+            )
+            .await?
+            {
+                remote::PostConnectOutcome::Ready => {}
+                remote::PostConnectOutcome::Quit => break 'outer,
             }
-
-            // Queue message to notify the agent about reload completion.
-            // Only queue a continuation for the session that actually initiated
-            // the reload (has_reload_ctx_for_session) or was explicitly marked
-            // for continuation (has_client_reload_marker). Other sessions that
-            // reconnect after a server restart should NOT get a continuation
-            // prompt - they were idle and have nothing to continue.
-            let should_queue_reload_continuation =
-                has_reload_ctx_for_session || has_client_reload_marker;
-            crate::logging::info(&format!(
-                "Reload continuation check: should_queue={}, reload_info_empty={}, has_ctx={}, has_marker={}",
-                should_queue_reload_continuation,
-                self.reload_info.is_empty(),
-                has_reload_ctx_for_session,
-                has_client_reload_marker
-            ));
-            if should_queue_reload_continuation {
-                let reload_ctx = session_to_resume.as_deref().and_then(|sid| {
-                    let result = ReloadContext::load_for_session(sid);
-                    crate::logging::info(&format!(
-                        "Reload load_for_session({}) = {:?}",
-                        sid,
-                        result.as_ref().map(|r| r.is_some())
-                    ));
-                    result.ok().flatten()
-                });
-
-                if let Some(ctx) = reload_ctx {
-                    let task_info = ctx
-                        .task_context
-                        .map(|t| format!("\nTask context: {}", t))
-                        .unwrap_or_default();
-
-                    let continuation_msg = format!(
-                        "[SYSTEM: Reload succeeded. Build {} → {}.{}\nIMPORTANT: The reload is done. You MUST immediately continue your work. Do NOT ask the user what to do next. Do NOT summarize what happened. Just pick up exactly where you left off and keep going.]",
-                        ctx.version_before,
-                        ctx.version_after,
-                        task_info
-                    );
-
-                    crate::logging::info(&format!(
-                        "Queuing reload continuation message ({} chars)",
-                        continuation_msg.len()
-                    ));
-                    self.queued_messages.push(continuation_msg);
-                } else {
-                    crate::logging::warn(
-                        "Reload context expected but not found (race condition?), skipping continuation"
-                    );
-                }
-                self.reload_info.clear();
-            }
-
-            // Reset reconnect counter after handling reconnection
-            reconnect_attempts = 0;
 
             let mut bus_receiver_remote = Bus::global().subscribe();
-
-            // Wait for the History event before drawing so the first frame
-            // shows the real provider/model rather than "unknown".
-            // Use a generous timeout: selfdev connections may take several
-            // seconds when MCP servers or tools need initialisation.
-            {
-                let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(8);
-                while !remote.has_loaded_history() {
-                    let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-                    if remaining.is_zero() {
-                        crate::logging::warn("Timed out waiting for History event from server");
-                        break;
-                    }
-                    match tokio::time::timeout(remaining, remote.next_event()).await {
-                        Ok(Some(ev)) => {
-                            self.handle_server_event(ev, &mut remote);
-                        }
-                        _ => break,
-                    }
-                }
-            }
 
             // Main event loop
             loop {
@@ -4586,7 +4291,7 @@ impl App {
                                 self.streaming_tps_elapsed = Duration::ZERO;
                                 self.is_processing = false;
                                 self.status = ProcessingStatus::Idle;
-                                disconnect_start = Some(std::time::Instant::now());
+                                remote_state.disconnect_start = Some(std::time::Instant::now());
                                 self.push_display_message(DisplayMessage {
                                     role: "system".to_string(),
                                     content: "⚡ Connection lost — reconnecting…".to_string(),
@@ -4595,9 +4300,10 @@ impl App {
                                     title: None,
                                     tool_data: None,
                                 });
-                                disconnect_msg_idx = Some(self.display_messages.len() - 1);
+                                remote_state.disconnect_msg_idx =
+                                    Some(self.display_messages.len() - 1);
                                 terminal.draw(|frame| crate::tui::ui::draw(frame, &self))?;
-                                reconnect_attempts = 1;
+                                remote_state.reconnect_attempts = 1;
                                 continue 'outer;
                             }
                             Some(server_event) => {
