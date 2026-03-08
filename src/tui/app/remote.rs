@@ -475,44 +475,8 @@ pub(super) async fn handle_remote_event(
 ) -> Result<RemoteEventOutcome> {
     match event {
         None => {
-            app.rate_limit_pending_message = None;
-            app.current_message_id = None;
-            app.last_stream_activity = None;
-            if let Some(chunk) = app.stream_buffer.flush() {
-                app.streaming_text.push_str(&chunk);
-            }
-            if !app.streaming_text.is_empty() {
-                let content = app.take_streaming_text();
-                app.push_display_message(DisplayMessage {
-                    role: "assistant".to_string(),
-                    content,
-                    tool_calls: vec![],
-                    duration_secs: None,
-                    title: None,
-                    tool_data: None,
-                });
-            }
-            app.clear_streaming_render_state();
-            app.streaming_tool_calls.clear();
-            app.thought_line_inserted = false;
-            app.thinking_prefix_emitted = false;
-            app.thinking_buffer.clear();
-            app.streaming_tps_start = None;
-            app.streaming_tps_elapsed = Duration::ZERO;
-            app.is_processing = false;
-            app.status = ProcessingStatus::Idle;
-            state.disconnect_start = Some(Instant::now());
-            app.push_display_message(DisplayMessage {
-                role: "system".to_string(),
-                content: "⚡ Connection lost — reconnecting…".to_string(),
-                tool_calls: Vec::new(),
-                duration_secs: None,
-                title: None,
-                tool_data: None,
-            });
-            state.disconnect_msg_idx = Some(app.display_messages.len() - 1);
+            handle_disconnect(app, state);
             terminal.draw(|frame| crate::tui::ui::draw(frame, app))?;
-            state.reconnect_attempts = 1;
             Ok(RemoteEventOutcome::Reconnect)
         }
         Some(ServerEvent::ClientDebugRequest { id, command }) => {
@@ -527,6 +491,46 @@ pub(super) async fn handle_remote_event(
             Ok(RemoteEventOutcome::Continue)
         }
     }
+}
+
+pub(super) fn handle_disconnect(app: &mut App, state: &mut RemoteRunState) {
+    app.rate_limit_pending_message = None;
+    app.current_message_id = None;
+    app.last_stream_activity = None;
+    if let Some(chunk) = app.stream_buffer.flush() {
+        app.streaming_text.push_str(&chunk);
+    }
+    if !app.streaming_text.is_empty() {
+        let content = app.take_streaming_text();
+        app.push_display_message(DisplayMessage {
+            role: "assistant".to_string(),
+            content,
+            tool_calls: vec![],
+            duration_secs: None,
+            title: None,
+            tool_data: None,
+        });
+    }
+    app.clear_streaming_render_state();
+    app.streaming_tool_calls.clear();
+    app.thought_line_inserted = false;
+    app.thinking_prefix_emitted = false;
+    app.thinking_buffer.clear();
+    app.streaming_tps_start = None;
+    app.streaming_tps_elapsed = Duration::ZERO;
+    app.is_processing = false;
+    app.status = ProcessingStatus::Idle;
+    state.disconnect_start = Some(Instant::now());
+    app.push_display_message(DisplayMessage {
+        role: "system".to_string(),
+        content: "⚡ Connection lost — reconnecting…".to_string(),
+        tool_calls: Vec::new(),
+        duration_secs: None,
+        title: None,
+        tool_data: None,
+    });
+    state.disconnect_msg_idx = Some(app.display_messages.len() - 1);
+    state.reconnect_attempts = 1;
 }
 
 async fn process_remote_followups(app: &mut App, remote: &mut RemoteConnection) {
