@@ -9,6 +9,36 @@ use anyhow::Result;
 use crossterm::event::{KeyCode, KeyModifiers};
 use std::time::{Duration, Instant};
 
+pub(super) async fn begin_remote_send(
+    app: &mut App,
+    remote: &mut RemoteConnection,
+    content: String,
+    images: Vec<(String, String)>,
+    is_system: bool,
+) -> Result<u64> {
+    let msg_id = remote
+        .send_message_with_images(content.clone(), images.clone())
+        .await?;
+    app.current_message_id = Some(msg_id);
+    app.is_processing = true;
+    app.status = ProcessingStatus::Sending;
+    app.processing_started = Some(Instant::now());
+    app.last_stream_activity = Some(Instant::now());
+    app.streaming_tps_start = None;
+    app.streaming_tps_elapsed = Duration::ZERO;
+    app.streaming_total_output_tokens = 0;
+    app.thought_line_inserted = false;
+    app.thinking_prefix_emitted = false;
+    app.thinking_buffer.clear();
+    app.rate_limit_pending_message = Some(super::PendingRemoteMessage {
+        content,
+        images,
+        is_system,
+    });
+    remote.reset_call_output_tokens_seen();
+    Ok(msg_id)
+}
+
 pub(super) fn handle_server_event(
     app: &mut App,
     event: ServerEvent,
@@ -732,6 +762,26 @@ pub(super) fn handle_remote_char_input(app: &mut App, c: char) {
     app.follow_chat_bottom();
     app.reset_tab_completion();
     app.sync_model_picker_preview_from_input();
+}
+
+pub(super) async fn send_interleave_now(
+    app: &mut App,
+    content: String,
+    remote: &mut RemoteConnection,
+) {
+    if content.trim().is_empty() {
+        return;
+    }
+    let msg_clone = content.clone();
+    if let Err(e) = remote.soft_interrupt(content, false).await {
+        app.push_display_message(DisplayMessage::error(format!(
+            "Failed to send interleave: {}",
+            e
+        )));
+    } else {
+        app.pending_soft_interrupts.push(msg_clone);
+        app.set_status_notice("⏭ Interleave sent");
+    }
 }
 
 pub(super) async fn handle_remote_key(

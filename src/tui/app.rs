@@ -850,27 +850,7 @@ impl App {
         images: Vec<(String, String)>,
         is_system: bool,
     ) -> Result<u64> {
-        let msg_id = remote
-            .send_message_with_images(content.clone(), images.clone())
-            .await?;
-        self.current_message_id = Some(msg_id);
-        self.is_processing = true;
-        self.status = ProcessingStatus::Sending;
-        self.processing_started = Some(Instant::now());
-        self.last_stream_activity = Some(Instant::now());
-        self.streaming_tps_start = None;
-        self.streaming_tps_elapsed = Duration::ZERO;
-        self.streaming_total_output_tokens = 0;
-        self.thought_line_inserted = false;
-        self.thinking_prefix_emitted = false;
-        self.thinking_buffer.clear();
-        self.rate_limit_pending_message = Some(PendingRemoteMessage {
-            content,
-            images,
-            is_system,
-        });
-        remote.reset_call_output_tokens_seen();
-        Ok(msg_id)
+        remote::begin_remote_send(self, remote, content, images, is_system).await
     }
 
     pub fn new(provider: Arc<dyn Provider>, registry: Registry) -> Self {
@@ -5676,19 +5656,7 @@ impl App {
         content: String,
         remote: &mut super::backend::RemoteConnection,
     ) {
-        if content.trim().is_empty() {
-            return;
-        }
-        let msg_clone = content.clone();
-        if let Err(e) = remote.soft_interrupt(content, false).await {
-            self.push_display_message(DisplayMessage::error(format!(
-                "Failed to send interleave: {}",
-                e
-            )));
-        } else {
-            self.pending_soft_interrupts.push(msg_clone);
-            self.set_status_notice("⏭ Interleave sent");
-        }
+        remote::send_interleave_now(self, content, remote).await;
     }
 
     /// Retrieve all pending unsent messages into the input for editing.
