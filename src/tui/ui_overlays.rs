@@ -160,6 +160,10 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: usize, ap
         "/fix",
         "Attempt recovery when model cannot continue",
     ));
+    lines.push(help_entry(
+        "/poke",
+        "Remind model to finish incomplete todos",
+    ));
     lines.push(help_entry("/split", "Clone session into a new window"));
     lines.push(help_entry("/resume", "Browse and resume previous sessions"));
     lines.push(help_entry("/save [label]", "Bookmark session for /resume"));

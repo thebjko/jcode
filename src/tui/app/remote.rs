@@ -2241,6 +2241,66 @@ pub(super) async fn handle_remote_key(
                     return Ok(());
                 }
 
+                if trimmed == "/poke" {
+                    if app.is_processing {
+                        app.push_display_message(DisplayMessage::system(
+                            "Model is currently running. Wait for it to finish before poking."
+                                .to_string(),
+                        ));
+                        return Ok(());
+                    }
+
+                    let session_id = app
+                        .remote_session_id
+                        .clone()
+                        .unwrap_or_else(|| app.session.id.clone());
+                    let todos = crate::todo::load_todos(&session_id).unwrap_or_default();
+                    let incomplete: Vec<_> = todos
+                        .iter()
+                        .filter(|t| t.status != "completed" && t.status != "cancelled")
+                        .collect();
+
+                    if incomplete.is_empty() {
+                        app.push_display_message(DisplayMessage::system(
+                            "No incomplete todos found. Nothing to poke about.".to_string(),
+                        ));
+                        return Ok(());
+                    }
+
+                    let mut todo_list = String::new();
+                    for t in &incomplete {
+                        let status_icon = match t.status.as_str() {
+                            "in_progress" => "🔄",
+                            _ => "⬜",
+                        };
+                        todo_list.push_str(&format!(
+                            "  {} [{}] {}\n",
+                            status_icon, t.priority, t.content
+                        ));
+                    }
+
+                    let poke_msg = format!(
+                        "Your todo list has {} incomplete item{}:\n\n{}\n\
+                        Please continue your work. Either:\n\
+                        1. Keep working and complete the remaining tasks\n\
+                        2. Update the todo list with `todo_write` if items are already done or no longer needed\n\
+                        3. If you genuinely need user input to proceed, say so clearly and specifically — \
+                        but only if truly blocked (this should be rare; prefer making reasonable assumptions)",
+                        incomplete.len(),
+                        if incomplete.len() == 1 { "" } else { "s" },
+                        todo_list,
+                    );
+
+                    app.push_display_message(DisplayMessage::system(format!(
+                        "👉 Poking model with {} incomplete todo{}...",
+                        incomplete.len(),
+                        if incomplete.len() == 1 { "" } else { "s" },
+                    )));
+
+                    let _ = app.begin_remote_send(remote, poke_msg, vec![], false).await;
+                    return Ok(());
+                }
+
                 if trimmed.starts_with('/') {
                     app.input = trimmed.to_string();
                     app.cursor_pos = app.input.len();

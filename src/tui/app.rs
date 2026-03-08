@@ -3775,6 +3775,11 @@ impl App {
                 "`/remember`\nExtract memories from current conversation and store them."
             }
             "swarm" => "`/swarm [on|off|status]`\nToggle swarm features for this session.",
+            "poke" => {
+                "`/poke`\nPoke the model to resume when it has stopped with incomplete todos.\n\
+                Injects a reminder listing all pending/in-progress tasks and prompts the model to either\n\
+                finish the work, update the todo list to reflect what is done, or ask for user input if genuinely blocked."
+            }
             "reload" => "`/reload`\nReload to a newer binary if one is available.",
             "rebuild" => "`/rebuild`\nRun full update flow (git pull + cargo build + tests).",
             "split" => "`/split`\nSplit the current session into a new window. Clones the full conversation history so both sessions continue from the same point.",
@@ -8100,6 +8105,7 @@ impl App {
             ("/effort".into(), "Show/change reasoning effort (Alt+←/→)"),
             ("/clear".into(), "Clear conversation history"),
             ("/rewind".into(), "Rewind conversation to previous message"),
+            ("/poke".into(), "Poke model to resume with incomplete todos"),
             (
                 "/compact".into(),
                 "Compact context (summarize old messages)",

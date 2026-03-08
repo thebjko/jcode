@@ -1,6 +1,7 @@
-use super::{App, DisplayMessage};
-use crate::message::Role;
+use super::{App, DisplayMessage, ProcessingStatus};
+use crate::message::{ContentBlock, Message, Role};
 use crate::session::Session;
+use std::time::Instant;
 
 pub(super) fn reset_current_session(app: &mut App) {
     app.clear_provider_messages();
@@ -263,6 +264,90 @@ pub(super) fn handle_session_command(app: &mut App, trimmed: &str) -> bool {
                 )));
             }
         }
+        return true;
+    }
+
+    if trimmed == "/poke" {
+        if app.is_processing {
+            app.push_display_message(DisplayMessage::system(
+                "Model is currently running. Wait for it to finish before poking.".to_string(),
+            ));
+            return true;
+        }
+
+        let session_id = app.session.id.clone();
+        let todos = crate::todo::load_todos(&session_id).unwrap_or_default();
+        let incomplete: Vec<_> = todos
+            .iter()
+            .filter(|t| t.status != "completed" && t.status != "cancelled")
+            .collect();
+
+        if incomplete.is_empty() {
+            app.push_display_message(DisplayMessage::system(
+                "No incomplete todos found. Nothing to poke about.".to_string(),
+            ));
+            return true;
+        }
+
+        let mut todo_list = String::new();
+        for t in &incomplete {
+            let status_icon = match t.status.as_str() {
+                "in_progress" => "🔄",
+                _ => "⬜",
+            };
+            todo_list.push_str(&format!(
+                "  {} [{}] {}\n",
+                status_icon, t.priority, t.content
+            ));
+        }
+
+        let poke_msg = format!(
+            "Your todo list has {} incomplete item{}:\n\n{}\n\
+            Please continue your work. Either:\n\
+            1. Keep working and complete the remaining tasks\n\
+            2. Update the todo list with `todo_write` if items are already done or no longer needed\n\
+            3. If you genuinely need user input to proceed, say so clearly and specifically — \
+            but only if truly blocked (this should be rare; prefer making reasonable assumptions)",
+            incomplete.len(),
+            if incomplete.len() == 1 { "" } else { "s" },
+            todo_list,
+        );
+
+        app.push_display_message(DisplayMessage::system(format!(
+            "👉 Poking model with {} incomplete todo{}...",
+            incomplete.len(),
+            if incomplete.len() == 1 { "" } else { "s" },
+        )));
+
+        app.add_provider_message(Message::user(&poke_msg));
+        app.session.add_message(
+            Role::User,
+            vec![ContentBlock::Text {
+                text: poke_msg,
+                cache_control: None,
+            }],
+        );
+        let _ = app.session.save();
+
+        app.is_processing = true;
+        app.status = ProcessingStatus::Sending;
+        app.clear_streaming_render_state();
+        app.stream_buffer.clear();
+        app.thought_line_inserted = false;
+        app.thinking_prefix_emitted = false;
+        app.thinking_buffer.clear();
+        app.streaming_tool_calls.clear();
+        app.streaming_input_tokens = 0;
+        app.streaming_output_tokens = 0;
+        app.streaming_cache_read_tokens = None;
+        app.streaming_cache_creation_tokens = None;
+        app.upstream_provider = None;
+        app.streaming_tps_start = None;
+        app.streaming_tps_elapsed = std::time::Duration::ZERO;
+        app.streaming_total_output_tokens = 0;
+        app.processing_started = Some(Instant::now());
+        app.pending_turn = true;
+
         return true;
     }
 
