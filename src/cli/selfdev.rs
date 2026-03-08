@@ -179,7 +179,7 @@ pub async fn run_canary_wrapper(
         cmd.arg("serve")
             .current_dir(&cwd)
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
             .stdin(std::process::Stdio::null());
 
         #[cfg(unix)]

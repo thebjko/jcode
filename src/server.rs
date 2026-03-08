@@ -327,18 +327,23 @@ pub async fn spawn_server_notify(cmd: &mut std::process::Command) -> Result<std:
         }
         Ok(Ok(_)) => {
             if let Some(status) = child.try_wait()? {
-                anyhow::bail!("Server exited before signalling ready ({})", status);
+                anyhow::bail!(server_start_error(&mut child, status));
             }
-            crate::logging::info("Server closed ready pipe without signalling; falling back to poll");
-            poll_for_socket(&socket_path(), Duration::from_secs(5)).await;
+            crate::logging::info(
+                "Server closed ready pipe without signalling; falling back to poll",
+            );
+            poll_for_socket(&socket_path(), Duration::from_secs(5)).await?;
         }
         Ok(Err(e)) => {
-            crate::logging::info(&format!("Ready pipe read error: {}; falling back to poll", e));
-            poll_for_socket(&socket_path(), Duration::from_secs(5)).await;
+            crate::logging::info(&format!(
+                "Ready pipe read error: {}; falling back to poll",
+                e
+            ));
+            poll_for_socket(&socket_path(), Duration::from_secs(5)).await?;
         }
         Err(_) => {
             crate::logging::info("Timed out waiting for server ready signal; falling back to poll");
-            poll_for_socket(&socket_path(), Duration::from_secs(5)).await;
+            poll_for_socket(&socket_path(), Duration::from_secs(5)).await?;
         }
     }
 
@@ -346,15 +351,43 @@ pub async fn spawn_server_notify(cmd: &mut std::process::Command) -> Result<std:
 }
 
 /// Simple poll loop waiting for the socket file to become connectable.
-async fn poll_for_socket(path: &std::path::Path, timeout: Duration) {
+async fn poll_for_socket(path: &std::path::Path, timeout: Duration) -> Result<()> {
     let start = Instant::now();
     while start.elapsed() < timeout {
         if crate::transport::is_socket_path(path) {
             if Stream::connect(path).await.is_ok() {
-                return;
+                return Ok(());
             }
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    anyhow::bail!("Timed out waiting for socket {}", path.display());
+}
+
+#[cfg(unix)]
+fn server_start_error(child: &mut std::process::Child, status: std::process::ExitStatus) -> String {
+    use std::io::Read;
+
+    let stderr_output = child
+        .stderr
+        .take()
+        .and_then(|mut stderr| {
+            let mut buf = String::new();
+            stderr.read_to_string(&mut buf).ok()?;
+            Some(buf)
+        })
+        .unwrap_or_default();
+    if stderr_output.trim().is_empty() {
+        format!(
+            "Server exited before signalling ready ({}). Check logs at ~/.jcode/logs/",
+            status
+        )
+    } else {
+        format!(
+            "Server exited before signalling ready ({}):\n{}",
+            status,
+            stderr_output.trim()
+        )
     }
 }
 
