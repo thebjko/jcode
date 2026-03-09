@@ -698,6 +698,8 @@ pub struct App {
     diagram_pane_position: crate::config::DiagramPanePosition,
     // Diagram zoom percentage (100 = normal)
     diagram_zoom: u8,
+    // Whether the user is dragging the diagram pane border
+    diagram_pane_dragging: bool,
     // Scroll offset for pinned diff pane
     diff_pane_scroll: usize,
     diff_pane_focus: bool,
@@ -1069,6 +1071,7 @@ impl App {
             diagram_pane_enabled: true,
             diagram_pane_position: crate::config::DiagramPanePosition::default(),
             diagram_zoom: 100,
+            diagram_pane_dragging: false,
             diff_pane_scroll: 0,
             diff_pane_focus: false,
             diff_pane_auto_scroll: true,

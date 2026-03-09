@@ -1635,7 +1635,7 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
                 const MIN_CHAT_WIDTH: u16 = 20;
                 let max_diagram = area.width.saturating_sub(MIN_CHAT_WIDTH);
                 if max_diagram >= MIN_DIAGRAM_WIDTH {
-                    let ratio = app.diagram_pane_ratio().clamp(25, 70) as u32;
+                    let ratio = app.diagram_pane_ratio().clamp(25, 80) as u32;
                     let ratio_cap = ((area.width as u32 * ratio) / 100) as u16;
                     let needed =
                         estimate_pinned_diagram_pane_width(diagram, area.height, MIN_DIAGRAM_WIDTH);
@@ -1671,7 +1671,7 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
                 const MIN_CHAT_HEIGHT: u16 = 8;
                 let max_diagram = area.height.saturating_sub(MIN_CHAT_HEIGHT);
                 if max_diagram >= MIN_DIAGRAM_HEIGHT {
-                    let ratio = app.diagram_pane_ratio().clamp(20, 60) as u32;
+                    let ratio = app.diagram_pane_ratio().clamp(20, 75) as u32;
                     let ratio_cap = ((area.height as u32 * ratio) / 100) as u16;
                     let needed = estimate_pinned_diagram_pane_height(
                         diagram,

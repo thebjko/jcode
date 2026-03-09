@@ -165,8 +165,8 @@ impl App {
 
     pub(super) fn adjust_diagram_pane_ratio(&mut self, delta: i8) {
         let (min_ratio, max_ratio) = match self.diagram_pane_position {
-            crate::config::DiagramPanePosition::Side => (25i16, 70i16),
-            crate::config::DiagramPanePosition::Top => (20i16, 60i16),
+            crate::config::DiagramPanePosition::Side => (25i16, 80i16),
+            crate::config::DiagramPanePosition::Top => (20i16, 75i16),
         };
         let current_target = self.diagram_pane_ratio_target;
         let next = (current_target as i16 + delta as i16).clamp(min_ratio, max_ratio) as u8;
@@ -210,8 +210,8 @@ impl App {
             DiagramPanePosition::Top => DiagramPanePosition::Side,
         };
         let (min_ratio, max_ratio) = match self.diagram_pane_position {
-            DiagramPanePosition::Side => (25u8, 70u8),
-            DiagramPanePosition::Top => (20u8, 60u8),
+            DiagramPanePosition::Side => (25u8, 80u8),
+            DiagramPanePosition::Top => (20u8, 75u8),
         };
         self.diagram_pane_ratio_target = self.diagram_pane_ratio_target.clamp(min_ratio, max_ratio);
         self.diagram_pane_anim_start = None;
@@ -355,25 +355,82 @@ impl App {
         let layout = super::super::ui::last_layout_snapshot();
         let mut over_diagram = false;
         let mut over_diff_pane = false;
+        let mut on_diagram_border = false;
+        let mut terminal_width: u16 = 0;
+        let mut terminal_height: u16 = 0;
         if let Some(layout) = layout {
+            terminal_width = layout.messages_area.width
+                + layout.diagram_area.map(|a| a.width).unwrap_or(0);
+            terminal_height = layout.messages_area.height
+                + layout.diagram_area.map(|a| a.height).unwrap_or(0);
             if let Some(diagram_area) = layout.diagram_area {
                 over_diagram = super::super::layout_utils::point_in_rect(
                     mouse.column,
                     mouse.row,
                     diagram_area,
                 );
+                let is_side = matches!(
+                    self.diagram_pane_position,
+                    crate::config::DiagramPanePosition::Side
+                );
+                if is_side {
+                    let border_x = diagram_area.x;
+                    on_diagram_border = mouse.column >= border_x.saturating_sub(1)
+                        && mouse.column <= border_x.saturating_add(1);
+                } else {
+                    let border_y = diagram_area.y.saturating_add(diagram_area.height);
+                    on_diagram_border = mouse.row >= border_y.saturating_sub(1)
+                        && mouse.row <= border_y.saturating_add(1);
+                }
             }
             if let Some(diff_area) = layout.diff_pane_area {
                 over_diff_pane =
                     super::super::layout_utils::point_in_rect(mouse.column, mouse.row, diff_area);
             }
             if diagram_available && matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
-                if over_diagram {
+                if on_diagram_border {
+                    self.diagram_pane_dragging = true;
+                } else if over_diagram {
                     self.set_diagram_focus(true);
                 } else {
                     self.set_diagram_focus(false);
                 }
             }
+        }
+
+        if self.diagram_pane_dragging {
+            match mouse.kind {
+                MouseEventKind::Drag(MouseButton::Left) | MouseEventKind::Moved => {
+                    if diagram_available {
+                        let is_side = matches!(
+                            self.diagram_pane_position,
+                            crate::config::DiagramPanePosition::Side
+                        );
+                        let new_ratio = if is_side && terminal_width > 0 {
+                            ((terminal_width.saturating_sub(mouse.column)) as u32 * 100
+                                / terminal_width as u32) as u8
+                        } else if !is_side && terminal_height > 0 {
+                            (mouse.row as u32 * 100 / terminal_height as u32) as u8
+                        } else {
+                            self.diagram_pane_ratio_target
+                        };
+                        let (min_r, max_r) = if is_side {
+                            (25u8, 80u8)
+                        } else {
+                            (20u8, 75u8)
+                        };
+                        let clamped = new_ratio.clamp(min_r, max_r);
+                        self.diagram_pane_ratio_target = clamped;
+                        self.diagram_pane_ratio_from = clamped;
+                        self.diagram_pane_anim_start = None;
+                    }
+                }
+                MouseEventKind::Up(MouseButton::Left) => {
+                    self.diagram_pane_dragging = false;
+                }
+                _ => {}
+            }
+            return;
         }
 
         let mut handled_scroll = false;
@@ -404,6 +461,16 @@ impl App {
                     _ => {}
                 }
                 handled_scroll = true;
+            } else {
+                let delta: i8 = match mouse.kind {
+                    MouseEventKind::ScrollUp => 3,
+                    MouseEventKind::ScrollDown => -3,
+                    _ => 0,
+                };
+                if delta != 0 {
+                    self.adjust_diagram_pane_ratio(delta);
+                    handled_scroll = true;
+                }
             }
         }
 
