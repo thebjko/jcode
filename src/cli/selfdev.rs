@@ -3,7 +3,9 @@ use std::process::Command as ProcessCommand;
 
 use crate::{build, id, logging, server, session, startup_profile, tui};
 
-use super::terminal::{init_tui_terminal, set_current_session, spawn_session_signal_watchers};
+use super::terminal::{
+    cleanup_tui_runtime, init_tui_runtime, set_current_session, spawn_session_signal_watchers,
+};
 use super::tui_launch::hot_rebuild;
 use super::tui_launch::hot_reload;
 use super::tui_launch::hot_update;
@@ -230,18 +232,11 @@ pub async fn run_canary_wrapper(
     set_current_session(session_id);
     spawn_session_signal_watchers();
 
-    let terminal = init_tui_terminal()?;
+    let (terminal, tui_runtime) = init_tui_runtime()?;
     startup_profile::mark("canary_terminal_init");
-    crate::tui::mermaid::init_picker();
     startup_profile::mark("canary_mermaid_picker");
-    let mouse_capture = crate::config::config().display.mouse_capture;
     startup_profile::mark("canary_config_load");
-    let keyboard_enhanced = tui::enable_keyboard_enhancement();
     startup_profile::mark("canary_keyboard_enhance");
-    crossterm::execute!(std::io::stdout(), crossterm::event::EnableBracketedPaste)?;
-    if mouse_capture {
-        crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture)?;
-    }
 
     let mut app = tui::App::new_for_remote(Some(session_id.to_string()));
     if server_just_spawned {
@@ -263,15 +258,7 @@ pub async fn run_canary_wrapper(
     let run_result = match result {
         Ok(r) => r,
         Err(e) => {
-            let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableBracketedPaste);
-            if mouse_capture {
-                let _ =
-                    crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
-            }
-            if keyboard_enhanced {
-                tui::disable_keyboard_enhancement();
-            }
-            ratatui::restore();
+            cleanup_tui_runtime(&tui_runtime, true);
             return Err(e);
         }
     };
@@ -282,16 +269,10 @@ pub async fn run_canary_wrapper(
         || run_result.exit_code == Some(EXIT_RELOAD_REQUESTED);
 
     if !will_exec {
-        let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableBracketedPaste);
-        if mouse_capture {
-            let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
-        }
-        if keyboard_enhanced {
-            tui::disable_keyboard_enhancement();
-        }
-        ratatui::restore();
+        cleanup_tui_runtime(&tui_runtime, true);
+    } else {
+        cleanup_tui_runtime(&tui_runtime, false);
     }
-    crate::tui::mermaid::clear_image_state();
 
     if let Some(ref reload_session_id) = run_result.reload_session {
         hot_reload(reload_session_id)?;
