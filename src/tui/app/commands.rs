@@ -268,13 +268,6 @@ pub(super) fn handle_session_command(app: &mut App, trimmed: &str) -> bool {
     }
 
     if trimmed == "/poke" {
-        if app.is_processing {
-            app.push_display_message(DisplayMessage::system(
-                "Model is currently running. Wait for it to finish before poking.".to_string(),
-            ));
-            return true;
-        }
-
         let session_id = app.session.id.clone();
         let todos = crate::todo::load_todos(&session_id).unwrap_or_default();
         let incomplete: Vec<_> = todos
@@ -313,41 +306,54 @@ pub(super) fn handle_session_command(app: &mut App, trimmed: &str) -> bool {
             todo_list,
         );
 
-        app.push_display_message(DisplayMessage::system(format!(
-            "👉 Poking model with {} incomplete todo{}...",
-            incomplete.len(),
-            if incomplete.len() == 1 { "" } else { "s" },
-        )));
+        if app.is_processing {
+            app.cancel_requested = true;
+            app.interleave_message = None;
+            app.pending_soft_interrupts.clear();
+            app.set_status_notice("Interrupting for poke...");
+            app.push_display_message(DisplayMessage::system(format!(
+                "👉 Interrupting and poking with {} incomplete todo{}...",
+                incomplete.len(),
+                if incomplete.len() == 1 { "" } else { "s" },
+            )));
+            app.queued_messages.push(poke_msg);
+        } else {
+            app.push_display_message(DisplayMessage::system(format!(
+                "👉 Poking model with {} incomplete todo{}...",
+                incomplete.len(),
+                if incomplete.len() == 1 { "" } else { "s" },
+            )));
 
-        app.add_provider_message(Message::user(&poke_msg));
-        app.session.add_message(
-            Role::User,
-            vec![ContentBlock::Text {
-                text: poke_msg,
-                cache_control: None,
-            }],
-        );
-        let _ = app.session.save();
+            app.add_provider_message(Message::user(&poke_msg));
+            app.session.add_message(
+                Role::User,
+                vec![ContentBlock::Text {
+                    text: poke_msg,
+                    cache_control: None,
+                }],
+            );
+            let _ = app.session.save();
 
-        app.is_processing = true;
-        app.status = ProcessingStatus::Sending;
-        app.clear_streaming_render_state();
-        app.stream_buffer.clear();
-        app.thought_line_inserted = false;
-        app.thinking_prefix_emitted = false;
-        app.thinking_buffer.clear();
-        app.streaming_tool_calls.clear();
-        app.batch_progress = None;
-        app.streaming_input_tokens = 0;
-        app.streaming_output_tokens = 0;
-        app.streaming_cache_read_tokens = None;
-        app.streaming_cache_creation_tokens = None;
-        app.upstream_provider = None;
-        app.streaming_tps_start = None;
-        app.streaming_tps_elapsed = std::time::Duration::ZERO;
-        app.streaming_total_output_tokens = 0;
-        app.processing_started = Some(Instant::now());
-        app.pending_turn = true;
+            app.is_processing = true;
+            app.status = ProcessingStatus::Sending;
+            app.clear_streaming_render_state();
+            app.stream_buffer.clear();
+            app.thought_line_inserted = false;
+            app.thinking_prefix_emitted = false;
+            app.thinking_buffer.clear();
+            app.streaming_tool_calls.clear();
+            app.batch_progress = None;
+            app.streaming_input_tokens = 0;
+            app.streaming_output_tokens = 0;
+            app.streaming_cache_read_tokens = None;
+            app.streaming_cache_creation_tokens = None;
+            app.upstream_provider = None;
+            app.streaming_tps_start = None;
+            app.streaming_tps_elapsed = std::time::Duration::ZERO;
+            app.streaming_total_output_tokens = 0;
+            app.processing_started = Some(Instant::now());
+            app.pending_turn = true;
+        }
 
         return true;
     }

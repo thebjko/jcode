@@ -45,8 +45,8 @@ const WEBSOCKET_UPGRADE_REQUIRED_ERROR: StatusCode = StatusCode::UPGRADE_REQUIRE
 const WEBSOCKET_FALLBACK_NOTICE: &str = "falling back from websockets to https transport";
 const WEBSOCKET_CONNECT_TIMEOUT_SECS: u64 = 8;
 const WEBSOCKET_FIRST_EVENT_TIMEOUT_SECS: u64 = 8;
-const WEBSOCKET_IDLE_TIMEOUT_SECS: u64 = 30;
-const WEBSOCKET_PERSISTENT_IDLE_TIMEOUT_SECS: u64 = 30;
+const WEBSOCKET_IDLE_TIMEOUT_SECS: u64 = 60;
+const WEBSOCKET_PERSISTENT_IDLE_TIMEOUT_SECS: u64 = 60;
 const WEBSOCKET_COMPLETION_TIMEOUT_SECS: u64 = 300;
 /// Maximum age of a persistent WebSocket connection before forcing reconnect
 const WEBSOCKET_PERSISTENT_MAX_AGE_SECS: u64 = 3000; // 50 min (server limit is 60 min)
@@ -2384,6 +2384,9 @@ async fn stream_response_websocket(
                 }
                 WsMessage::Ping(payload) => {
                     let _ = ws_stream.send(WsMessage::Pong(payload)).await;
+                    if saw_api_activity {
+                        last_api_activity_at = Instant::now();
+                    }
                 }
                 WsMessage::Close(_) => {
                     if saw_response_completed {
@@ -2398,7 +2401,11 @@ async fn stream_response_websocket(
                         "Unexpected binary websocket event"
                     )));
                 }
-                WsMessage::Pong(_) => {}
+                WsMessage::Pong(_) => {
+                    if saw_api_activity {
+                        last_api_activity_at = Instant::now();
+                    }
+                }
                 _ => {}
             },
             Err(err) => {
@@ -2937,6 +2944,9 @@ async fn stream_response_websocket_persistent(
                 }
                 WsMessage::Ping(payload) => {
                     let _ = ws_stream.send(WsMessage::Pong(payload)).await;
+                    if saw_api_activity {
+                        last_api_activity_at = Instant::now();
+                    }
                 }
                 WsMessage::Close(_) => {
                     if saw_response_completed {
@@ -2951,7 +2961,11 @@ async fn stream_response_websocket_persistent(
                         "Unexpected binary websocket event"
                     )));
                 }
-                WsMessage::Pong(_) => {}
+                WsMessage::Pong(_) => {
+                    if saw_api_activity {
+                        last_api_activity_at = Instant::now();
+                    }
+                }
                 _ => {}
             },
             Err(err) => {
@@ -3144,23 +3158,10 @@ fn is_websocket_activity_payload(data: &str) -> bool {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(data) else {
         return false;
     };
-    matches!(
-        value.get("type").and_then(|kind| kind.as_str()),
-        Some(
-            "response.created"
-                | "response.output_text.delta"
-                | "response.reasoning.delta"
-                | "response.reasoning_summary_text.delta"
-                | "response.reasoning.done"
-                | "response.output_item.added"
-                | "response.output_item.done"
-                | "response.function_call_arguments.delta"
-                | "response.function_call_arguments.done"
-                | "response.completed"
-                | "response.incomplete"
-                | "error"
-        )
-    )
+    let Some(kind) = value.get("type").and_then(|kind| kind.as_str()) else {
+        return false;
+    };
+    kind.starts_with("response.") || kind == "error"
 }
 
 fn normalize_transport_model(model: &str) -> Option<String> {
@@ -3935,10 +3936,21 @@ mod tests {
     }
 
     #[test]
-    fn test_websocket_activity_payload_ignores_non_progress_status_events() {
-        assert!(!is_websocket_activity_payload(
+    fn test_websocket_activity_payload_counts_in_progress_events() {
+        assert!(is_websocket_activity_payload(
             r#"{"type":"response.in_progress","response":{"status":"in_progress"}}"#
         ));
+    }
+
+    #[test]
+    fn test_websocket_activity_payload_ignores_non_response_events() {
+        assert!(!is_websocket_activity_payload(
+            r#"{"type":"session.created","session":{}}"#
+        ));
+        assert!(!is_websocket_activity_payload(
+            r#"{"type":"rate_limits.updated"}"#
+        ));
+        assert!(!is_websocket_activity_payload(r#"not json at all"#));
     }
 
     #[test]

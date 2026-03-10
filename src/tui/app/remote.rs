@@ -6,7 +6,7 @@ use crate::bus::BusEvent;
 use crate::message::ToolCall;
 use crate::protocol::ServerEvent;
 use crate::tool::selfdev::ReloadContext;
-use crate::tui::backend::RemoteConnection;
+use crate::tui::backend::{RemoteConnection, RemoteRead};
 use anyhow::Result;
 use crossterm::event::{Event, EventStream, KeyCode, KeyEventKind, KeyModifiers, MouseEvent};
 use futures::StreamExt;
@@ -496,22 +496,43 @@ pub(super) async fn handle_post_connect(
         app.reload_info.clear();
     }
 
+    let same_session_reload_fast_path = state.reconnect_attempts > 0
+        && session_to_resume
+            .zip(app.remote_session_id.as_deref())
+            .map(|(resume_id, remote_id)| resume_id == remote_id)
+            .unwrap_or(false)
+        && !app.display_messages.is_empty();
+
     state.reconnect_attempts = 0;
     state.initial_server_start = false;
 
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
-    while !remote.has_loaded_history() {
-        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-        if remaining.is_zero() {
-            crate::logging::warn("Timed out waiting for History event from server");
-            break;
-        }
-        match tokio::time::timeout(remaining, remote.next_event()).await {
-            Ok(Some(event)) => {
-                handle_server_event(app, event, remote);
+    if !same_session_reload_fast_path {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+        while !remote.has_loaded_history() {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                crate::logging::warn("Timed out waiting for History event from server");
+                break;
             }
-            _ => break,
+            match tokio::time::timeout(remaining, remote.next_event()).await {
+                Ok(RemoteRead::Event(event)) => {
+                    handle_server_event(app, event, remote);
+                }
+                _ => break,
+            }
         }
+    } else {
+        crate::logging::info(
+            "Same-session reload fast path: skipping blocking History wait and reusing local display state",
+        );
+        remote.mark_history_loaded();
+    }
+
+    if remote.has_loaded_history() && !app.is_processing && !app.queued_messages.is_empty() {
+        crate::logging::info(
+            "Post-connect history restored with queued continuation; dispatching immediately",
+        );
+        process_remote_followups(app, remote).await;
     }
 
     Ok(PostConnectOutcome::Ready)
@@ -522,21 +543,21 @@ pub(super) async fn handle_remote_event(
     terminal: &mut DefaultTerminal,
     remote: &mut RemoteConnection,
     state: &mut RemoteRunState,
-    event: Option<ServerEvent>,
+    event: RemoteRead,
 ) -> Result<RemoteEventOutcome> {
     match event {
-        None => {
+        RemoteRead::Disconnected(_) => {
             handle_disconnect(app, state);
             terminal.draw(|frame| crate::tui::ui::draw(frame, app))?;
             Ok(RemoteEventOutcome::Reconnect)
         }
-        Some(ServerEvent::ClientDebugRequest { id, command }) => {
+        RemoteRead::Event(ServerEvent::ClientDebugRequest { id, command }) => {
             let output = handle_debug_command(app, &command, remote).await;
             let _ = remote.send_client_debug_response(id, output).await;
             process_remote_followups(app, remote).await;
             Ok(RemoteEventOutcome::Continue)
         }
-        Some(server_event) => {
+        RemoteRead::Event(server_event) => {
             let _ = handle_server_event(app, server_event, remote);
             process_remote_followups(app, remote).await;
             Ok(RemoteEventOutcome::Continue)
@@ -1218,7 +1239,7 @@ pub(super) fn handle_server_event(
             available_models,
             available_model_routes,
             mcp_servers,
-            skills: _skills,
+            skills,
             all_sessions,
             client_count,
             is_canary,
@@ -1286,6 +1307,7 @@ pub(super) fn handle_server_event(
             app.remote_reasoning_effort = reasoning_effort;
             app.remote_available_models = available_models;
             app.remote_model_routes = available_model_routes;
+            app.remote_skills = skills;
             app.remote_sessions = all_sessions;
             app.remote_client_count = client_count;
             app.remote_is_canary = is_canary;
@@ -1314,7 +1336,8 @@ pub(super) fn handle_server_event(
                     .collect();
             }
 
-            if session_changed || !remote.has_loaded_history() {
+            let should_apply_history_payload = session_changed || !remote.has_loaded_history();
+            if should_apply_history_payload {
                 remote.mark_history_loaded();
                 for msg in messages {
                     app.push_display_message(DisplayMessage {
@@ -1326,9 +1349,16 @@ pub(super) fn handle_server_event(
                         tool_data: msg.tool_data,
                     });
                 }
+            } else {
+                crate::logging::info(
+                    "Ignoring duplicate History event for active session after local state was restored",
+                );
             }
 
-            if was_interrupted == Some(true) && !app.display_messages.is_empty() {
+            if should_apply_history_payload
+                && was_interrupted == Some(true)
+                && !app.display_messages.is_empty()
+            {
                 crate::logging::info(
                     "Session was interrupted mid-generation, queuing continuation",
                 );
@@ -1764,10 +1794,7 @@ pub(super) async fn handle_remote_key(
         remote.cycle_model(direction).await?;
         return Ok(());
     }
-    if let Some(direction) = app
-        .effort_switch_keys
-        .direction_for(code, modifiers)
-    {
+    if let Some(direction) = app.effort_switch_keys.direction_for(code, modifiers) {
         let efforts = ["none", "low", "medium", "high", "xhigh"];
         let current = app.remote_reasoning_effort.as_deref();
         let current_index = current
@@ -1781,10 +1808,10 @@ pub(super) async fn handle_remote_key(
                 current_index + 1
             }
         } else if current_index == 0 {
-                0
-            } else {
-                current_index - 1
-            };
+            0
+        } else {
+            current_index - 1
+        };
         let next_effort = efforts[next_index];
         if Some(next_effort) == current {
             let label = super::effort_display_label(next_effort);
@@ -1798,11 +1825,7 @@ pub(super) async fn handle_remote_key(
         }
         return Ok(());
     }
-    if app
-        .centered_toggle_keys
-        .toggle
-        .matches(code, modifiers)
-    {
+    if app.centered_toggle_keys.toggle.matches(code, modifiers) {
         app.toggle_centered_mode();
         return Ok(());
     }
@@ -1872,11 +1895,7 @@ pub(super) async fn handle_remote_key(
         return Ok(());
     }
 
-    if app
-        .centered_toggle_keys
-        .toggle
-        .matches(code, modifiers)
-    {
+    if app.centered_toggle_keys.toggle.matches(code, modifiers) {
         app.toggle_centered_mode();
         return Ok(());
     }
@@ -2439,13 +2458,6 @@ pub(super) async fn handle_remote_key(
                 }
 
                 if trimmed == "/split" {
-                    if app.is_processing {
-                        app.push_display_message(DisplayMessage::error(
-                            "Cannot split while processing. Wait for the current turn to finish."
-                                .to_string(),
-                        ));
-                        return Ok(());
-                    }
                     app.push_display_message(DisplayMessage::system(
                         "Splitting session...".to_string(),
                     ));
@@ -2520,14 +2532,6 @@ pub(super) async fn handle_remote_key(
                 }
 
                 if trimmed == "/poke" {
-                    if app.is_processing {
-                        app.push_display_message(DisplayMessage::system(
-                            "Model is currently running. Wait for it to finish before poking."
-                                .to_string(),
-                        ));
-                        return Ok(());
-                    }
-
                     let session_id = app
                         .remote_session_id
                         .clone()
@@ -2569,22 +2573,33 @@ pub(super) async fn handle_remote_key(
                         todo_list,
                     );
 
-                    app.push_display_message(DisplayMessage::system(format!(
-                        "👉 Poking model with {} incomplete todo{}...",
-                        incomplete.len(),
-                        if incomplete.len() == 1 { "" } else { "s" },
-                    )));
+                    if app.is_processing {
+                        remote.cancel().await?;
+                        app.set_status_notice("Interrupting for poke...");
+                        app.push_display_message(DisplayMessage::system(format!(
+                            "👉 Interrupting and poking with {} incomplete todo{}...",
+                            incomplete.len(),
+                            if incomplete.len() == 1 { "" } else { "s" },
+                        )));
+                        app.queued_messages.push(poke_msg);
+                    } else {
+                        app.push_display_message(DisplayMessage::system(format!(
+                            "👉 Poking model with {} incomplete todo{}...",
+                            incomplete.len(),
+                            if incomplete.len() == 1 { "" } else { "s" },
+                        )));
 
-                    let _ = super::remote::begin_remote_send(
-                        app,
-                        remote,
-                        poke_msg,
-                        vec![],
-                        true,
-                        true,
-                        0,
-                    )
-                    .await;
+                        let _ = super::remote::begin_remote_send(
+                            app,
+                            remote,
+                            poke_msg,
+                            vec![],
+                            true,
+                            true,
+                            0,
+                        )
+                        .await;
+                    }
                     return Ok(());
                 }
 
