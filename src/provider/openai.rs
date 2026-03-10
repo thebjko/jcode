@@ -2383,7 +2383,6 @@ async fn stream_response_websocket(
                     }
                 }
                 WsMessage::Ping(payload) => {
-                    last_api_activity_at = Instant::now();
                     let _ = ws_stream.send(WsMessage::Pong(payload)).await;
                 }
                 WsMessage::Close(_) => {
@@ -2399,9 +2398,7 @@ async fn stream_response_websocket(
                         "Unexpected binary websocket event"
                     )));
                 }
-                WsMessage::Pong(_) => {
-                    last_api_activity_at = Instant::now();
-                }
+                WsMessage::Pong(_) => {}
                 _ => {}
             },
             Err(err) => {
@@ -2626,7 +2623,6 @@ async fn try_persistent_ws_continuation(
                 }
             }
             Ok(WsMessage::Ping(payload)) => {
-                last_api_activity_at = Instant::now();
                 let _ = state.ws_stream.send(WsMessage::Pong(payload)).await;
             }
             Ok(WsMessage::Close(_)) => {
@@ -2635,12 +2631,7 @@ async fn try_persistent_ws_continuation(
                 }
                 return PersistentWsResult::Failed("server closed connection".to_string());
             }
-            Ok(WsMessage::Pong(_)) => {
-                last_api_activity_at = Instant::now();
-            }
-            Ok(_) => {
-                last_api_activity_at = Instant::now();
-            }
+            Ok(WsMessage::Pong(_)) | Ok(_) => {}
             Err(e) => {
                 return PersistentWsResult::Failed(format!("ws error: {}", e));
             }
@@ -2945,7 +2936,6 @@ async fn stream_response_websocket_persistent(
                     }
                 }
                 WsMessage::Ping(payload) => {
-                    last_api_activity_at = Instant::now();
                     let _ = ws_stream.send(WsMessage::Pong(payload)).await;
                 }
                 WsMessage::Close(_) => {
@@ -2961,9 +2951,7 @@ async fn stream_response_websocket_persistent(
                         "Unexpected binary websocket event"
                     )));
                 }
-                WsMessage::Pong(_) => {
-                    last_api_activity_at = Instant::now();
-                }
+                WsMessage::Pong(_) => {}
                 _ => {}
             },
             Err(err) => {
@@ -3156,11 +3144,23 @@ fn is_websocket_activity_payload(data: &str) -> bool {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(data) else {
         return false;
     };
-    value
-        .get("type")
-        .and_then(|kind| kind.as_str())
-        .map(|kind| !kind.is_empty())
-        .unwrap_or(false)
+    matches!(
+        value.get("type").and_then(|kind| kind.as_str()),
+        Some(
+            "response.created"
+                | "response.output_text.delta"
+                | "response.reasoning.delta"
+                | "response.reasoning_summary_text.delta"
+                | "response.reasoning.done"
+                | "response.output_item.added"
+                | "response.output_item.done"
+                | "response.function_call_arguments.delta"
+                | "response.function_call_arguments.done"
+                | "response.completed"
+                | "response.incomplete"
+                | "error"
+        )
+    )
 }
 
 fn normalize_transport_model(model: &str) -> Option<String> {
@@ -3931,6 +3931,13 @@ mod tests {
     fn test_websocket_activity_payload_counts_response_completed() {
         assert!(is_websocket_activity_payload(
             r#"{"type":"response.completed","response":{"status":"completed"}}"#
+        ));
+    }
+
+    #[test]
+    fn test_websocket_activity_payload_ignores_non_progress_status_events() {
+        assert!(!is_websocket_activity_payload(
+            r#"{"type":"response.in_progress","response":{"status":"in_progress"}}"#
         ));
     }
 
