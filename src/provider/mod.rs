@@ -1847,17 +1847,43 @@ impl MultiProvider {
             let key = Self::provider_key(candidate);
 
             if !self.provider_is_configured(candidate) {
-                notes.push(format!("{}: not configured", label));
+                let note = format!("{}: not configured", label);
+                if candidate == active {
+                    crate::logging::warn(&format!(
+                        "Failover{}: skipping active provider {} (not configured)",
+                        mode.log_suffix(),
+                        label
+                    ));
+                }
+                notes.push(note);
                 continue;
             }
 
             if let Some(detail) = provider_unavailability_detail_for_account(key) {
-                notes.push(format!("{}: {}", label, detail));
+                let note = format!("{}: {}", label, detail);
+                if candidate == active {
+                    crate::logging::warn(&format!(
+                        "Failover{}: skipping active provider {} - {}",
+                        mode.log_suffix(),
+                        label,
+                        detail
+                    ));
+                }
+                notes.push(note);
                 continue;
             }
 
             if let Some(reason) = self.provider_precheck_unavailable_reason(candidate) {
-                notes.push(format!("{}: {}", label, reason));
+                let note = format!("{}: {}", label, reason);
+                if candidate == active {
+                    crate::logging::warn(&format!(
+                        "Failover{}: skipping active provider {} - {}",
+                        mode.log_suffix(),
+                        label,
+                        reason
+                    ));
+                }
+                notes.push(note);
                 record_provider_unavailable_for_account(key, &reason);
                 continue;
             }
@@ -2420,7 +2446,7 @@ impl MultiProvider {
             .map(|w| w.usage_ratio >= 0.99)
             .unwrap_or(false);
 
-        five_hour_exhausted || seven_day_exhausted
+        five_hour_exhausted && seven_day_exhausted
     }
 }
 
