@@ -5,7 +5,7 @@ compatibility_date = "2025-01-01"
 [[d1_databases]]
 binding = "DB"
 database_name = "jcode-telemetry"
-database_id = "TODO_REPLACE_WITH_D1_DATABASE_ID"
+database_id = "abaa524c-3e90-4ba9-a569-027e78a083c6"
 
 [vars]
 ALLOWED_ORIGIN = "*"

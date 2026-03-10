@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
 use std::time::Instant;
 
-const TELEMETRY_ENDPOINT: &str = "https://telemetry.jcode.dev/v1/event";
+const TELEMETRY_ENDPOINT: &str = "https://jcode-telemetry.jeremyhuang55555.workers.dev/v1/event";
 
 static SESSION_STATE: Mutex<Option<SessionTelemetry>> = Mutex::new(None);
 
