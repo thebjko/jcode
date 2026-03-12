@@ -357,12 +357,12 @@ pub const COPILOT_LOGIN_PROVIDER: LoginProviderDescriptor = LoginProviderDescrip
 
 pub const GEMINI_LOGIN_PROVIDER: LoginProviderDescriptor = LoginProviderDescriptor {
     id: "gemini",
-    display_name: "Google Gemini CLI",
-    auth_kind: LoginProviderAuthKind::Cli,
+    display_name: "Google Gemini",
+    auth_kind: LoginProviderAuthKind::OAuth,
     auth_state_key: LoginProviderAuthStateKey::Gemini,
-    auth_status_method: "CLI",
+    auth_status_method: "OAuth",
     aliases: &[],
-    menu_detail: "official Gemini CLI browser login",
+    menu_detail: "Google Gemini Code Assist OAuth login",
     recommended: false,
     target: LoginProviderTarget::Gemini,
     order: LoginProviderSurfaceOrder::new(Some(13), Some(11), Some(4), Some(11), Some(13)),

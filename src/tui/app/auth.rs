@@ -182,7 +182,7 @@ impl App {
             crate::provider_catalog::LoginProviderTarget::Copilot => self.start_copilot_login(),
             crate::provider_catalog::LoginProviderTarget::Gemini => {
                 self.push_display_message(DisplayMessage::error(
-                    "Gemini CLI login is only available from the CLI right now. Run `jcode login --provider gemini`."
+                    "Gemini login is only available from the CLI right now. Run `jcode login --provider gemini`."
                         .to_string(),
                 ));
             }

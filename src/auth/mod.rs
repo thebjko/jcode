@@ -336,10 +336,15 @@ impl AuthStatus {
                 AuthState::NotConfigured
             };
 
-        status.gemini = if gemini::has_gemini_cli() {
-            AuthState::Available
-        } else {
-            AuthState::NotConfigured
+        status.gemini = match gemini::load_tokens() {
+            Ok(tokens) => {
+                if tokens.is_expired() {
+                    AuthState::Expired
+                } else {
+                    AuthState::Available
+                }
+            }
+            Err(_) => AuthState::NotConfigured,
         };
 
         let cursor_has_cli = cursor::has_cursor_agent_cli();
