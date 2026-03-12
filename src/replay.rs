@@ -92,6 +92,8 @@ fn default_stream_speed() -> u64 {
 /// Export a session to a replay timeline.
 ///
 /// Uses stored timestamps for real pacing, falls back to estimates.
+/// Memory injections from `session.memory_injections` are inserted at the
+/// correct positions based on their `before_message` index.
 pub fn export_timeline(session: &Session) -> Vec<TimelineEvent> {
     let mut events = Vec::new();
     let mut t: u64 = 0;
@@ -100,7 +102,31 @@ pub fn export_timeline(session: &Session) -> Vec<TimelineEvent> {
     // Track tool IDs for pairing ToolUse → ToolResult
     let mut pending_tools: Vec<(String, String, serde_json::Value)> = Vec::new(); // (id, name, input)
 
-    for msg in &session.messages {
+    // Track memory injections by message index
+    let mut memory_by_msg: std::collections::HashMap<usize, Vec<_>> =
+        std::collections::HashMap::new();
+    for inj in &session.memory_injections {
+        if let Some(idx) = inj.before_message {
+            memory_by_msg.entry(idx).or_default().push(inj);
+        }
+    }
+
+    for (msg_idx, msg) in session.messages.iter().enumerate() {
+        // Insert memory injections before this message
+        if let Some(injs) = memory_by_msg.get(&msg_idx) {
+            for inj in injs {
+                events.push(TimelineEvent {
+                    t,
+                    kind: TimelineEventKind::MemoryInjection {
+                        summary: inj.summary.clone(),
+                        content: inj.content.clone(),
+                        count: inj.count,
+                    },
+                });
+                t += 500; // Brief pause after memory injection
+            }
+        }
+
         // Advance time based on stored timestamp
         if let Some(ts) = msg.timestamp {
             let offset = ts

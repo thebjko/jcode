@@ -1578,6 +1578,13 @@ impl App {
         } else {
             format!("🧠 auto-recalled {} memories", count)
         };
+        // Record to session for replay visualization
+        self.session.record_memory_injection(
+            summary.clone(),
+            display_prompt.clone(),
+            count as u32,
+            age_ms,
+        );
         self.push_display_message(DisplayMessage::memory(summary, display_prompt));
         self.set_status_notice(format!("🧠 {} {} injected", count, plural));
     }

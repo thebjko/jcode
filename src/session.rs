@@ -66,6 +66,25 @@ impl SessionStatus {
     }
 }
 
+/// A memory injection event, stored for replay visualization
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoredMemoryInjection {
+    /// Human-readable summary (e.g., "🧠 auto-recalled 3 memories")
+    pub summary: String,
+    /// The recalled memory content that was injected
+    pub content: String,
+    /// Number of memories recalled
+    pub count: u32,
+    /// Age of memories in milliseconds
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub age_ms: Option<u64>,
+    /// Message index this injection occurred before (for replay timing)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before_message: Option<usize>,
+    /// Timestamp when injection occurred
+    pub timestamp: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredMessage {
     pub id: String,
@@ -172,6 +191,9 @@ pub struct Session {
     /// Environment snapshots for post-mortem debugging
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub env_snapshots: Vec<EnvSnapshot>,
+    /// Memory injection events (for replay visualization)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub memory_injections: Vec<StoredMemoryInjection>,
 }
 
 /// Max number of environment snapshots to retain per session
@@ -253,6 +275,7 @@ impl Session {
             saved: false,
             save_label: None,
             env_snapshots: Vec::new(),
+            memory_injections: Vec::new(),
         }
     }
 
@@ -282,6 +305,7 @@ impl Session {
             saved: false,
             save_label: None,
             env_snapshots: Vec::new(),
+            memory_injections: Vec::new(),
         }
     }
 
@@ -486,6 +510,24 @@ impl Session {
             token_usage,
         });
         id
+    }
+
+    /// Record a memory injection event for replay visualization
+    pub fn record_memory_injection(
+        &mut self,
+        summary: String,
+        content: String,
+        count: u32,
+        age_ms: u64,
+    ) {
+        self.memory_injections.push(StoredMemoryInjection {
+            summary,
+            content,
+            count,
+            age_ms: Some(age_ms),
+            before_message: Some(self.messages.len()),
+            timestamp: Utc::now(),
+        });
     }
 
     pub fn messages_for_provider(&self) -> Vec<Message> {

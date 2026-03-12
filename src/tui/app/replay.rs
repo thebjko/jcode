@@ -173,6 +173,14 @@ pub(super) fn apply_replay_event(
             app.streaming_total_output_tokens = 0;
             app.replay_processing_started_ms = replay_processing_started_ms;
         }
+        ReplayEvent::MemoryInjection {
+            summary,
+            content,
+            count,
+        } => {
+            let display = DisplayMessage::memory(summary.clone(), content.clone());
+            app.push_display_message(display);
+        }
         ReplayEvent::Server(server_event) => {
             if let crate::protocol::ServerEvent::TextDelta { text } = server_event {
                 if !text.is_empty() {
