@@ -2,6 +2,7 @@ pub mod claude;
 pub mod codex;
 pub mod copilot;
 pub mod cursor;
+pub mod gemini;
 pub mod google;
 pub mod oauth;
 
@@ -26,6 +27,8 @@ static COMMAND_EXISTS_CACHE: std::sync::LazyLock<Mutex<HashMap<String, bool>>> =
 /// Authentication status for all supported providers
 #[derive(Debug, Clone, Default)]
 pub struct AuthStatus {
+    /// Jcode subscription router credentials
+    pub jcode: AuthState,
     /// Anthropic provider (Claude models) - via OAuth or API key
     pub anthropic: ProviderAuth,
     /// OpenRouter provider - via API key
@@ -42,6 +45,8 @@ pub struct AuthStatus {
     pub copilot_has_api_token: bool,
     /// Antigravity CLI available
     pub antigravity: AuthState,
+    /// Gemini CLI available
+    pub gemini: AuthState,
     /// Cursor provider configured via Cursor Agent plus API key or CLI session
     pub cursor: AuthState,
     /// Google/Gmail OAuth configured
@@ -97,20 +102,24 @@ impl AuthStatus {
     /// Returns true if at least one provider has usable credentials.
     pub fn has_any_available(&self) -> bool {
         self.anthropic.state == AuthState::Available
+            || self.jcode == AuthState::Available
             || self.openai == AuthState::Available
             || self.openrouter == AuthState::Available
             || self.copilot == AuthState::Available
             || self.antigravity == AuthState::Available
+            || self.gemini == AuthState::Available
             || self.cursor == AuthState::Available
     }
 
     pub fn state_for_key(&self, key: LoginProviderAuthStateKey) -> AuthState {
         match key {
+            LoginProviderAuthStateKey::Jcode => self.jcode,
             LoginProviderAuthStateKey::Anthropic => self.anthropic.state,
             LoginProviderAuthStateKey::OpenAi => self.openai,
             LoginProviderAuthStateKey::OpenRouterLike => self.openrouter,
             LoginProviderAuthStateKey::Copilot => self.copilot,
             LoginProviderAuthStateKey::Antigravity => self.antigravity,
+            LoginProviderAuthStateKey::Gemini => self.gemini,
             LoginProviderAuthStateKey::Cursor => self.cursor,
             LoginProviderAuthStateKey::Google => self.google,
         }
@@ -118,6 +127,13 @@ impl AuthStatus {
 
     pub fn state_for_provider(&self, provider: LoginProviderDescriptor) -> AuthState {
         match provider.target {
+            crate::provider_catalog::LoginProviderTarget::Jcode => {
+                if crate::subscription_catalog::has_credentials() {
+                    AuthState::Available
+                } else {
+                    AuthState::NotConfigured
+                }
+            }
             crate::provider_catalog::LoginProviderTarget::OpenRouter => {
                 if api_key_available("OPENROUTER_API_KEY", "openrouter.env") {
                     AuthState::Available
@@ -144,6 +160,23 @@ impl AuthStatus {
 
     pub fn method_detail_for_provider(&self, provider: LoginProviderDescriptor) -> String {
         match provider.target {
+            crate::provider_catalog::LoginProviderTarget::Jcode => {
+                if self.state_for_provider(provider) == AuthState::Available {
+                    if crate::subscription_catalog::has_router_base() {
+                        format!(
+                            "API key (`{}`) + router base",
+                            crate::subscription_catalog::JCODE_API_KEY_ENV
+                        )
+                    } else {
+                        format!(
+                            "API key (`{}`), router base pending",
+                            crate::subscription_catalog::JCODE_API_KEY_ENV
+                        )
+                    }
+                } else {
+                    "not configured".to_string()
+                }
+            }
             crate::provider_catalog::LoginProviderTarget::OpenRouter => {
                 if self.state_for_provider(provider) == AuthState::Available {
                     "API key (`OPENROUTER_API_KEY`)".to_string()
@@ -211,6 +244,10 @@ impl AuthStatus {
 
     fn check_uncached() -> Self {
         let mut status = Self::default();
+
+        if crate::subscription_catalog::has_credentials() {
+            status.jcode = AuthState::Available;
+        }
 
         // Check Anthropic (OAuth or API key)
         let mut anthropic = ProviderAuth::default();
@@ -298,6 +335,12 @@ impl AuthStatus {
             } else {
                 AuthState::NotConfigured
             };
+
+        status.gemini = if gemini::has_gemini_cli() {
+            AuthState::Available
+        } else {
+            AuthState::NotConfigured
+        };
 
         let cursor_has_cli = cursor::has_cursor_agent_cli();
         let cursor_has_api_key = cursor::has_cursor_api_key();

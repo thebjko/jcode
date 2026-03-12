@@ -56,7 +56,7 @@ impl App {
             ));
         }
         message.push_str(
-            "\nUse `/login <provider>` to authenticate, `/account` to manage Anthropic accounts.",
+            "\nUse `/login <provider>` to authenticate. `/login jcode` is for curated jcode subscription access; `/account` manages Anthropic OAuth accounts.",
         );
         self.push_display_message(DisplayMessage::system(message));
     }
@@ -99,6 +99,7 @@ impl App {
         provider: crate::provider_catalog::LoginProviderDescriptor,
     ) {
         match provider.target {
+            crate::provider_catalog::LoginProviderTarget::Jcode => self.start_jcode_login(),
             crate::provider_catalog::LoginProviderTarget::Claude => self.start_claude_login(),
             crate::provider_catalog::LoginProviderTarget::OpenAi => self.start_openai_login(),
             crate::provider_catalog::LoginProviderTarget::OpenRouter => {
@@ -109,6 +110,12 @@ impl App {
             }
             crate::provider_catalog::LoginProviderTarget::Cursor => self.start_cursor_login(),
             crate::provider_catalog::LoginProviderTarget::Copilot => self.start_copilot_login(),
+            crate::provider_catalog::LoginProviderTarget::Gemini => {
+                self.push_display_message(DisplayMessage::error(
+                    "Gemini CLI login is only available from the CLI right now. Run `jcode login --provider gemini`."
+                        .to_string(),
+                ));
+            }
             crate::provider_catalog::LoginProviderTarget::Antigravity => {
                 self.start_antigravity_login()
             }
@@ -227,6 +234,25 @@ impl App {
                     ));
                 }
             }
+        });
+    }
+
+    fn start_jcode_login(&mut self) {
+        self.push_display_message(DisplayMessage::system(format!(
+            "**Jcode Subscription Login**\n\nPaste your jcode subscription API key. This is distinct from OpenRouter BYOK and is meant for curated jcode-managed access.\n\nCurated models: {}\n\nOptional: after the key, jcode can also store a custom router base URL if you have one.",
+            crate::subscription_catalog::curated_models()
+                .iter()
+                .map(|model| model.display_name)
+                .collect::<Vec<_>>()
+                .join(", ")
+        )));
+        self.set_status_notice("Login: jcode API key...");
+        self.pending_login = Some(PendingLogin::ApiKeyProfile {
+            provider: "Jcode Subscription".to_string(),
+            docs_url: "https://subscription.jcode.invalid".to_string(),
+            env_file: crate::subscription_catalog::JCODE_ENV_FILE.to_string(),
+            key_name: crate::subscription_catalog::JCODE_API_KEY_ENV.to_string(),
+            default_model: Some(crate::subscription_catalog::default_model().id.to_string()),
         });
     }
 
@@ -997,7 +1023,7 @@ impl App {
             }
             PendingLogin::ApiKeyProfile {
                 provider,
-                docs_url: _,
+                docs_url,
                 env_file,
                 key_name,
                 default_model,
@@ -1010,12 +1036,46 @@ impl App {
                     ));
                 }
 
-                match Self::save_named_api_key(&env_file, &key_name, &key) {
+                let save_result: anyhow::Result<()> =
+                    if key_name == crate::subscription_catalog::JCODE_API_KEY_ENV {
+                        (|| {
+                            let mut content = format!("{}={}\n", key_name, key);
+                            if let Some(base) = crate::subscription_catalog::configured_api_base() {
+                                content.push_str(&format!(
+                                    "{}={}\n",
+                                    crate::subscription_catalog::JCODE_API_BASE_ENV,
+                                    base
+                                ));
+                            }
+
+                            let config_dir = dirs::config_dir()
+                                .ok_or_else(|| anyhow::anyhow!("No config directory found"))?
+                                .join("jcode");
+                            std::fs::create_dir_all(&config_dir)?;
+                            crate::platform::set_directory_permissions_owner_only(&config_dir)?;
+
+                            let file_path = config_dir.join(&env_file);
+                            std::fs::write(&file_path, content)?;
+                            crate::platform::set_permissions_owner_only(&file_path)?;
+                            std::env::set_var(&key_name, &key);
+                            Ok(())
+                        })()
+                    } else {
+                        Self::save_named_api_key(&env_file, &key_name, &key)
+                    };
+
+                match save_result {
                     Ok(()) => {
                         let model_hint = default_model
                             .map(|m| format!("\nSuggested default model: `{}`", m))
                             .unwrap_or_default();
-                        let guidance = if key_name == "OPENROUTER_API_KEY" {
+                        let guidance = if key_name == crate::subscription_catalog::JCODE_API_KEY_ENV
+                        {
+                            format!(
+                                "Use `--provider jcode` or `/login jcode` to access curated models via your router.\nDocs: {}",
+                                docs_url
+                            )
+                        } else if key_name == "OPENROUTER_API_KEY" {
                             "You can now use `/model` to switch to OpenRouter models.".to_string()
                         } else {
                             format!(

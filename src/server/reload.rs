@@ -197,6 +197,7 @@ pub(super) fn provider_cli_arg(provider_name: &str) -> Option<String> {
         "claude" => Some("claude".to_string()),
         "cursor" => Some("cursor".to_string()),
         "copilot" => Some("copilot".to_string()),
+        "gemini" => Some("gemini".to_string()),
         "antigravity" => Some("antigravity".to_string()),
         _ => None,
     }

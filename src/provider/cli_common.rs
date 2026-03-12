@@ -12,6 +12,9 @@ fn provider_login_hint(provider_name: &str) -> Option<&'static str> {
         "copilot" => {
             Some("Run `jcode login --provider copilot` to authenticate via GitHub device flow.")
         }
+        "gemini" => Some(
+            "Run `jcode login --provider gemini` to authenticate via the official Gemini CLI browser flow.",
+        ),
         "antigravity" => Some("Run `jcode login --provider antigravity` to re-authenticate."),
         _ => None,
     }

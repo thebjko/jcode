@@ -23,22 +23,26 @@ impl LoginProviderAuthKind {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LoginProviderTarget {
+    Jcode,
     Claude,
     OpenAi,
     OpenRouter,
     OpenAiCompatible(OpenAiCompatibleProfile),
     Cursor,
     Copilot,
+    Gemini,
     Antigravity,
     Google,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LoginProviderAuthStateKey {
+    Jcode,
     Anthropic,
     OpenAi,
     OpenRouterLike,
     Copilot,
+    Gemini,
     Antigravity,
     Cursor,
     Google,
@@ -208,6 +212,19 @@ pub const CLAUDE_LOGIN_PROVIDER: LoginProviderDescriptor = LoginProviderDescript
     order: LoginProviderSurfaceOrder::new(Some(1), Some(1), Some(1), Some(1), Some(1)),
 };
 
+pub const JCODE_LOGIN_PROVIDER: LoginProviderDescriptor = LoginProviderDescriptor {
+    id: "jcode",
+    display_name: "Jcode Subscription",
+    auth_kind: LoginProviderAuthKind::ApiKey,
+    auth_state_key: LoginProviderAuthStateKey::Jcode,
+    auth_status_method: "API key",
+    aliases: &["subscription", "jcode-subscription"],
+    menu_detail: "curated jcode subscription models",
+    recommended: false,
+    target: LoginProviderTarget::Jcode,
+    order: LoginProviderSurfaceOrder::new(Some(3), Some(3), Some(3), Some(3), Some(3)),
+};
+
 pub const OPENAI_LOGIN_PROVIDER: LoginProviderDescriptor = LoginProviderDescriptor {
     id: "openai",
     display_name: "OpenAI",
@@ -338,6 +355,19 @@ pub const COPILOT_LOGIN_PROVIDER: LoginProviderDescriptor = LoginProviderDescrip
     order: LoginProviderSurfaceOrder::new(Some(3), Some(10), Some(3), Some(10), Some(10)),
 };
 
+pub const GEMINI_LOGIN_PROVIDER: LoginProviderDescriptor = LoginProviderDescriptor {
+    id: "gemini",
+    display_name: "Google Gemini CLI",
+    auth_kind: LoginProviderAuthKind::Cli,
+    auth_state_key: LoginProviderAuthStateKey::Gemini,
+    auth_status_method: "CLI",
+    aliases: &[],
+    menu_detail: "official Gemini CLI browser login",
+    recommended: false,
+    target: LoginProviderTarget::Gemini,
+    order: LoginProviderSurfaceOrder::new(Some(13), Some(11), Some(4), Some(11), Some(13)),
+};
+
 pub const ANTIGRAVITY_LOGIN_PROVIDER: LoginProviderDescriptor = LoginProviderDescriptor {
     id: "antigravity",
     display_name: "Antigravity",
@@ -348,7 +378,7 @@ pub const ANTIGRAVITY_LOGIN_PROVIDER: LoginProviderDescriptor = LoginProviderDes
     menu_detail: "CLI login",
     recommended: false,
     target: LoginProviderTarget::Antigravity,
-    order: LoginProviderSurfaceOrder::new(Some(12), Some(11), None, Some(11), Some(11)),
+    order: LoginProviderSurfaceOrder::new(Some(12), Some(12), None, Some(12), Some(12)),
 };
 
 pub const GOOGLE_LOGIN_PROVIDER: LoginProviderDescriptor = LoginProviderDescriptor {
@@ -364,9 +394,10 @@ pub const GOOGLE_LOGIN_PROVIDER: LoginProviderDescriptor = LoginProviderDescript
     order: LoginProviderSurfaceOrder::new(Some(13), None, None, None, None),
 };
 
-const LOGIN_PROVIDERS: [LoginProviderDescriptor; 13] = [
+const LOGIN_PROVIDERS: [LoginProviderDescriptor; 15] = [
     CLAUDE_LOGIN_PROVIDER,
     OPENAI_LOGIN_PROVIDER,
+    JCODE_LOGIN_PROVIDER,
     OPENROUTER_LOGIN_PROVIDER,
     OPENCODE_LOGIN_PROVIDER,
     OPENCODE_GO_LOGIN_PROVIDER,
@@ -376,6 +407,7 @@ const LOGIN_PROVIDERS: [LoginProviderDescriptor; 13] = [
     OPENAI_COMPAT_LOGIN_PROVIDER,
     CURSOR_LOGIN_PROVIDER,
     COPILOT_LOGIN_PROVIDER,
+    GEMINI_LOGIN_PROVIDER,
     ANTIGRAVITY_LOGIN_PROVIDER,
     GOOGLE_LOGIN_PROVIDER,
 ];
@@ -644,6 +676,46 @@ pub fn load_api_key_from_env_or_config(env_key: &str, file_name: &str) -> Option
     None
 }
 
+pub fn load_env_value_from_env_or_config(env_key: &str, file_name: &str) -> Option<String> {
+    if !is_safe_env_key_name(env_key) {
+        crate::logging::warn(&format!(
+            "Ignoring invalid variable name '{}' while loading config value",
+            env_key
+        ));
+        return None;
+    }
+    if !is_safe_env_file_name(file_name) {
+        crate::logging::warn(&format!(
+            "Ignoring invalid env file name '{}' while loading config value",
+            file_name
+        ));
+        return None;
+    }
+
+    if let Ok(value) = std::env::var(env_key) {
+        let value = value.trim();
+        if !value.is_empty() {
+            return Some(value.to_string());
+        }
+    }
+
+    let config_path = dirs::config_dir()?.join("jcode").join(file_name);
+    crate::storage::harden_secret_file_permissions(&config_path);
+    let content = std::fs::read_to_string(config_path).ok()?;
+    let prefix = format!("{}=", env_key);
+
+    for line in content.lines() {
+        if let Some(value) = line.strip_prefix(&prefix) {
+            let value = value.trim().trim_matches('"').trim_matches('\'');
+            if !value.is_empty() {
+                return Some(value.to_string());
+            }
+        }
+    }
+
+    None
+}
+
 pub fn is_safe_env_key_name(name: &str) -> bool {
     !name.is_empty()
         && name
@@ -762,6 +834,10 @@ mod tests {
     #[test]
     fn matrix_login_provider_aliases_resolve_to_canonical_ids() {
         assert_eq!(
+            resolve_login_provider("subscription").map(|provider| provider.id),
+            Some("jcode")
+        );
+        assert_eq!(
             resolve_login_provider("anthropic").map(|provider| provider.id),
             Some("claude")
         );
@@ -814,7 +890,7 @@ mod tests {
             Some("claude")
         );
         assert_eq!(
-            resolve_login_selection("12", &providers).map(|provider| provider.id),
+            resolve_login_selection("13", &providers).map(|provider| provider.id),
             Some("cursor")
         );
         assert_eq!(
@@ -829,14 +905,22 @@ mod tests {
         let providers = cli_login_providers();
         assert_eq!(
             resolve_login_selection("3", &providers).map(|provider| provider.id),
-            Some("copilot")
+            Some("jcode")
         );
         assert_eq!(
             resolve_login_selection("4", &providers).map(|provider| provider.id),
+            Some("copilot")
+        );
+        assert_eq!(
+            resolve_login_selection("5", &providers).map(|provider| provider.id),
             Some("openrouter")
         );
         assert_eq!(
-            resolve_login_selection("13", &providers).map(|provider| provider.id),
+            resolve_login_selection("14", &providers).map(|provider| provider.id),
+            Some("gemini")
+        );
+        assert_eq!(
+            resolve_login_selection("15", &providers).map(|provider| provider.id),
             Some("google")
         );
     }

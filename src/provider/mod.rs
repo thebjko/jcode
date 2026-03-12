@@ -4,6 +4,7 @@ pub mod claude;
 pub mod cli_common;
 pub mod copilot;
 pub mod cursor;
+pub mod gemini;
 pub mod openai;
 pub mod openrouter;
 
@@ -776,6 +777,39 @@ pub const ALL_OPENAI_MODELS: &[&str] = &[
     "gpt-5-nano",
     "gpt-5",
 ];
+
+fn filtered_display_models(models: impl IntoIterator<Item = String>) -> Vec<String> {
+    models
+        .into_iter()
+        .filter(|model| {
+            !crate::subscription_catalog::has_credentials()
+                || crate::subscription_catalog::is_curated_model(model)
+        })
+        .collect()
+}
+
+fn filtered_model_routes(routes: Vec<ModelRoute>) -> Vec<ModelRoute> {
+    if !crate::subscription_catalog::has_credentials() {
+        return routes;
+    }
+
+    routes
+        .into_iter()
+        .filter(|route| crate::subscription_catalog::is_curated_model(&route.model))
+        .collect()
+}
+
+fn ensure_model_allowed_for_subscription(model: &str) -> Result<()> {
+    if crate::subscription_catalog::has_credentials()
+        && !crate::subscription_catalog::is_curated_model(model)
+    {
+        anyhow::bail!(
+            "Model '{}' is not included in the current jcode subscription catalog",
+            model
+        );
+    }
+    Ok(())
+}
 
 /// Default context window size when model-specific data isn't known.
 pub const DEFAULT_CONTEXT_LIMIT: usize = 200_000;
@@ -2630,6 +2664,8 @@ impl Provider for MultiProvider {
     fn set_model(&self, model: &str) -> Result<()> {
         self.spawn_openai_catalog_refresh_if_needed();
 
+        ensure_model_allowed_for_subscription(model)?;
+
         // Handle explicit "copilot:" prefix from model picker
         if let Some(copilot_model) = model.strip_prefix("copilot:") {
             if let Some(forced) = self.forced_provider {
@@ -2821,7 +2857,7 @@ impl Provider for MultiProvider {
         if let Some(ref openrouter) = self.openrouter {
             models.extend(openrouter.available_models_display());
         }
-        models
+        filtered_display_models(models)
     }
 
     fn available_providers_for_model(&self, model: &str) -> Vec<String> {
@@ -3115,7 +3151,7 @@ impl Provider for MultiProvider {
             }
         }
 
-        routes
+        filtered_model_routes(routes)
     }
 
     async fn prefetch_models(&self) -> Result<()> {
@@ -3792,5 +3828,49 @@ mod tests {
         assert_eq!(provider_for_model("claude-sonnet-4.6"), Some("claude"));
         assert_eq!(provider_for_model("claude-haiku-4.5"), Some("claude"));
         assert_eq!(provider_for_model("gpt-4.1"), Some("openai"));
+    }
+
+    #[test]
+    fn test_subscription_model_guard_allows_only_curated_models_when_enabled() {
+        let _guard = crate::storage::lock_test_env();
+        let original = std::env::var(crate::subscription_catalog::JCODE_API_KEY_ENV).ok();
+        std::env::set_var(crate::subscription_catalog::JCODE_API_KEY_ENV, "test-key");
+
+        assert!(ensure_model_allowed_for_subscription("moonshotai/kimi-k2.5").is_ok());
+        assert!(ensure_model_allowed_for_subscription("kimi/k2.5").is_ok());
+        assert!(ensure_model_allowed_for_subscription("gpt-5.4").is_err());
+
+        if let Some(value) = original {
+            std::env::set_var(crate::subscription_catalog::JCODE_API_KEY_ENV, value);
+        } else {
+            std::env::remove_var(crate::subscription_catalog::JCODE_API_KEY_ENV);
+        }
+    }
+
+    #[test]
+    fn test_filtered_display_models_respects_curated_subscription_catalog() {
+        let _guard = crate::storage::lock_test_env();
+        let original = std::env::var(crate::subscription_catalog::JCODE_API_KEY_ENV).ok();
+        std::env::set_var(crate::subscription_catalog::JCODE_API_KEY_ENV, "test-key");
+
+        let filtered = filtered_display_models(vec![
+            "gpt-5.4".to_string(),
+            "moonshotai/kimi-k2.5".to_string(),
+            "openrouter/healer-alpha".to_string(),
+        ]);
+
+        assert_eq!(
+            filtered,
+            vec![
+                "moonshotai/kimi-k2.5".to_string(),
+                "openrouter/healer-alpha".to_string()
+            ]
+        );
+
+        if let Some(value) = original {
+            std::env::set_var(crate::subscription_catalog::JCODE_API_KEY_ENV, value);
+        } else {
+            std::env::remove_var(crate::subscription_catalog::JCODE_API_KEY_ENV);
+        }
     }
 }

@@ -183,6 +183,7 @@ pub(super) fn build_auth_status_line(auth: &AuthStatus, max_width: usize) -> Lin
         (openai_label, auth.openai),
         (provider_label("cursor", auth.cursor, None), auth.cursor),
         (provider_label("copilot", auth.copilot, None), auth.copilot),
+        (provider_label("gemini", auth.gemini, None), auth.gemini),
         (
             provider_label("antigravity", auth.antigravity, None),
             auth.antigravity,
@@ -198,6 +199,7 @@ pub(super) fn build_auth_status_line(auth: &AuthStatus, max_width: usize) -> Lin
         (provider_label("oa", auth.openai, None), auth.openai),
         (provider_label("cu", auth.cursor, None), auth.cursor),
         (provider_label("cp", auth.copilot, None), auth.copilot),
+        (provider_label("ge", auth.gemini, None), auth.gemini),
         (
             provider_label("ag", auth.antigravity, None),
             auth.antigravity,

@@ -1023,7 +1023,7 @@ impl App {
             "split" => "`/split`\nSplit the current session into a new window. Clones the full conversation history so both sessions continue from the same point.",
             "resume" | "sessions" => "`/resume`\nOpen the interactive session picker. Browse and search all sessions, preview conversation history, and open any session in a new terminal window.\n\nPress `Esc` to return to your current session.",
             "info" => "`/info`\nShow session metadata and token usage.",
-            "usage" => "`/usage`\nFetch and display subscription usage limits for all connected OAuth providers (Anthropic, OpenAI/ChatGPT).\nShows 5-hour and 7-day windows, reset times, and extra usage status.",
+            "usage" => "`/usage`\nFetch and display subscription usage limits for connected providers. Today this shows OAuth provider windows (Anthropic, OpenAI/ChatGPT); jcode subscription budget reporting is scaffolded but not yet backed by a live billing service.",
             "version" => "`/version`\nShow jcode version/build details.",
             "changelog" => "`/changelog`\nShow recent changes embedded in this build.",
             "quit" => "`/quit`\nExit jcode.",
@@ -1031,7 +1031,7 @@ impl App {
                 "`/config`\nShow active configuration.\n\n`/config init`\nCreate default config file.\n\n`/config edit`\nOpen config in `$EDITOR`."
             }
             "auth" | "login" => {
-                "`/auth`\nShow authentication status for all providers.\n\n`/login`\nInteractive provider selection - pick a provider to log into.\n\n`/login <provider>`\nStart login flow directly for any provider shown by `/login` or the `/login ` completions."
+                "`/auth`\nShow authentication status for all providers.\n\n`/login`\nInteractive provider selection - pick a provider to log into.\n\n`/login <provider>`\nStart login flow directly for any provider shown by `/login` or the `/login ` completions.\n\nUse `/login jcode` for curated jcode subscription access via your router, not OpenRouter BYOK."
             }
             "account" | "accounts" => {
                 "`/account`\nList all Anthropic OAuth accounts.\n\n`/account add <label>`\nAdd a new account via OAuth login.\n\n`/account switch <label>`\nSwitch the active account.\n\n`/account remove <label>`\nRemove an account."

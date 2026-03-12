@@ -391,10 +391,11 @@ pub(super) async fn execute_debug_command(
             "openrouter" => "anthropic/claude-sonnet-4",
             "cursor" => "gpt-5",
             "copilot" => "copilot:claude-sonnet-4",
+            "gemini" => "gemini-2.5-pro",
             "antigravity" => "default",
             _ => {
                 return Err(anyhow::anyhow!(
-                    "Unknown provider '{}'. Use: claude, openai, openrouter, cursor, copilot, antigravity",
+                    "Unknown provider '{}'. Use: claude, openai, openrouter, cursor, copilot, gemini, antigravity",
                     provider
                 ))
             }
