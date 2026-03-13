@@ -322,7 +322,7 @@ impl Default for DisplayConfig {
             diff_line_wrap: true,
             performance: String::new(),
             animation_fps: 60,
-            redraw_fps: 30,
+            redraw_fps: 60,
             prompt_preview: true,
         }
     }
@@ -1005,8 +1005,8 @@ prompt_entry_animation = true
 # Startup animation is skipped entirely if animation_fps < 20 (shows nothing instead of low-FPS jank)
 # animation_fps = 60
 
-# Active redraw FPS (processing, streaming, spinners): 1-120 (default: 30)
-# redraw_fps = 30
+# Active redraw FPS (processing, streaming, spinners): 1-120 (default: 60)
+# redraw_fps = 60
 
 [features]
 # Memory: retrieval + extraction sidecar features
