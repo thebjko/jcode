@@ -11,75 +11,28 @@
     <div class="canvas">
       <div class="statusbar">
         <div>9:41</div>
-        <div class="right mono">5G 100%</div>
+        <div class="mono">5G</div>
       </div>
-
       <div class="topbar">
-        <div class="server-meta">
+        <div class="topbar-left">
           <div class="dot"></div>
-          <div>
-            <div class="server-name">jcode</div>
-            <div class="server-sub mono">v0.4.1 · connected</div>
-          </div>
+          <div class="topbar-name">jcode</div>
         </div>
-        <div class="badge accent mono">gpt-5</div>
+        <div class="model-tag mono">sonnet-4</div>
       </div>
-
-      <div class="content">
-        <div class="chat-scroll">
-          <div class="messages">
-            <div class="row system">
-              <div class="message-label">System</div>
-              <div class="bubble system">Connected to jcode over Tailscale. Notifications and session sync are active.</div>
-            </div>
-
-            <div class="row user">
-              <div class="message-label" style="text-align:right;">You</div>
-              <div class="bubble user">Can you summarize the reload path and check the latest build status?</div>
-            </div>
-
-            <div class="row assistant">
-              <div class="message-label">jcode</div>
-              <div class="bubble assistant">Yep — I checked the current server reload flow and verified the selfdev hooks.<br><br>Next I’m tightening the handoff and validating the test path.</div>
-            </div>
-
-            <div class="tool-card mono">
-              <div class="tool-head">
-                <div class="tool-dot"></div>
-                <div class="tool-name">selfdev</div>
-                <div style="flex:1"></div>
-                <div class="badge blue mono">running</div>
-              </div>
-              <div class="tool-body">
-                <div class="tool-section">INPUT</div>
-                {"action":"status"}
-              </div>
-              <div class="tool-body">
-                <div class="tool-section">OUTPUT</div>
-                checking current binary and build metadata…
-              </div>
-            </div>
-
-            <div class="row assistant">
-              <div class="message-label">jcode</div>
-              <div class="bubble assistant">I also prepared a mobile-first concept so the iOS client and pairing flow can be handed off cleanly.</div>
-            </div>
-          </div>
+      <div class="messages">
+        <div class="msg msg-system">Connected over Tailscale</div>
+        <div class="msg msg-user">Summarize the reload path and check build status.</div>
+        <div class="msg msg-assistant">Checked the server reload flow and verified selfdev hooks. Tightening the handoff next.</div>
+        <div class="tool mono">
+          <div class="tool-header"><div class="tool-dot"></div>selfdev</div>
+          <div class="tool-output">{"action":"status"}</div>
         </div>
-
-        <div class="chat-controls">
-          <div class="pill stop">Stop</div>
-          <div class="pill interrupt">Interrupt</div>
-        </div>
+        <div class="msg msg-assistant">Prepared a mobile-first concept for the iOS client handoff.</div>
       </div>
-
-      <div class="composer">
-        <div class="composer-row">
-          <div class="circle-btn">＋</div>
-          <div class="circle-btn">◉</div>
-          <div class="compose-input">Message jcode…</div>
-          <div class="circle-btn send">↑</div>
-        </div>
+      <div class="composer-bar">
+        <div class="compose-field">Message…</div>
+        <div class="send-btn">↑</div>
       </div>
     </div>
   </div>

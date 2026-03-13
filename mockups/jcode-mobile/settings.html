@@ -11,66 +11,38 @@
     <div class="canvas">
       <div class="statusbar">
         <div>9:41</div>
-        <div class="right mono">5G 100%</div>
+        <div class="mono">5G</div>
       </div>
-
-      <div class="topbar" style="justify-content:center; position:relative;">
-        <div class="nav-title">Settings</div>
-        <div class="nav-text-button" style="position:absolute; right:20px;">Done</div>
+      <div class="nav-bar">
+        <div class="title">Settings</div>
+        <div class="action">Done</div>
       </div>
-
-      <div class="content settings-scroll">
+      <div class="settings-body">
         <section>
-          <div class="section-title">Connection</div>
-          <div class="card settings-card">
-            <div style="display:flex; align-items:center; gap:12px;">
-              <div class="dot"></div>
-              <div style="flex:1;">
-                <div class="row-title">Connected</div>
-                <div class="row-sub mono">macbook.tail1234.ts.net:7643</div>
-              </div>
-              <div class="pill-link">Disconnect</div>
+          <div class="section-label">Connection</div>
+          <div class="connection-row">
+            <div class="dot"></div>
+            <div class="info">
+              <div class="status">Connected</div>
+              <div class="host mono">macbook:7643</div>
             </div>
+            <div class="disconnect-btn">Disconnect</div>
           </div>
         </section>
-
         <section>
-          <div class="section-title">Servers</div>
-          <div class="settings-stack">
-            <div class="settings-row selected">
-              <div class="row-icon selected">⌘</div>
-              <div class="row-main">
-                <div class="row-title">jeremy-mbp</div>
-                <div class="row-sub mono">macbook.tail1234.ts.net:7643 · v0.4.1</div>
-              </div>
-              <div style="color:var(--accent);">●</div>
-            </div>
-            <div class="settings-row">
-              <div class="row-icon">⌘</div>
-              <div class="row-main">
-                <div class="row-title">office-linux-box</div>
-                <div class="row-sub mono">devbox.tail1234.ts.net:7643 · v0.4.1</div>
-              </div>
-              <div style="color:var(--text-3);">🗑</div>
-            </div>
+          <div class="section-label">Sessions</div>
+          <div class="list-group">
+            <div class="list-item active"><span class="mono">fox</span><span class="check">●</span></div>
+            <div class="list-item"><span class="mono">canary</span></div>
+            <div class="list-item"><span class="mono">ios-pairing</span></div>
           </div>
         </section>
-
         <section>
-          <div class="section-title">Sessions</div>
-          <div class="settings-stack">
-            <div class="settings-row selected"><div class="row-main mono">session_abc123_fox</div><div style="color:var(--accent);">●</div></div>
-            <div class="settings-row"><div class="row-main mono">session_reload_canary</div></div>
-            <div class="settings-row"><div class="row-main mono">session_ios_pairing</div></div>
-          </div>
-        </section>
-
-        <section>
-          <div class="section-title">Model</div>
-          <div class="settings-stack">
-            <div class="settings-row selected"><div class="row-main mono">openai/gpt-5</div><div style="color:var(--accent);">●</div></div>
-            <div class="settings-row"><div class="row-main mono">anthropic/claude-sonnet-4</div></div>
-            <div class="settings-row"><div class="row-main mono">openrouter/qwen-3-coder</div></div>
+          <div class="section-label">Model</div>
+          <div class="list-group">
+            <div class="list-item active"><span class="mono">claude-sonnet-4</span><span class="check">●</span></div>
+            <div class="list-item"><span class="mono">gpt-5</span></div>
+            <div class="list-item"><span class="mono">qwen-3-coder</span></div>
           </div>
         </section>
       </div>

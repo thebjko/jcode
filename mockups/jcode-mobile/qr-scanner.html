@@ -7,21 +7,19 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body class="page">
-  <div class="phone qr-scene">
+  <div class="phone" style="background:#0a0c10;">
     <div class="canvas">
       <div class="statusbar">
         <div>9:41</div>
-        <div class="right mono">5G 100%</div>
+        <div class="mono">5G</div>
       </div>
-      <div class="topbar" style="justify-content:center; background:transparent; border-bottom:0; position:relative; z-index:2;">
-        <div class="nav-title">Scan QR Code</div>
+      <div class="nav-bar" style="background:transparent; border:0;">
         <div style="position:absolute; left:20px; color:var(--text-2); font-size:14px;">Cancel</div>
+        <div class="title">Scan</div>
       </div>
-      <div class="camera-grid"></div>
-      <div class="qr-window"></div>
-      <div class="camera-callout">
-        <div class="icon">⌾</div>
-        <div>Point at the QR code from <span class="mono">jcode pair</span></div>
+      <div class="qr-body">
+        <div class="viewfinder"></div>
+        <div class="qr-hint">Point at the QR code<br>from <span class="mono">jcode pair</span></div>
       </div>
     </div>
   </div>
