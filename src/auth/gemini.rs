@@ -9,9 +9,10 @@ const GEMINI_MANUAL_REDIRECT_URI: &str = "https://codeassist.google.com/authcode
 // OAuth credentials from Google's official Gemini CLI (@google/gemini-cli).
 // These are for a "Desktop app" OAuth type where the client secret is safe to embed.
 // See: https://developers.google.com/identity/protocols/oauth2#installed
+// gitleaks:allow - public desktop OAuth credentials, safe to embed
 const GEMINI_CLIENT_ID: &str =
-    "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com";
-const GEMINI_CLIENT_SECRET: &str = "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";
+    "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com"; // gitleaks:allow
+const GEMINI_CLIENT_SECRET: &str = "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"; // gitleaks:allow
 // Env vars can override the hardcoded credentials if needed
 const GEMINI_CLIENT_ID_ENV: &str = "GEMINI_CLIENT_ID";
 const GEMINI_CLIENT_SECRET_ENV: &str = "GEMINI_CLIENT_SECRET";
