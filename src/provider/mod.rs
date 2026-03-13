@@ -3857,6 +3857,11 @@ mod tests {
 
     #[test]
     fn test_set_model_rejects_cross_provider_without_creds() {
+        let _guard = crate::storage::lock_test_env();
+        crate::subscription_catalog::clear_runtime_env();
+        std::env::remove_var("JCODE_ACTIVE_PROVIDER");
+        std::env::remove_var("JCODE_FORCE_PROVIDER");
+
         let provider = MultiProvider {
             claude: None,
             anthropic: None,
