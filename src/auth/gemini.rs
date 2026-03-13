@@ -6,6 +6,13 @@ const GOOGLE_AUTHORIZE_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth
 const GOOGLE_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const GOOGLE_USERINFO_URL: &str = "https://www.googleapis.com/oauth2/v2/userinfo";
 const GEMINI_MANUAL_REDIRECT_URI: &str = "https://codeassist.google.com/authcode";
+// OAuth credentials from Google's official Gemini CLI (@google/gemini-cli).
+// These are for a "Desktop app" OAuth type where the client secret is safe to embed.
+// See: https://developers.google.com/identity/protocols/oauth2#installed
+const GEMINI_CLIENT_ID: &str =
+    "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com";
+const GEMINI_CLIENT_SECRET: &str = "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";
+// Env vars can override the hardcoded credentials if needed
 const GEMINI_CLIENT_ID_ENV: &str = "GEMINI_CLIENT_ID";
 const GEMINI_CLIENT_SECRET_ENV: &str = "GEMINI_CLIENT_SECRET";
 const GEMINI_SCOPES: &[&str] = &[
@@ -14,19 +21,12 @@ const GEMINI_SCOPES: &[&str] = &[
     "https://www.googleapis.com/auth/userinfo.profile",
 ];
 
-fn gemini_oauth_config_error() -> String {
-    format!(
-        "Gemini OAuth is not configured. Set {} and {} to enable native Gemini login.",
-        GEMINI_CLIENT_ID_ENV, GEMINI_CLIENT_SECRET_ENV
-    )
+fn gemini_client_id() -> String {
+    std::env::var(GEMINI_CLIENT_ID_ENV).unwrap_or_else(|_| GEMINI_CLIENT_ID.to_string())
 }
 
-fn gemini_client_id() -> Result<String> {
-    std::env::var(GEMINI_CLIENT_ID_ENV).with_context(gemini_oauth_config_error)
-}
-
-fn gemini_client_secret() -> Result<String> {
-    std::env::var(GEMINI_CLIENT_SECRET_ENV).with_context(gemini_oauth_config_error)
+fn gemini_client_secret() -> String {
+    std::env::var(GEMINI_CLIENT_SECRET_ENV).unwrap_or_else(|_| GEMINI_CLIENT_SECRET.to_string())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -189,8 +189,8 @@ pub async fn load_or_refresh_tokens() -> Result<GeminiTokens> {
 }
 
 pub async fn refresh_tokens(tokens: &GeminiTokens) -> Result<GeminiTokens> {
-    let client_id = gemini_client_id()?;
-    let client_secret = gemini_client_secret()?;
+    let client_id = gemini_client_id();
+    let client_secret = gemini_client_secret();
     let client = reqwest::Client::new();
     let resp = client
         .post(GOOGLE_TOKEN_URL)
@@ -351,8 +351,8 @@ async fn exchange_authorization_code(
     verifier: Option<&str>,
     redirect_uri: &str,
 ) -> Result<GeminiTokens> {
-    let client_id = gemini_client_id()?;
-    let client_secret = gemini_client_secret()?;
+    let client_id = gemini_client_id();
+    let client_secret = gemini_client_secret();
     let client = reqwest::Client::new();
     let mut form = vec![
         ("grant_type", "authorization_code".to_string()),
@@ -422,7 +422,7 @@ pub async fn fetch_email(access_token: &str) -> Result<String> {
 
 pub fn build_web_auth_url(redirect_uri: &str, state: &str) -> Result<String> {
     let scope = GEMINI_SCOPES.join(" ");
-    let client_id = gemini_client_id()?;
+    let client_id = gemini_client_id();
     Ok(format!(
         "{base}?response_type=code&client_id={client_id}&redirect_uri={redirect_uri}&scope={scope}&state={state}&access_type=offline",
         base = GOOGLE_AUTHORIZE_URL,
@@ -435,7 +435,7 @@ pub fn build_web_auth_url(redirect_uri: &str, state: &str) -> Result<String> {
 
 pub fn build_manual_auth_url(redirect_uri: &str, challenge: &str, state: &str) -> Result<String> {
     let scope = GEMINI_SCOPES.join(" ");
-    let client_id = gemini_client_id()?;
+    let client_id = gemini_client_id();
     Ok(format!(
         "{base}?response_type=code&client_id={client_id}&redirect_uri={redirect_uri}&scope={scope}&code_challenge={challenge}&code_challenge_method=S256&state={state}&access_type=offline&prompt=consent",
         base = GOOGLE_AUTHORIZE_URL,
@@ -642,16 +642,18 @@ mod tests {
     }
 
     #[test]
-    fn build_manual_auth_url_requires_env_credentials() {
+    fn uses_hardcoded_credentials_when_env_missing() {
         let _guard = lock_test_env();
         std::env::remove_var(GEMINI_CLIENT_ID_ENV);
         std::env::remove_var(GEMINI_CLIENT_SECRET_ENV);
 
-        let err = build_manual_auth_url(GEMINI_MANUAL_REDIRECT_URI, "challenge-123", "state-123")
-            .expect_err("missing oauth env should fail");
-        let err = err.to_string();
-        assert!(err.contains(GEMINI_CLIENT_ID_ENV));
-        assert!(err.contains(GEMINI_CLIENT_SECRET_ENV));
+        // Should succeed with hardcoded credentials
+        let url = build_manual_auth_url(GEMINI_MANUAL_REDIRECT_URI, "challenge-123", "state-123")
+            .expect("should use hardcoded credentials");
+        assert!(url.contains("codeassist.google.com%2Fauthcode"));
+        assert!(url.contains("code_challenge=challenge-123"));
+        // Should contain the hardcoded client ID
+        assert!(url.contains("681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com"));
     }
 
     #[test]
