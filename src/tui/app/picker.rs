@@ -382,7 +382,8 @@ impl App {
                 let is_1m = model.ends_with("[1m]");
                 let is_opus = model.contains("opus");
                 let is_max = crate::auth::claude::is_max_subscription();
-                let (available, detail) = if is_1m && !crate::usage::has_extra_usage() {
+                let model_defaults_1m = crate::provider::anthropic::effectively_1m(&model);
+                let (available, detail) = if is_1m && !model_defaults_1m && !crate::usage::has_extra_usage() {
                     (false, "requires extra usage".to_string())
                 } else if is_opus && !is_max {
                     (false, "requires Max subscription".to_string())

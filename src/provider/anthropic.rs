@@ -42,22 +42,34 @@ const CLAUDE_CLI_USER_AGENT: &str = "claude-cli/1.0.0";
 /// Beta headers required for OAuth (base)
 const OAUTH_BETA_HEADERS: &str = "oauth-2025-04-20,claude-code-20250219,prompt-caching-2024-07-31";
 
-/// Beta headers with 1M context (requires extra usage enabled)
+/// Beta headers with 1M context
 const OAUTH_BETA_HEADERS_1M: &str =
     "oauth-2025-04-20,claude-code-20250219,prompt-caching-2024-07-31,context-1m-2025-08-07";
 
+/// Check if this model should default to 1M context (Opus 4.6 and Sonnet 4.6).
+/// As of Claude Code 2.1.75, Max/Team/Enterprise plans get 1M by default.
+fn model_defaults_to_1m(model: &str) -> bool {
+    let base = model.strip_suffix("[1m]").unwrap_or(model);
+    base == "claude-opus-4-6" || base == "claude-sonnet-4-6"
+}
+
 /// Get the appropriate beta headers based on model
 fn oauth_beta_headers(model: &str) -> &'static str {
-    if is_1m_model(model) {
+    if is_1m_model(model) || (model_defaults_to_1m(model) && crate::auth::claude::is_max_subscription()) {
         OAUTH_BETA_HEADERS_1M
     } else {
         OAUTH_BETA_HEADERS
     }
 }
 
-/// Check if a model name requests 1M context (e.g. "claude-opus-4-6[1m]")
+/// Check if a model name explicitly requests 1M context via suffix (e.g. "claude-opus-4-6[1m]")
 fn is_1m_model(model: &str) -> bool {
     model.ends_with("[1m]")
+}
+
+/// Check if a model effectively uses 1M context (explicit [1m] suffix OR default 1M for Max users)
+pub fn effectively_1m(model: &str) -> bool {
+    is_1m_model(model) || (model_defaults_to_1m(model) && crate::auth::claude::is_max_subscription())
 }
 
 /// Strip the [1m] suffix to get the actual API model name

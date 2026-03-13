@@ -280,11 +280,9 @@ fn anthropic_oauth_pricing(model: &str) -> RouteCheapnessEstimate {
             usd_to_micros(100.0),
             None,
             Some(if is_opus {
-                "Claude Max plan; Opus access included".to_string()
-            } else if is_1m {
-                "Claude Max plan; 1M context depends on extra usage availability".to_string()
+                "Claude Max plan; Opus access included; 1M context".to_string()
             } else {
-                "Claude Max plan".to_string()
+                "Claude Max plan; 1M context".to_string()
             }),
         ),
         Some("pro") => RouteCheapnessEstimate::subscription(
@@ -293,7 +291,7 @@ fn anthropic_oauth_pricing(model: &str) -> RouteCheapnessEstimate {
             usd_to_micros(20.0),
             None,
             Some(if is_1m {
-                "Claude Pro plan; 1M context depends on extra usage availability".to_string()
+                "Claude Pro plan; 1M context requires extra usage".to_string()
             } else {
                 "Claude Pro plan".to_string()
             }),
@@ -1014,11 +1012,13 @@ fn fallback_context_limit_for_model(model: &str, provider_hint: Option<&str>) ->
     }
 
     if model.starts_with("claude-opus-4-6") || model.starts_with("claude-opus-4.6") {
-        return Some(if is_1m { 1_048_576 } else { 200_000 });
+        let eff_1m = is_1m || crate::provider::anthropic::effectively_1m(&format!("claude-opus-4-6{}", if is_1m { "[1m]" } else { "" }));
+        return Some(if eff_1m { 1_048_576 } else { 200_000 });
     }
 
     if model.starts_with("claude-sonnet-4-6") || model.starts_with("claude-sonnet-4.6") {
-        return Some(if is_1m { 1_048_576 } else { 200_000 });
+        let eff_1m = is_1m || crate::provider::anthropic::effectively_1m(&format!("claude-sonnet-4-6{}", if is_1m { "[1m]" } else { "" }));
+        return Some(if eff_1m { 1_048_576 } else { 200_000 });
     }
 
     if model.starts_with("claude-opus-4-5") || model.starts_with("claude-opus-4.5") {
@@ -3019,7 +3019,8 @@ impl Provider for MultiProvider {
             let is_1m = model.ends_with("[1m]");
             let is_opus = model.contains("opus");
 
-            let (available, detail) = if is_1m && !crate::usage::has_extra_usage() {
+            let model_defaults_1m = crate::provider::anthropic::effectively_1m(model);
+            let (available, detail) = if is_1m && !model_defaults_1m && !crate::usage::has_extra_usage() {
                 (false, "requires extra usage".to_string())
             } else if is_opus && !is_max && has_oauth && !has_api_key {
                 (false, "requires Max subscription".to_string())
@@ -3728,8 +3729,15 @@ mod tests {
 
     #[test]
     fn test_context_limit_claude() {
-        assert_eq!(context_limit_for_model("claude-opus-4-6"), Some(200_000));
-        assert_eq!(context_limit_for_model("claude-sonnet-4-6"), Some(200_000));
+        // Default (no subscription info = assumes Max) -> 1M for opus/sonnet 4.6
+        assert_eq!(
+            context_limit_for_model("claude-opus-4-6"),
+            Some(1_048_576)
+        );
+        assert_eq!(
+            context_limit_for_model("claude-sonnet-4-6"),
+            Some(1_048_576)
+        );
         assert_eq!(
             context_limit_for_model("claude-opus-4-6[1m]"),
             Some(1_048_576)
