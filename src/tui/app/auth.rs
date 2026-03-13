@@ -749,10 +749,16 @@ impl App {
                                 }));
                             }
                             Err(e) => {
+                                let message = format!("Gemini login failed: {}", e);
                                 crate::logging::info(&format!(
                                     "Gemini automatic callback did not complete: {}",
                                     e
                                 ));
+                                Bus::global().publish(BusEvent::LoginCompleted(LoginCompleted {
+                                    provider: "gemini".to_string(),
+                                    success: false,
+                                    message,
+                                }));
                             }
                         }
                     }
@@ -761,6 +767,11 @@ impl App {
                             "Gemini automatic callback did not complete: {}",
                             e
                         ));
+                        Bus::global().publish(BusEvent::LoginCompleted(LoginCompleted {
+                            provider: "gemini".to_string(),
+                            success: false,
+                            message: format!("Gemini login failed: {}", e),
+                        }));
                     }
                 }
             });

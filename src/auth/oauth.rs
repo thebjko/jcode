@@ -79,43 +79,90 @@ pub fn wait_for_callback(port: u16, expected_state: &str) -> Result<String> {
     let listener = TcpListener::bind(format!("127.0.0.1:{}", port))?;
     eprintln!("Waiting for OAuth callback on port {}...", port);
 
-    let (mut stream, _) = listener.accept()?;
-    let mut reader = BufReader::new(&stream);
-    let mut request_line = String::new();
-    reader.read_line(&mut request_line)?;
+    loop {
+        let (mut stream, _) = listener.accept()?;
+        let mut reader = BufReader::new(&stream);
+        let mut request_line = String::new();
+        reader.read_line(&mut request_line)?;
 
-    // Parse the request to get the code
-    // GET /callback?code=xxx&state=yyy HTTP/1.1
-    let parts: Vec<&str> = request_line.split_whitespace().collect();
-    if parts.len() < 2 {
-        anyhow::bail!("Invalid HTTP request");
+        let bad_request_response = |message: &str| {
+            format!(
+                "HTTP/1.1 400 Bad Request\r\nContent-Type: text/html\r\n\r\n<html><body><h1>Authentication not completed</h1><p>{}</p><p>You can close this tab and return to jcode.</p></body></html>",
+                message
+            )
+        };
+
+        let parts: Vec<&str> = request_line.split_whitespace().collect();
+        if parts.len() < 2 {
+            let _ = stream.write_all(bad_request_response("Invalid HTTP request.").as_bytes());
+            continue;
+        }
+
+        let path = parts[1];
+        let url = match url::Url::parse(&format!("http://localhost{}", path)) {
+            Ok(url) => url,
+            Err(_) => {
+                let _ = stream.write_all(
+                    bad_request_response("Could not parse OAuth callback URL.").as_bytes(),
+                );
+                continue;
+            }
+        };
+
+        if let Some(error) = url
+            .query_pairs()
+            .find(|(k, _)| k == "error")
+            .map(|(_, v)| v.to_string())
+        {
+            let _ = stream.write_all(
+                bad_request_response("Authentication was denied or cancelled.").as_bytes(),
+            );
+            anyhow::bail!("OAuth provider returned error: {}", error);
+        }
+
+        let code = match url
+            .query_pairs()
+            .find(|(k, _)| k == "code")
+            .map(|(_, v)| v.to_string())
+        {
+            Some(code) => code,
+            None => {
+                let _ = stream.write_all(
+                    bad_request_response("No authorization code was included in this request.")
+                        .as_bytes(),
+                );
+                continue;
+            }
+        };
+
+        let state = match url
+            .query_pairs()
+            .find(|(k, _)| k == "state")
+            .map(|(_, v)| v.to_string())
+        {
+            Some(state) => state,
+            None => {
+                let _ = stream.write_all(
+                    bad_request_response("No OAuth state was included in this request.").as_bytes(),
+                );
+                continue;
+            }
+        };
+
+        if state != expected_state {
+            let _ = stream.write_all(
+                bad_request_response("OAuth state mismatch. Please retry the latest login flow.")
+                    .as_bytes(),
+            );
+            continue;
+        }
+
+        let response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n\
+            <html><body><h1>Success!</h1><p>You can close this window.</p></body></html>";
+        stream.write_all(response.as_bytes())?;
+
+        return Ok(code);
     }
-
-    let path = parts[1];
-    let url = url::Url::parse(&format!("http://localhost{}", path))?;
-
-    let code = url
-        .query_pairs()
-        .find(|(k, _)| k == "code")
-        .map(|(_, v)| v.to_string())
-        .ok_or_else(|| anyhow::anyhow!("No code in callback"))?;
-
-    let state = url
-        .query_pairs()
-        .find(|(k, _)| k == "state")
-        .map(|(_, v)| v.to_string())
-        .ok_or_else(|| anyhow::anyhow!("No state in callback"))?;
-
-    if state != expected_state {
-        anyhow::bail!("State mismatch - possible CSRF attack");
-    }
-
-    // Send success response
-    let response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n\
-        <html><body><h1>Success!</h1><p>You can close this window.</p></body></html>";
-    stream.write_all(response.as_bytes())?;
-
-    Ok(code)
 }
 
 /// Async version of wait_for_callback using tokio (for use from TUI context)
@@ -136,43 +183,108 @@ pub async fn wait_for_callback_async_on_listener(
 ) -> Result<String> {
     let expected_state = expected_state.to_string();
 
-    let (stream, _) = listener.accept().await?;
-
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-    let (reader, mut writer) = stream.into_split();
-    let mut reader = BufReader::new(reader);
-    let mut request_line = String::new();
-    reader.read_line(&mut request_line).await?;
 
-    let parts: Vec<&str> = request_line.split_whitespace().collect();
-    if parts.len() < 2 {
-        anyhow::bail!("Invalid HTTP request");
+    loop {
+        let (stream, _) = listener.accept().await?;
+        let (reader, mut writer) = stream.into_split();
+        let mut reader = BufReader::new(reader);
+        let mut request_line = String::new();
+        reader.read_line(&mut request_line).await?;
+
+        let bad_request_response = |message: &str| {
+            format!(
+                "HTTP/1.1 400 Bad Request\r\nContent-Type: text/html\r\n\r\n<html><body><h1>Authentication not completed</h1><p>{}</p><p>You can close this tab and return to jcode.</p></body></html>",
+                message
+            )
+        };
+
+        let parts: Vec<&str> = request_line.split_whitespace().collect();
+        if parts.len() < 2 {
+            let _ = writer
+                .write_all(bad_request_response("Invalid HTTP request.").as_bytes())
+                .await;
+            continue;
+        }
+
+        let path = parts[1];
+        let url = match url::Url::parse(&format!("http://localhost{}", path)) {
+            Ok(url) => url,
+            Err(_) => {
+                let _ = writer
+                    .write_all(
+                        bad_request_response("Could not parse OAuth callback URL.").as_bytes(),
+                    )
+                    .await;
+                continue;
+            }
+        };
+
+        if let Some(error) = url
+            .query_pairs()
+            .find(|(k, _)| k == "error")
+            .map(|(_, v)| v.to_string())
+        {
+            let _ = writer
+                .write_all(
+                    bad_request_response("Authentication was denied or cancelled.").as_bytes(),
+                )
+                .await;
+            anyhow::bail!("OAuth provider returned error: {}", error);
+        }
+
+        let code = match url
+            .query_pairs()
+            .find(|(k, _)| k == "code")
+            .map(|(_, v)| v.to_string())
+        {
+            Some(code) => code,
+            None => {
+                let _ = writer
+                    .write_all(
+                        bad_request_response("No authorization code was included in this request.")
+                            .as_bytes(),
+                    )
+                    .await;
+                continue;
+            }
+        };
+
+        let state = match url
+            .query_pairs()
+            .find(|(k, _)| k == "state")
+            .map(|(_, v)| v.to_string())
+        {
+            Some(state) => state,
+            None => {
+                let _ = writer
+                    .write_all(
+                        bad_request_response("No OAuth state was included in this request.")
+                            .as_bytes(),
+                    )
+                    .await;
+                continue;
+            }
+        };
+
+        if state != expected_state {
+            let _ = writer
+                .write_all(
+                    bad_request_response(
+                        "OAuth state mismatch. Please retry the latest login flow.",
+                    )
+                    .as_bytes(),
+                )
+                .await;
+            continue;
+        }
+
+        let response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n\
+            <html><body><h1>Success!</h1><p>You can close this window and return to jcode.</p></body></html>";
+        writer.write_all(response.as_bytes()).await?;
+
+        return Ok(code);
     }
-
-    let path = parts[1];
-    let url = url::Url::parse(&format!("http://localhost{}", path))?;
-
-    let code = url
-        .query_pairs()
-        .find(|(k, _)| k == "code")
-        .map(|(_, v)| v.to_string())
-        .ok_or_else(|| anyhow::anyhow!("No code in callback"))?;
-
-    let state = url
-        .query_pairs()
-        .find(|(k, _)| k == "state")
-        .map(|(_, v)| v.to_string())
-        .ok_or_else(|| anyhow::anyhow!("No state in callback"))?;
-
-    if state != expected_state {
-        anyhow::bail!("State mismatch - possible CSRF attack");
-    }
-
-    let response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n\
-        <html><body><h1>Success!</h1><p>You can close this window and return to jcode.</p></body></html>";
-    writer.write_all(response.as_bytes()).await?;
-
-    Ok(code)
 }
 
 /// Perform OAuth login for Claude
@@ -1300,7 +1412,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn wait_for_callback_async_rejects_wrong_state() {
+    async fn wait_for_callback_async_ignores_wrong_state_until_valid_callback() {
         let listener = bind_callback_listener(0).unwrap();
         let port = listener.local_addr().unwrap().port();
 
@@ -1318,14 +1430,25 @@ mod tests {
             )
             .await
             .unwrap();
+        drop(stream);
+
+        let mut valid_stream = tokio::net::TcpStream::connect(format!("127.0.0.1:{}", port))
+            .await
+            .unwrap();
+        valid_stream
+            .write_all(
+                b"GET /callback?code=code123&state=expected_state HTTP/1.1\r\nHost: localhost\r\n\r\n",
+            )
+            .await
+            .unwrap();
 
         let result = handle.await.unwrap();
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("State mismatch"));
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "code123");
     }
 
     #[tokio::test]
-    async fn wait_for_callback_async_rejects_missing_code() {
+    async fn wait_for_callback_async_ignores_missing_code_until_valid_callback() {
         let listener = bind_callback_listener(0).unwrap();
         let port = listener.local_addr().unwrap().port();
 
@@ -1342,9 +1465,49 @@ mod tests {
             .write_all(b"GET /callback?state=state123 HTTP/1.1\r\nHost: localhost\r\n\r\n")
             .await
             .unwrap();
+        drop(stream);
+
+        let mut valid_stream = tokio::net::TcpStream::connect(format!("127.0.0.1:{}", port))
+            .await
+            .unwrap();
+        valid_stream
+            .write_all(
+                b"GET /callback?code=valid_code&state=state123 HTTP/1.1\r\nHost: localhost\r\n\r\n",
+            )
+            .await
+            .unwrap();
+
+        let result = handle.await.unwrap();
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "valid_code");
+    }
+
+    #[tokio::test]
+    async fn wait_for_callback_async_surfaces_provider_error() {
+        let listener = bind_callback_listener(0).unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let handle = tokio::spawn(async move {
+            wait_for_callback_async_on_listener(listener, "expected_state").await
+        });
+
+        let mut stream = tokio::net::TcpStream::connect(format!("127.0.0.1:{}", port))
+            .await
+            .unwrap();
+        use tokio::io::AsyncWriteExt;
+        stream
+            .write_all(
+                b"GET /callback?error=access_denied&state=expected_state HTTP/1.1\r\nHost: localhost\r\n\r\n",
+            )
+            .await
+            .unwrap();
 
         let result = handle.await.unwrap();
         assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("OAuth provider returned error"));
     }
 
     /// Helper: start a mock HTTP server that captures the request and returns a

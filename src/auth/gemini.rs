@@ -339,11 +339,15 @@ pub async fn exchange_callback_input(
         (input.trim().to_string(), Some(verifier))
     };
 
-    exchange_authorization_code(&code, verifier, redirect_uri).await
+    let tokens = exchange_authorization_code(&code, verifier, redirect_uri).await?;
+    save_tokens(&tokens)?;
+    Ok(tokens)
 }
 
 pub async fn exchange_callback_code(code: &str, redirect_uri: &str) -> Result<GeminiTokens> {
-    exchange_authorization_code(code, None, redirect_uri).await
+    let tokens = exchange_authorization_code(code, None, redirect_uri).await?;
+    save_tokens(&tokens)?;
+    Ok(tokens)
 }
 
 async fn exchange_authorization_code(
@@ -653,7 +657,8 @@ mod tests {
         assert!(url.contains("codeassist.google.com%2Fauthcode"));
         assert!(url.contains("code_challenge=challenge-123"));
         // Should contain the hardcoded client ID
-        assert!(url.contains("681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com"));
+        assert!(url
+            .contains("681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com"));
     }
 
     #[test]
