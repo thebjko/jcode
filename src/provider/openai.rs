@@ -2392,7 +2392,11 @@ async fn stream_response_websocket(
                         )));
                     }
 
-                    let mut made_api_activity = is_websocket_activity_payload(&text);
+                    let mut made_api_activity = if saw_api_activity {
+                        is_websocket_activity_payload(&text)
+                    } else {
+                        is_websocket_first_activity_payload(&text)
+                    };
                     if let Some(event) = parse_openai_response_event(
                         &text,
                         &mut saw_text_delta,
@@ -2654,7 +2658,11 @@ async fn try_persistent_ws_continuation(
                     return PersistentWsResult::Failed("server requested fallback".to_string());
                 }
 
-                let mut made_api_activity = is_websocket_activity_payload(&text);
+                let mut made_api_activity = if saw_api_activity {
+                    is_websocket_activity_payload(&text)
+                } else {
+                    is_websocket_first_activity_payload(&text)
+                };
 
                 // Extract response_id from response.created event
                 if new_response_id.is_none() {
@@ -2974,7 +2982,11 @@ async fn stream_response_websocket_persistent(
                         }
                     }
 
-                    let mut made_api_activity = is_websocket_activity_payload(&text);
+                    let mut made_api_activity = if saw_api_activity {
+                        is_websocket_activity_payload(&text)
+                    } else {
+                        is_websocket_first_activity_payload(&text)
+                    };
                     if let Some(event) = parse_openai_response_event(
                         &text,
                         &mut saw_text_delta,
@@ -3272,6 +3284,17 @@ fn is_websocket_activity_payload(data: &str) -> bool {
         return false;
     };
     kind.starts_with("response.") || kind == "error"
+}
+
+fn is_websocket_first_activity_payload(data: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(data) else {
+        return false;
+    };
+    value
+        .get("type")
+        .and_then(|kind| kind.as_str())
+        .map(|kind| !kind.is_empty())
+        .unwrap_or(false)
 }
 
 fn websocket_remaining_timeout_secs(since: Instant, timeout_secs: u64) -> Option<u64> {
@@ -4153,6 +4176,18 @@ mod tests {
         ));
         assert!(!is_websocket_activity_payload("not json"));
         assert!(!is_websocket_activity_payload(r#"{"foo":"bar"}"#));
+    }
+
+    #[test]
+    fn test_websocket_first_activity_payload_counts_typed_control_events() {
+        assert!(is_websocket_first_activity_payload(
+            r#"{"type":"rate_limits.updated"}"#
+        ));
+        assert!(is_websocket_first_activity_payload(
+            r#"{"type":"session.created","session":{}}"#
+        ));
+        assert!(!is_websocket_first_activity_payload(r#"{"foo":"bar"}"#));
+        assert!(!is_websocket_first_activity_payload("not json"));
     }
 
     #[test]
