@@ -1681,6 +1681,7 @@ impl Server {
             git_hash: env!("JCODE_GIT_HASH").to_string(),
             version: env!("JCODE_VERSION").to_string(),
         };
+        crate::process_title::set_server_title(&identity.name);
 
         // Initialize ambient runner if enabled
         let ambient_runner = if crate::config::config().ambient.enabled {

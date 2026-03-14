@@ -55,6 +55,8 @@ pub async fn run_self_dev(should_build: bool, resume_session: Option<String>) ->
         session.id.clone()
     };
 
+    crate::process_title::set_client_session_title(&session_id, true);
+
     let target_binary =
         build::find_dev_binary(&repo_dir).unwrap_or_else(|| build::release_binary_path(&repo_dir));
 
