@@ -2508,7 +2508,9 @@ fn test_handle_server_event_history_restores_side_panel_snapshot() {
     assert_eq!(app.side_panel.focused_page_id.as_deref(), Some("plan"));
     assert_eq!(app.side_panel.pages.len(), 1);
     assert_eq!(
-        app.side_panel.focused_page().map(|page| page.title.as_str()),
+        app.side_panel
+            .focused_page()
+            .map(|page| page.title.as_str()),
         Some("Plan")
     );
 }

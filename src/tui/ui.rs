@@ -1963,6 +1963,7 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
                 app.side_panel(),
                 app.diff_pane_scroll(),
                 app.diff_pane_focus(),
+                app.centered_mode(),
             );
         } else if has_file_diff_edits {
             if let Some(ref mut capture) = debug_capture {

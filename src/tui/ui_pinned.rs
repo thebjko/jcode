@@ -88,6 +88,7 @@ struct SidePanelRenderKey {
     inner_width: u16,
     inner_height: u16,
     has_protocol: bool,
+    centered: bool,
 }
 
 #[derive(Default)]
@@ -593,6 +594,7 @@ pub(super) fn draw_side_panel_markdown(
     snapshot: &crate::side_panel::SidePanelSnapshot,
     scroll: usize,
     focused: bool,
+    centered: bool,
 ) {
     use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 
@@ -638,7 +640,7 @@ pub(super) fn draw_side_panel_markdown(
     }
 
     let has_protocol = mermaid::protocol_type().is_some();
-    let rendered = render_side_panel_markdown_cached(page, inner, has_protocol);
+    let rendered = render_side_panel_markdown_cached(page, inner, has_protocol, centered);
 
     PINNED_PANE_TOTAL_LINES.store(rendered.lines.len(), Ordering::Relaxed);
     let max_scroll = rendered.lines.len().saturating_sub(inner.height as usize);
@@ -689,6 +691,7 @@ fn render_side_panel_markdown_cached(
     page: &crate::side_panel::SidePanelPage,
     inner: Rect,
     has_protocol: bool,
+    centered: bool,
 ) -> PinnedRenderedCache {
     let key = SidePanelRenderKey {
         page_id: page.id.clone(),
@@ -696,6 +699,7 @@ fn render_side_panel_markdown_cached(
         inner_width: inner.width,
         inner_height: inner.height,
         has_protocol,
+        centered,
     };
 
     {
@@ -713,18 +717,23 @@ fn render_side_panel_markdown_cached(
     let saved_override = markdown::get_diagram_mode_override();
     let saved_centered = markdown::center_code_blocks();
     markdown::set_diagram_mode_override(Some(crate::config::DiagramDisplayMode::None));
-    markdown::set_center_code_blocks(false);
+    markdown::set_center_code_blocks(centered);
     let rendered_markdown =
         markdown::render_markdown_with_width(&page.content, Some(inner.width as usize));
     markdown::set_center_code_blocks(saved_centered);
     markdown::set_diagram_mode_override(saved_override);
 
+    let align = if centered {
+        Alignment::Center
+    } else {
+        Alignment::Left
+    };
     let mut text_lines: Vec<Line<'static>> = Vec::new();
     let mut image_placements: Vec<PinnedImagePlacement> = Vec::new();
     for line in rendered_markdown {
         if has_protocol {
             if let Some(hash) = mermaid::parse_image_placeholder(&line) {
-                let img_rows = inner.height.min(12).max(4);
+                let img_rows = estimate_side_panel_image_rows(hash, inner);
                 image_placements.push(PinnedImagePlacement {
                     after_text_line: text_lines.len(),
                     hash,
@@ -736,7 +745,7 @@ fn render_side_panel_markdown_cached(
                 continue;
             }
         }
-        text_lines.push(line);
+        text_lines.push(align_if_unset(line, align));
     }
 
     if text_lines.is_empty() {
@@ -761,6 +770,21 @@ fn render_side_panel_markdown_cached(
     cache.rendered = Some(rendered.clone());
 
     rendered
+}
+
+fn estimate_side_panel_image_rows(hash: u64, inner: Rect) -> u16 {
+    let Some((_, width, height)) = mermaid::get_cached_png(hash) else {
+        return inner.height.min(12).max(4);
+    };
+
+    let diagram = info_widget::DiagramInfo {
+        hash,
+        width,
+        height,
+        label: None,
+    };
+    let needed = super::diagram_pane::estimate_pinned_diagram_pane_height(&diagram, inner.width, 4);
+    needed.saturating_sub(2).max(4).min(inner.height.max(4))
 }
 
 #[allow(dead_code)]
