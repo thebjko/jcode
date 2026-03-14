@@ -212,6 +212,130 @@ impl OpenAIUsageData {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MultiAccountProviderKind {
+    Anthropic,
+    OpenAI,
+}
+
+impl MultiAccountProviderKind {
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::Anthropic => "Anthropic",
+            Self::OpenAI => "OpenAI",
+        }
+    }
+
+    pub fn switch_command(self, label: &str) -> String {
+        match self {
+            Self::Anthropic => format!("/account switch {}", label),
+            Self::OpenAI => format!("/account openai switch {}", label),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AccountUsageSnapshot {
+    pub label: String,
+    pub email: Option<String>,
+    pub exhausted: bool,
+    pub five_hour_ratio: Option<f32>,
+    pub seven_day_ratio: Option<f32>,
+    pub resets_at: Option<String>,
+    pub error: Option<String>,
+}
+
+impl AccountUsageSnapshot {
+    pub fn summary(&self) -> String {
+        if let Some(error) = &self.error {
+            return error.clone();
+        }
+
+        let mut parts = Vec::new();
+        if let Some(ratio) = self.five_hour_ratio {
+            parts.push(format!("5h {:.0}%", ratio * 100.0));
+        }
+        if let Some(ratio) = self.seven_day_ratio {
+            parts.push(format!("7d {:.0}%", ratio * 100.0));
+        }
+        if let Some(reset) = &self.resets_at {
+            parts.push(format!("resets {}", format_reset_time(reset)));
+        }
+
+        if parts.is_empty() {
+            "limits unknown".to_string()
+        } else {
+            parts.join(", ")
+        }
+    }
+
+    fn preference_score(&self) -> f32 {
+        if self.error.is_some() {
+            return f32::INFINITY;
+        }
+        self.five_hour_ratio
+            .unwrap_or(0.0)
+            .max(self.seven_day_ratio.unwrap_or(0.0))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AccountUsageProbe {
+    pub provider: MultiAccountProviderKind,
+    pub current_label: String,
+    pub accounts: Vec<AccountUsageSnapshot>,
+}
+
+impl AccountUsageProbe {
+    pub fn current_account(&self) -> Option<&AccountUsageSnapshot> {
+        self.accounts
+            .iter()
+            .find(|account| account.label == self.current_label)
+    }
+
+    pub fn current_exhausted(&self) -> bool {
+        self.current_account()
+            .map(|account| account.exhausted)
+            .unwrap_or(false)
+    }
+
+    pub fn has_multiple_accounts(&self) -> bool {
+        self.accounts.len() > 1
+    }
+
+    pub fn best_available_alternative(&self) -> Option<&AccountUsageSnapshot> {
+        if !self.current_exhausted() {
+            return None;
+        }
+
+        self.accounts
+            .iter()
+            .filter(|account| account.label != self.current_label)
+            .filter(|account| !account.exhausted && account.error.is_none())
+            .min_by(|a, b| a.preference_score().total_cmp(&b.preference_score()))
+    }
+
+    pub fn all_accounts_exhausted(&self) -> bool {
+        self.has_multiple_accounts()
+            && self
+                .accounts
+                .iter()
+                .filter(|account| account.error.is_none())
+                .all(|account| account.exhausted)
+    }
+
+    pub fn switch_guidance(&self) -> Option<String> {
+        let alternative = self.best_available_alternative()?;
+        Some(format!(
+            "Another {} account has headroom: `{}` ({}). Use `{}`.",
+            self.provider.display_name(),
+            alternative.label,
+            alternative.summary(),
+            self.provider.switch_command(&alternative.label)
+        ))
+    }
+}
+
 /// Cached provider usage reports (used by /usage command).
 /// Keyed by provider display name.
 static PROVIDER_USAGE_CACHE: std::sync::OnceLock<
@@ -224,6 +348,11 @@ static PROVIDER_USAGE_CACHE: std::sync::OnceLock<
 static ANTHROPIC_USAGE_CACHE: std::sync::OnceLock<std::sync::Mutex<HashMap<String, UsageData>>> =
     std::sync::OnceLock::new();
 
+/// Shared OpenAI usage cache keyed by account label/token prefix.
+static OPENAI_ACCOUNT_USAGE_CACHE: std::sync::OnceLock<
+    std::sync::Mutex<HashMap<String, OpenAIUsageData>>,
+> = std::sync::OnceLock::new();
+
 /// Minimum interval between /usage command fetches (per provider).
 const PROVIDER_USAGE_CACHE_TTL: Duration = Duration::from_secs(120);
 
@@ -231,7 +360,27 @@ fn anthropic_usage_cache() -> &'static std::sync::Mutex<HashMap<String, UsageDat
     ANTHROPIC_USAGE_CACHE.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
 }
 
+fn openai_usage_cache() -> &'static std::sync::Mutex<HashMap<String, OpenAIUsageData>> {
+    OPENAI_ACCOUNT_USAGE_CACHE.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+}
+
 fn anthropic_usage_cache_key(access_token: &str, account_label: Option<&str>) -> String {
+    if let Some(label) = account_label
+        .map(str::trim)
+        .filter(|label| !label.is_empty())
+    {
+        return format!("label:{}", label);
+    }
+
+    let prefix = access_token
+        .get(..20)
+        .unwrap_or(access_token)
+        .trim()
+        .to_string();
+    format!("token:{}", prefix)
+}
+
+fn openai_usage_cache_key(access_token: &str, account_label: Option<&str>) -> String {
     if let Some(label) = account_label
         .map(str::trim)
         .filter(|label| !label.is_empty())
@@ -256,6 +405,19 @@ fn cached_anthropic_usage(cache_key: &str) -> Option<UsageData> {
 
 fn store_anthropic_usage(cache_key: String, data: UsageData) {
     if let Ok(mut map) = anthropic_usage_cache().lock() {
+        map.insert(cache_key, data);
+    }
+}
+
+fn cached_openai_usage(cache_key: &str) -> Option<OpenAIUsageData> {
+    let cache = openai_usage_cache();
+    let map = cache.lock().ok()?;
+    let cached = map.get(cache_key)?.clone();
+    (!cached.is_stale()).then_some(cached)
+}
+
+fn store_openai_usage(cache_key: String, data: OpenAIUsageData) {
+    if let Ok(mut map) = openai_usage_cache().lock() {
         map.insert(cache_key, data);
     }
 }
@@ -613,6 +775,99 @@ fn openai_usage_data_from_provider_report(report: &ProviderUsage) -> OpenAIUsage
     data.fetched_at = Some(Instant::now());
     data.last_error = report.error.clone();
     data
+}
+
+fn provider_report_from_openai_usage_data(
+    display_name: String,
+    data: &OpenAIUsageData,
+) -> ProviderUsage {
+    if let Some(error) = &data.last_error {
+        return ProviderUsage {
+            provider_name: display_name,
+            error: Some(error.clone()),
+            ..Default::default()
+        };
+    }
+
+    let mut limits = Vec::new();
+    if let Some(window) = &data.five_hour {
+        limits.push(UsageLimit {
+            name: window.name.clone(),
+            usage_percent: window.usage_ratio * 100.0,
+            resets_at: window.resets_at.clone(),
+        });
+    }
+    if let Some(window) = &data.seven_day {
+        limits.push(UsageLimit {
+            name: window.name.clone(),
+            usage_percent: window.usage_ratio * 100.0,
+            resets_at: window.resets_at.clone(),
+        });
+    }
+    if let Some(window) = &data.spark {
+        limits.push(UsageLimit {
+            name: window.name.clone(),
+            usage_percent: window.usage_ratio * 100.0,
+            resets_at: window.resets_at.clone(),
+        });
+    }
+
+    ProviderUsage {
+        provider_name: display_name,
+        limits,
+        extra_info: Vec::new(),
+        error: None,
+    }
+}
+
+fn openai_snapshot_from_usage(
+    label: String,
+    email: Option<String>,
+    usage: &OpenAIUsageData,
+) -> AccountUsageSnapshot {
+    let five_hour_ratio = usage.five_hour.as_ref().map(|window| window.usage_ratio);
+    let seven_day_ratio = usage.seven_day.as_ref().map(|window| window.usage_ratio);
+    let exhausted = usage.has_limits()
+        && five_hour_ratio.map(|ratio| ratio >= 0.99).unwrap_or(false)
+        && seven_day_ratio.map(|ratio| ratio >= 0.99).unwrap_or(false);
+
+    AccountUsageSnapshot {
+        label,
+        email,
+        exhausted,
+        five_hour_ratio,
+        seven_day_ratio,
+        resets_at: usage
+            .five_hour
+            .as_ref()
+            .and_then(|window| window.resets_at.clone())
+            .or_else(|| {
+                usage
+                    .seven_day
+                    .as_ref()
+                    .and_then(|window| window.resets_at.clone())
+            }),
+        error: usage.last_error.clone(),
+    }
+}
+
+fn anthropic_snapshot_from_usage(
+    label: String,
+    email: Option<String>,
+    usage: &UsageData,
+) -> AccountUsageSnapshot {
+    AccountUsageSnapshot {
+        label,
+        email,
+        exhausted: usage.five_hour >= 0.99 && usage.seven_day >= 0.99,
+        five_hour_ratio: Some(usage.five_hour),
+        seven_day_ratio: Some(usage.seven_day),
+        resets_at: usage
+            .five_hour_resets_at
+            .clone()
+            .or_else(|| usage.seven_day_resets_at.clone()),
+        error: usage.last_error.clone(),
+    }
 }
 
 fn normalize_ratio(raw: f32) -> f32 {
@@ -976,6 +1231,11 @@ async fn fetch_openai_usage_for_account(
         };
     }
 
+    let initial_cache_key = openai_usage_cache_key(&creds.access_token, account_label);
+    if let Some(cached) = cached_openai_usage(&initial_cache_key) {
+        return provider_report_from_openai_usage_data(display_name, &cached);
+    }
+
     if let Some(expires_at) = creds.expires_at {
         let now = chrono::Utc::now().timestamp_millis();
         if expires_at < now + 300_000 && !creds.refresh_token.is_empty() {
@@ -1003,7 +1263,7 @@ async fn fetch_openai_usage_for_account(
                     creds.expires_at = Some(refreshed.expires_at);
                 }
                 Err(e) => {
-                    return ProviderUsage {
+                    let report = ProviderUsage {
                         provider_name: display_name,
                         error: Some(format!(
                             "Token refresh failed: {} - use `/login openai` to re-authenticate",
@@ -1011,8 +1271,20 @@ async fn fetch_openai_usage_for_account(
                         )),
                         ..Default::default()
                     };
+                    store_openai_usage(
+                        initial_cache_key,
+                        openai_usage_data_from_provider_report(&report),
+                    );
+                    return report;
                 }
             }
+        }
+    }
+
+    let cache_key = openai_usage_cache_key(&creds.access_token, account_label);
+    if cache_key != initial_cache_key {
+        if let Some(cached) = cached_openai_usage(&cache_key) {
+            return provider_report_from_openai_usage_data(display_name, &cached);
         }
     }
 
@@ -1029,43 +1301,51 @@ async fn fetch_openai_usage_for_account(
     let response = match builder.send().await {
         Ok(response) => response,
         Err(e) => {
-            return ProviderUsage {
+            let report = ProviderUsage {
                 provider_name: display_name,
                 error: Some(format!("Failed to fetch: {}", e)),
                 ..Default::default()
             };
+            store_openai_usage(cache_key, openai_usage_data_from_provider_report(&report));
+            return report;
         }
     };
 
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return ProviderUsage {
+        let report = ProviderUsage {
             provider_name: display_name,
             error: Some(format!("API error ({}): {}", status, body)),
             ..Default::default()
         };
+        store_openai_usage(cache_key, openai_usage_data_from_provider_report(&report));
+        return report;
     }
 
     let body_text = match response.text().await {
         Ok(text) => text,
         Err(e) => {
-            return ProviderUsage {
+            let report = ProviderUsage {
                 provider_name: display_name,
                 error: Some(format!("Failed to read response: {}", e)),
                 ..Default::default()
             };
+            store_openai_usage(cache_key, openai_usage_data_from_provider_report(&report));
+            return report;
         }
     };
 
     let json: serde_json::Value = match serde_json::from_str(&body_text) {
         Ok(value) => value,
         Err(e) => {
-            return ProviderUsage {
+            let report = ProviderUsage {
                 provider_name: display_name,
                 error: Some(format!("Failed to parse response: {}", e)),
                 ..Default::default()
             };
+            store_openai_usage(cache_key, openai_usage_data_from_provider_report(&report));
+            return report;
         }
     };
 
@@ -1189,12 +1469,14 @@ async fn fetch_openai_usage_for_account(
         extra_info.insert(0, ("Plan".to_string(), plan.to_string()));
     }
 
-    ProviderUsage {
+    let report = ProviderUsage {
         provider_name: display_name,
         limits,
         extra_info,
         error: None,
-    }
+    };
+    store_openai_usage(cache_key, openai_usage_data_from_provider_report(&report));
+    report
 }
 
 async fn fetch_openrouter_usage_report() -> Option<ProviderUsage> {
@@ -1704,6 +1986,10 @@ pub fn fetch_usage_for_account_sync(
         return Ok(cached);
     }
 
+    if tokio::runtime::Handle::try_current().is_err() {
+        anyhow::bail!("Anthropic usage refresh requires a Tokio runtime")
+    }
+
     let result = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(fetch_usage_for_account(
             access_token.to_string(),
@@ -1717,6 +2003,139 @@ pub fn fetch_usage_for_account_sync(
     }
 
     result
+}
+
+pub fn fetch_openai_usage_for_account_sync(
+    label: &str,
+    email: Option<String>,
+    creds: auth::codex::CodexCredentials,
+) -> Result<AccountUsageSnapshot> {
+    let cache_key = openai_usage_cache_key(&creds.access_token, Some(label));
+    if let Some(cached) = cached_openai_usage(&cache_key) {
+        return Ok(openai_snapshot_from_usage(
+            label.to_string(),
+            email,
+            &cached,
+        ));
+    }
+
+    if tokio::runtime::Handle::try_current().is_err() {
+        anyhow::bail!("OpenAI usage refresh requires a Tokio runtime")
+    }
+
+    let report = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(fetch_openai_usage_for_account(
+            openai_provider_display_name(label, email.as_deref(), 2, false),
+            creds,
+            Some(label),
+        ))
+    });
+    let data = openai_usage_data_from_provider_report(&report);
+    store_openai_usage(cache_key, data.clone());
+    Ok(openai_snapshot_from_usage(label.to_string(), email, &data))
+}
+
+pub fn account_usage_probe_sync(provider: MultiAccountProviderKind) -> Option<AccountUsageProbe> {
+    match provider {
+        MultiAccountProviderKind::Anthropic => anthropic_account_usage_probe_sync(),
+        MultiAccountProviderKind::OpenAI => openai_account_usage_probe_sync(),
+    }
+}
+
+fn anthropic_account_usage_probe_sync() -> Option<AccountUsageProbe> {
+    let accounts = auth::claude::list_accounts().ok()?;
+    if accounts.is_empty() {
+        return None;
+    }
+
+    let current_label = auth::claude::active_account_label()
+        .or_else(|| accounts.first().map(|account| account.label.clone()))?;
+    let active_cached = get_sync();
+
+    let mut snapshots = Vec::with_capacity(accounts.len());
+    for account in &accounts {
+        let usage = if account.label == current_label && active_cached.fetched_at.is_some() {
+            Ok(active_cached.clone())
+        } else {
+            fetch_usage_for_account_sync(&account.access, &account.refresh, account.expires)
+        };
+
+        match usage {
+            Ok(usage) => snapshots.push(anthropic_snapshot_from_usage(
+                account.label.clone(),
+                account.email.clone(),
+                &usage,
+            )),
+            Err(err) => snapshots.push(AccountUsageSnapshot {
+                label: account.label.clone(),
+                email: account.email.clone(),
+                exhausted: false,
+                five_hour_ratio: None,
+                seven_day_ratio: None,
+                resets_at: None,
+                error: Some(err.to_string()),
+            }),
+        }
+    }
+
+    Some(AccountUsageProbe {
+        provider: MultiAccountProviderKind::Anthropic,
+        current_label,
+        accounts: snapshots,
+    })
+}
+
+fn openai_account_usage_probe_sync() -> Option<AccountUsageProbe> {
+    let accounts = auth::codex::list_accounts().ok()?;
+    if accounts.is_empty() {
+        return None;
+    }
+
+    let current_label = auth::codex::active_account_label()
+        .or_else(|| accounts.first().map(|account| account.label.clone()))?;
+    let active_cached = get_openai_usage_sync();
+
+    let mut snapshots = Vec::with_capacity(accounts.len());
+    for account in &accounts {
+        let usage = if account.label == current_label && active_cached.fetched_at.is_some() {
+            Ok(openai_snapshot_from_usage(
+                account.label.clone(),
+                account.email.clone(),
+                &active_cached,
+            ))
+        } else {
+            fetch_openai_usage_for_account_sync(
+                &account.label,
+                account.email.clone(),
+                auth::codex::CodexCredentials {
+                    access_token: account.access_token.clone(),
+                    refresh_token: account.refresh_token.clone(),
+                    id_token: account.id_token.clone(),
+                    account_id: account.account_id.clone(),
+                    expires_at: account.expires_at,
+                },
+            )
+        };
+
+        match usage {
+            Ok(snapshot) => snapshots.push(snapshot),
+            Err(err) => snapshots.push(AccountUsageSnapshot {
+                label: account.label.clone(),
+                email: account.email.clone(),
+                exhausted: false,
+                five_hour_ratio: None,
+                seven_day_ratio: None,
+                resets_at: None,
+                error: Some(err.to_string()),
+            }),
+        }
+    }
+
+    Some(AccountUsageProbe {
+        provider: MultiAccountProviderKind::OpenAI,
+        current_label,
+        accounts: snapshots,
+    })
 }
 
 async fn fetch_usage_for_account(
@@ -1957,5 +2376,84 @@ mod tests {
         );
         assert!(usage.five_hour.is_none());
         assert!(usage.seven_day.is_none());
+    }
+
+    #[test]
+    fn test_account_usage_probe_prefers_best_available_alternative() {
+        let probe = AccountUsageProbe {
+            provider: MultiAccountProviderKind::OpenAI,
+            current_label: "work".to_string(),
+            accounts: vec![
+                AccountUsageSnapshot {
+                    label: "work".to_string(),
+                    email: Some("work@example.com".to_string()),
+                    exhausted: true,
+                    five_hour_ratio: Some(1.0),
+                    seven_day_ratio: Some(1.0),
+                    resets_at: Some("2026-01-01T00:00:00Z".to_string()),
+                    error: None,
+                },
+                AccountUsageSnapshot {
+                    label: "backup".to_string(),
+                    email: Some("backup@example.com".to_string()),
+                    exhausted: false,
+                    five_hour_ratio: Some(0.45),
+                    seven_day_ratio: Some(0.10),
+                    resets_at: Some("2026-01-01T01:00:00Z".to_string()),
+                    error: None,
+                },
+                AccountUsageSnapshot {
+                    label: "secondary".to_string(),
+                    email: Some("secondary@example.com".to_string()),
+                    exhausted: false,
+                    five_hour_ratio: Some(0.70),
+                    seven_day_ratio: Some(0.20),
+                    resets_at: Some("2026-01-01T02:00:00Z".to_string()),
+                    error: None,
+                },
+            ],
+        };
+
+        let best = probe
+            .best_available_alternative()
+            .expect("expected alternative account");
+        assert_eq!(best.label, "backup");
+
+        let guidance = probe.switch_guidance().expect("expected switch guidance");
+        assert!(guidance.contains("`backup`"));
+        assert!(guidance.contains("/account openai switch backup"));
+    }
+
+    #[test]
+    fn test_account_usage_probe_detects_all_accounts_exhausted() {
+        let probe = AccountUsageProbe {
+            provider: MultiAccountProviderKind::Anthropic,
+            current_label: "primary".to_string(),
+            accounts: vec![
+                AccountUsageSnapshot {
+                    label: "primary".to_string(),
+                    email: None,
+                    exhausted: true,
+                    five_hour_ratio: Some(1.0),
+                    seven_day_ratio: Some(1.0),
+                    resets_at: None,
+                    error: None,
+                },
+                AccountUsageSnapshot {
+                    label: "backup".to_string(),
+                    email: None,
+                    exhausted: true,
+                    five_hour_ratio: Some(1.0),
+                    seven_day_ratio: Some(1.0),
+                    resets_at: None,
+                    error: None,
+                },
+            ],
+        };
+
+        assert!(probe.current_exhausted());
+        assert!(probe.all_accounts_exhausted());
+        assert!(probe.best_available_alternative().is_none());
+        assert!(probe.switch_guidance().is_none());
     }
 }

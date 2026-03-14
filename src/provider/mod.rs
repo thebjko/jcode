@@ -25,7 +25,6 @@ use futures::Stream;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -850,21 +849,23 @@ struct RuntimeProviderUnavailability {
 
 /// Dynamic cache of models actually available for this account (populated from Codex API).
 /// When populated, only models in this set should be offered/accepted for the OpenAI provider.
-static ACCOUNT_AVAILABLE_MODELS: std::sync::LazyLock<RwLock<Option<HashSet<String>>>> =
-    std::sync::LazyLock::new(|| RwLock::new(None));
-static ACCOUNT_AVAILABLE_MODELS_FETCHED_AT: std::sync::LazyLock<RwLock<Option<Instant>>> =
-    std::sync::LazyLock::new(|| RwLock::new(None));
-static ACCOUNT_AVAILABLE_MODELS_OBSERVED_AT: std::sync::LazyLock<RwLock<Option<SystemTime>>> =
-    std::sync::LazyLock::new(|| RwLock::new(None));
+static ACCOUNT_AVAILABLE_MODELS: std::sync::LazyLock<RwLock<HashMap<String, HashSet<String>>>> =
+    std::sync::LazyLock::new(|| RwLock::new(HashMap::new()));
+static ACCOUNT_AVAILABLE_MODELS_FETCHED_AT: std::sync::LazyLock<RwLock<HashMap<String, Instant>>> =
+    std::sync::LazyLock::new(|| RwLock::new(HashMap::new()));
+static ACCOUNT_AVAILABLE_MODELS_OBSERVED_AT: std::sync::LazyLock<
+    RwLock<HashMap<String, SystemTime>>,
+> = std::sync::LazyLock::new(|| RwLock::new(HashMap::new()));
 static ACCOUNT_RUNTIME_UNAVAILABLE_MODELS: std::sync::LazyLock<
     RwLock<HashMap<String, RuntimeModelUnavailability>>,
 > = std::sync::LazyLock::new(|| RwLock::new(HashMap::new()));
 static ACCOUNT_RUNTIME_UNAVAILABLE_PROVIDERS: std::sync::LazyLock<
     RwLock<HashMap<String, RuntimeProviderUnavailability>>,
 > = std::sync::LazyLock::new(|| RwLock::new(HashMap::new()));
-static ACCOUNT_MODEL_REFRESH_LAST_ATTEMPT: std::sync::LazyLock<RwLock<Option<Instant>>> =
-    std::sync::LazyLock::new(|| RwLock::new(None));
-static ACCOUNT_MODEL_REFRESH_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+static ACCOUNT_MODEL_REFRESH_LAST_ATTEMPT: std::sync::LazyLock<RwLock<HashMap<String, Instant>>> =
+    std::sync::LazyLock::new(|| RwLock::new(HashMap::new()));
+static ACCOUNT_MODEL_REFRESH_IN_FLIGHT: std::sync::LazyLock<RwLock<HashSet<String>>> =
+    std::sync::LazyLock::new(|| RwLock::new(HashSet::new()));
 const ACCOUNT_MODEL_CACHE_TTL: Duration = Duration::from_secs(30 * 60);
 const RUNTIME_UNAVAILABLE_TTL: Duration = Duration::from_secs(10 * 60);
 const PROVIDER_RUNTIME_UNAVAILABLE_TTL: Duration = Duration::from_secs(5 * 60);
@@ -934,6 +935,65 @@ fn normalize_model_id(model: &str) -> String {
 
 fn normalize_provider_id(provider: &str) -> String {
     provider.trim().to_ascii_lowercase()
+}
+
+fn openai_account_scope_from_label(label: Option<String>) -> String {
+    label
+        .map(|label| label.trim().to_string())
+        .filter(|label| !label.is_empty())
+        .unwrap_or_else(|| "default".to_string())
+}
+
+fn current_openai_account_scope() -> String {
+    openai_account_scope_from_label(auth::codex::active_account_label())
+}
+
+fn current_claude_account_scope() -> String {
+    auth::claude::active_account_label()
+        .map(|label| label.trim().to_string())
+        .filter(|label| !label.is_empty())
+        .unwrap_or_else(|| "default".to_string())
+}
+
+fn scoped_openai_model_key(scope: &str, model: &str) -> Option<String> {
+    let key = normalize_model_id(model);
+    if key.is_empty() {
+        return None;
+    }
+    Some(format!("{}::{}", scope, key))
+}
+
+fn current_scoped_openai_model_key(model: &str) -> Option<String> {
+    scoped_openai_model_key(&current_openai_account_scope(), model)
+}
+
+fn provider_runtime_scope_key(provider: &str, account_label: Option<&str>) -> String {
+    let normalized = normalize_provider_id(provider);
+    match normalized.as_str() {
+        "openai" => format!(
+            "openai::{}",
+            openai_account_scope_from_label(account_label.map(|label| label.to_string()))
+        ),
+        "claude" | "anthropic" => format!(
+            "claude::{}",
+            account_label
+                .map(|label| label.trim().to_string())
+                .filter(|label| !label.is_empty())
+                .unwrap_or_else(current_claude_account_scope)
+        ),
+        _ => format!("{}::global", normalized),
+    }
+}
+
+fn current_provider_runtime_scope_key(provider: &str) -> String {
+    let normalized = normalize_provider_id(provider);
+    match normalized.as_str() {
+        "openai" => provider_runtime_scope_key(provider, Some(&current_openai_account_scope())),
+        "claude" | "anthropic" => {
+            provider_runtime_scope_key(provider, Some(&current_claude_account_scope()))
+        }
+        _ => provider_runtime_scope_key(provider, None),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1099,6 +1159,10 @@ pub fn populate_context_limits(models: HashMap<String, usize>) {
 
 /// Populate the account-available model list (called once at startup from the Codex API).
 pub fn populate_account_models(slugs: Vec<String>) {
+    populate_account_models_for_scope(&current_openai_account_scope(), slugs);
+}
+
+fn populate_account_models_for_scope(scope: &str, slugs: Vec<String>) {
     if !slugs.is_empty() {
         let mut normalized = HashSet::new();
         for slug in slugs {
@@ -1114,20 +1178,29 @@ pub fn populate_account_models(slugs: Vec<String>) {
         if let Ok(mut available) = ACCOUNT_AVAILABLE_MODELS.write() {
             let mut sorted: Vec<String> = normalized.iter().cloned().collect();
             sorted.sort();
-            crate::logging::info(&format!("Account available models: {}", sorted.join(", ")));
-            *available = Some(normalized.clone());
+            crate::logging::info(&format!(
+                "Account available models [{}]: {}",
+                scope,
+                sorted.join(", ")
+            ));
+            available.insert(scope.to_string(), normalized.clone());
         }
         if let Ok(mut fetched_at) = ACCOUNT_AVAILABLE_MODELS_FETCHED_AT.write() {
-            *fetched_at = Some(Instant::now());
+            fetched_at.insert(scope.to_string(), Instant::now());
         }
         if let Ok(mut observed_at) = ACCOUNT_AVAILABLE_MODELS_OBSERVED_AT.write() {
-            *observed_at = Some(SystemTime::now());
+            observed_at.insert(scope.to_string(), SystemTime::now());
         }
         if let Ok(mut last_attempt) = ACCOUNT_MODEL_REFRESH_LAST_ATTEMPT.write() {
-            *last_attempt = Some(Instant::now());
+            last_attempt.insert(scope.to_string(), Instant::now());
         }
         if let Ok(mut unavailable) = ACCOUNT_RUNTIME_UNAVAILABLE_MODELS.write() {
-            unavailable.retain(|model, _| !normalized.contains(model));
+            unavailable.retain(|key, _| {
+                let Some((entry_scope, model)) = key.split_once("::") else {
+                    return true;
+                };
+                entry_scope != scope || !normalized.contains(model)
+            });
         }
         crate::bus::Bus::global().publish(crate::bus::BusEvent::ModelsUpdated);
     }
@@ -1161,12 +1234,13 @@ fn merge_openai_model_ids(dynamic_models: Vec<String>) -> Vec<String> {
 }
 
 pub fn known_openai_model_ids() -> Vec<String> {
+    let scope = current_openai_account_scope();
     let dynamic_models = ACCOUNT_AVAILABLE_MODELS
         .read()
         .ok()
         .and_then(|cache| {
             cache
-                .as_ref()
+                .get(&scope)
                 .map(|models| models.iter().cloned().collect())
         })
         .unwrap_or_default();
@@ -1175,17 +1249,24 @@ pub fn known_openai_model_ids() -> Vec<String> {
 
 pub fn note_openai_model_catalog_refresh_attempt() {
     if let Ok(mut last_attempt) = ACCOUNT_MODEL_REFRESH_LAST_ATTEMPT.write() {
-        *last_attempt = Some(Instant::now());
+        last_attempt.insert(current_openai_account_scope(), Instant::now());
+    }
+}
+
+fn note_openai_model_catalog_refresh_attempt_for_scope(scope: &str) {
+    if let Ok(mut last_attempt) = ACCOUNT_MODEL_REFRESH_LAST_ATTEMPT.write() {
+        last_attempt.insert(scope.to_string(), Instant::now());
     }
 }
 
 fn openai_model_catalog_refresh_throttled() -> bool {
+    let scope = current_openai_account_scope();
     let Ok(last_attempt) = ACCOUNT_MODEL_REFRESH_LAST_ATTEMPT.read() else {
         return false;
     };
 
     last_attempt
-        .as_ref()
+        .get(&scope)
         .map(|at| at.elapsed() < ACCOUNT_MODEL_REFRESH_RETRY_INTERVAL)
         .unwrap_or(false)
 }
@@ -1197,43 +1278,55 @@ pub fn should_refresh_openai_model_catalog() -> bool {
     if openai_model_catalog_refresh_throttled() {
         return false;
     }
-    !ACCOUNT_MODEL_REFRESH_IN_FLIGHT.load(Ordering::Relaxed)
+    ACCOUNT_MODEL_REFRESH_IN_FLIGHT
+        .read()
+        .map(|in_flight| !in_flight.contains(&current_openai_account_scope()))
+        .unwrap_or(true)
 }
 
 pub fn begin_openai_model_catalog_refresh() -> bool {
     if !should_refresh_openai_model_catalog() {
         return false;
     }
-    if ACCOUNT_MODEL_REFRESH_IN_FLIGHT
-        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-        .is_err()
-    {
+    let scope = current_openai_account_scope();
+    let Ok(mut in_flight) = ACCOUNT_MODEL_REFRESH_IN_FLIGHT.write() else {
+        return false;
+    };
+    if !in_flight.insert(scope.clone()) {
         return false;
     }
 
-    note_openai_model_catalog_refresh_attempt();
+    if let Ok(mut last_attempt) = ACCOUNT_MODEL_REFRESH_LAST_ATTEMPT.write() {
+        last_attempt.insert(scope, Instant::now());
+    }
     true
 }
 
 pub fn finish_openai_model_catalog_refresh() {
-    ACCOUNT_MODEL_REFRESH_IN_FLIGHT.store(false, Ordering::SeqCst);
+    if let Ok(mut in_flight) = ACCOUNT_MODEL_REFRESH_IN_FLIGHT.write() {
+        in_flight.remove(&current_openai_account_scope());
+    }
+}
+
+fn finish_openai_model_catalog_refresh_for_scope(scope: &str) {
+    if let Ok(mut in_flight) = ACCOUNT_MODEL_REFRESH_IN_FLIGHT.write() {
+        in_flight.remove(scope);
+    }
 }
 
 fn account_model_cache_is_fresh() -> bool {
+    let scope = current_openai_account_scope();
     let Ok(guard) = ACCOUNT_AVAILABLE_MODELS_FETCHED_AT.read() else {
         return false;
     };
     guard
-        .as_ref()
+        .get(&scope)
         .map(|fetched_at| fetched_at.elapsed() <= ACCOUNT_MODEL_CACHE_TTL)
         .unwrap_or(false)
 }
 
 fn runtime_model_unavailability(model: &str) -> Option<RuntimeModelUnavailability> {
-    let key = normalize_model_id(model);
-    if key.is_empty() {
-        return None;
-    }
+    let key = current_scoped_openai_model_key(model)?;
 
     let mut unavailable = ACCOUNT_RUNTIME_UNAVAILABLE_MODELS.write().ok()?;
     if let Some(entry) = unavailable.get(&key) {
@@ -1254,21 +1347,24 @@ fn account_snapshot_model_available(model: &str) -> Option<bool> {
         return None;
     }
 
+    let scope = current_openai_account_scope();
     let cache = ACCOUNT_AVAILABLE_MODELS.read().ok()?;
-    let models = cache.as_ref()?;
+    let models = cache.get(&scope)?;
     Some(models.contains(&key))
 }
 
 fn account_models_observed_at() -> Option<SystemTime> {
+    let scope = current_openai_account_scope();
     ACCOUNT_AVAILABLE_MODELS_OBSERVED_AT
         .read()
         .ok()
-        .and_then(|v| *v)
+        .and_then(|map| map.get(&scope).copied())
 }
 
 pub fn refresh_openai_model_catalog_in_background(access_token: String, context: &'static str) {
+    let scope = current_openai_account_scope();
     if access_token.trim().is_empty() {
-        finish_openai_model_catalog_refresh();
+        finish_openai_model_catalog_refresh_for_scope(&scope);
         return;
     }
 
@@ -1288,7 +1384,7 @@ pub fn refresh_openai_model_catalog_in_background(access_token: String, context:
                     populate_context_limits(catalog.context_limits.clone());
                 }
                 if !catalog.available_models.is_empty() {
-                    populate_account_models(catalog.available_models.clone());
+                    populate_account_models_for_scope(&scope, catalog.available_models.clone());
                 }
             }
             Ok(_) => {
@@ -1304,15 +1400,15 @@ pub fn refresh_openai_model_catalog_in_background(access_token: String, context:
                 ));
             }
         }
-        finish_openai_model_catalog_refresh();
+        note_openai_model_catalog_refresh_attempt_for_scope(&scope);
+        finish_openai_model_catalog_refresh_for_scope(&scope);
     });
 }
 
 pub fn record_model_unavailable_for_account(model: &str, reason: &str) {
-    let key = normalize_model_id(model);
-    if key.is_empty() {
+    let Some(key) = current_scoped_openai_model_key(model) else {
         return;
-    }
+    };
 
     if let Ok(mut unavailable) = ACCOUNT_RUNTIME_UNAVAILABLE_MODELS.write() {
         unavailable.insert(
@@ -1327,10 +1423,9 @@ pub fn record_model_unavailable_for_account(model: &str, reason: &str) {
 }
 
 pub fn clear_model_unavailable_for_account(model: &str) {
-    let key = normalize_model_id(model);
-    if key.is_empty() {
+    let Some(key) = current_scoped_openai_model_key(model) else {
         return;
-    }
+    };
 
     if let Ok(mut unavailable) = ACCOUNT_RUNTIME_UNAVAILABLE_MODELS.write() {
         unavailable.remove(&key);
@@ -1338,7 +1433,7 @@ pub fn clear_model_unavailable_for_account(model: &str) {
 }
 
 fn runtime_provider_unavailability(provider: &str) -> Option<RuntimeProviderUnavailability> {
-    let key = normalize_provider_id(provider);
+    let key = current_provider_runtime_scope_key(provider);
     if key.is_empty() {
         return None;
     }
@@ -1354,7 +1449,7 @@ fn runtime_provider_unavailability(provider: &str) -> Option<RuntimeProviderUnav
 }
 
 pub fn record_provider_unavailable_for_account(provider: &str, reason: &str) {
-    let key = normalize_provider_id(provider);
+    let key = current_provider_runtime_scope_key(provider);
     if key.is_empty() {
         return;
     }
@@ -1372,7 +1467,7 @@ pub fn record_provider_unavailable_for_account(provider: &str, reason: &str) {
 }
 
 pub fn clear_provider_unavailable_for_account(provider: &str) {
-    let key = normalize_provider_id(provider);
+    let key = current_provider_runtime_scope_key(provider);
     if key.is_empty() {
         return;
     }
@@ -1385,14 +1480,17 @@ pub fn clear_provider_unavailable_for_account(provider: &str) {
 /// Clear all runtime model unavailability markers.
 pub fn clear_all_model_unavailability_for_account() {
     if let Ok(mut unavailable) = ACCOUNT_RUNTIME_UNAVAILABLE_MODELS.write() {
-        unavailable.clear();
+        let scope = current_openai_account_scope();
+        unavailable.retain(|key, _| !key.starts_with(&format!("{}::", scope)));
     }
 }
 
 /// Clear all runtime provider unavailability markers.
 pub fn clear_all_provider_unavailability_for_account() {
     if let Ok(mut unavailable) = ACCOUNT_RUNTIME_UNAVAILABLE_PROVIDERS.write() {
-        unavailable.clear();
+        let openai_scope = current_provider_runtime_scope_key("openai");
+        let claude_scope = current_provider_runtime_scope_key("claude");
+        unavailable.retain(|key, _| key != &openai_scope && key != &claude_scope);
     }
 }
 
@@ -1484,8 +1582,9 @@ pub fn get_best_available_openai_model() -> Option<String> {
     if !account_model_cache_is_fresh() {
         return None;
     }
+    let scope = current_openai_account_scope();
     let cache = ACCOUNT_AVAILABLE_MODELS.read().ok()?;
-    let models = cache.as_ref()?;
+    let models = cache.get(&scope)?;
 
     for preferred in OPENAI_MODEL_PREFERENCE {
         if models.contains(*preferred) && runtime_model_unavailability(preferred).is_none() {
@@ -1850,13 +1949,90 @@ impl MultiProvider {
     fn provider_precheck_unavailable_reason(&self, provider: ActiveProvider) -> Option<String> {
         match provider {
             ActiveProvider::Claude if self.is_claude_usage_exhausted() => {
-                Some("OAuth usage exhausted".to_string())
+                Some(Self::usage_exhausted_reason(provider))
             }
             ActiveProvider::OpenAI if self.is_openai_usage_exhausted() => {
-                Some("OAuth usage exhausted".to_string())
+                Some(Self::usage_exhausted_reason(provider))
             }
             _ => None,
         }
+    }
+
+    fn multi_account_provider_kind(
+        provider: ActiveProvider,
+    ) -> Option<crate::usage::MultiAccountProviderKind> {
+        match provider {
+            ActiveProvider::Claude => Some(crate::usage::MultiAccountProviderKind::Anthropic),
+            ActiveProvider::OpenAI => Some(crate::usage::MultiAccountProviderKind::OpenAI),
+            _ => None,
+        }
+    }
+
+    fn account_usage_probe(provider: ActiveProvider) -> Option<crate::usage::AccountUsageProbe> {
+        let kind = Self::multi_account_provider_kind(provider)?;
+        crate::usage::account_usage_probe_sync(kind)
+    }
+
+    fn account_switch_guidance(provider: ActiveProvider) -> Option<String> {
+        let probe = Self::account_usage_probe(provider)?;
+        probe.switch_guidance().or_else(|| {
+            (probe.current_exhausted() && probe.all_accounts_exhausted()).then(|| {
+                format!(
+                    "All {} accounts appear exhausted. Use `/usage` to inspect reset times.",
+                    probe.provider.display_name()
+                )
+            })
+        })
+    }
+
+    fn usage_exhausted_reason(provider: ActiveProvider) -> String {
+        let mut reason = "OAuth usage exhausted".to_string();
+        if let Some(guidance) = Self::account_switch_guidance(provider) {
+            reason.push_str(". ");
+            reason.push_str(&guidance);
+        }
+        reason
+    }
+
+    fn error_looks_like_usage_limit(summary: &str) -> bool {
+        let lower = summary.to_ascii_lowercase();
+        [
+            "quota",
+            "insufficient_quota",
+            "rate limit",
+            "rate_limit",
+            "rate_limit_exceeded",
+            "too many requests",
+            "billing",
+            "credit",
+            "payment required",
+            "usage exhausted",
+            "limit reached",
+            "429",
+            "402",
+        ]
+        .iter()
+        .any(|needle| lower.contains(needle))
+    }
+
+    fn maybe_annotate_limit_summary(provider: ActiveProvider, summary: String) -> String {
+        if !Self::error_looks_like_usage_limit(&summary) {
+            return summary;
+        }
+        let Some(guidance) = Self::account_switch_guidance(provider) else {
+            return summary;
+        };
+        if summary.contains(&guidance) {
+            return summary;
+        }
+        format!("{}. {}", summary, guidance)
+    }
+
+    fn additional_no_provider_guidance(&self) -> Vec<String> {
+        [ActiveProvider::Claude, ActiveProvider::OpenAI]
+            .into_iter()
+            .filter_map(Self::account_switch_guidance)
+            .collect()
     }
 
     fn fallback_sequence(active: ActiveProvider) -> Vec<ActiveProvider> {
@@ -2006,11 +2182,16 @@ impl MultiProvider {
         FailoverDecision::None
     }
 
-    fn no_provider_available_error(notes: &[String]) -> anyhow::Error {
+    fn no_provider_available_error(&self, notes: &[String]) -> anyhow::Error {
         let mut msg = "No tokens/providers left: no usable provider right now. Anthropic/OpenAI usage may be exhausted and GitHub Copilot is not authenticated or currently unavailable.".to_string();
         if !notes.is_empty() {
             msg.push_str(" Details: ");
             msg.push_str(&notes.join(" | "));
+        }
+        let extra_guidance = self.additional_no_provider_guidance();
+        if !extra_guidance.is_empty() {
+            msg.push(' ');
+            msg.push_str(&extra_guidance.join(" "));
         }
         msg.push_str(" Use `/usage` to check limits and `/login <provider>` to re-authenticate.");
         anyhow::anyhow!(msg)
@@ -2117,7 +2298,8 @@ impl MultiProvider {
                     return Ok(stream);
                 }
                 Err(err) => {
-                    let summary = Self::summarize_error(&err);
+                    let summary =
+                        Self::maybe_annotate_limit_summary(candidate, Self::summarize_error(&err));
                     let decision = Self::classify_failover_error(&err);
                     crate::logging::info(&format!(
                         "Provider {} failed{}: {} (failover={} decision={})",
@@ -2139,7 +2321,7 @@ impl MultiProvider {
             }
         }
 
-        Err(Self::no_provider_available_error(&notes))
+        Err(self.no_provider_available_error(&notes))
     }
 
     async fn complete_on_provider(
@@ -2537,8 +2719,8 @@ impl MultiProvider {
         // Prime OpenAI model/account availability in the background.
         result.spawn_openai_catalog_refresh_if_needed();
 
-        // Try to auto-rotate Anthropic accounts if current one is exhausted.
-        result.auto_select_anthropic_account();
+        // Try to auto-rotate the active multi-account provider if current account is exhausted.
+        result.auto_select_active_multi_account();
 
         result
     }
@@ -2556,90 +2738,90 @@ impl MultiProvider {
         *self.active.read().unwrap()
     }
 
-    /// Try to select a non-exhausted Anthropic account for this session.
-    /// Called at session start. Uses cached usage data - if no data is available yet,
-    /// does nothing (the per-request fallback handles it later).
-    /// Only rotates between Anthropic OAuth accounts, never switches to API billing.
+    pub fn auto_select_active_multi_account(&self) {
+        self.auto_select_multi_account_for_provider(self.active_provider());
+    }
+
+    /// Backward-compatible wrapper for the Anthropic-specific startup rotation entrypoint.
     pub fn auto_select_anthropic_account(&self) {
-        if self.active_provider() != ActiveProvider::Claude {
+        self.auto_select_multi_account_for_provider(ActiveProvider::Claude);
+    }
+
+    pub fn auto_select_openai_account(&self) {
+        self.auto_select_multi_account_for_provider(ActiveProvider::OpenAI);
+    }
+
+    fn auto_select_multi_account_for_provider(&self, provider: ActiveProvider) {
+        if self.active_provider() != provider {
             return;
         }
-        if self.anthropic.is_none() && self.claude.is_none() {
+        if !self.provider_is_configured(provider) {
             return;
         }
 
-        let accounts = match crate::auth::claude::list_accounts() {
-            Ok(a) if a.len() > 1 => a,
-            _ => return,
+        let Some(probe) = Self::account_usage_probe(provider) else {
+            return;
         };
-
-        let usage = crate::usage::get_sync();
-        let is_exhausted = usage.five_hour >= 0.99 && usage.seven_day >= 0.99;
-        if !is_exhausted {
-            return;
-        }
-        if usage.fetched_at.is_none() {
+        if !probe.has_multiple_accounts() || !probe.current_exhausted() {
             return;
         }
 
-        let current_label =
-            crate::auth::claude::active_account_label().unwrap_or_else(|| "default".to_string());
+        let provider_name = probe.provider.display_name();
+        if let Some(alternative) = probe.best_available_alternative() {
+            crate::logging::info(&format!(
+                "{} account '{}' is exhausted, switching to '{}' ({})",
+                provider_name,
+                probe.current_label,
+                alternative.label,
+                alternative.summary()
+            ));
 
-        crate::logging::info(&format!(
-            "Anthropic account '{}' is exhausted (5h: {:.0}%, 7d: {:.0}%), checking other accounts...",
-            current_label,
-            usage.five_hour * 100.0,
-            usage.seven_day * 100.0,
-        ));
-
-        for account in &accounts {
-            if account.label == current_label {
-                continue;
-            }
-
-            if let Ok(other_usage) = crate::usage::fetch_usage_for_account_sync(
-                &account.access,
-                &account.refresh,
-                account.expires,
-            ) {
-                let other_exhausted =
-                    other_usage.five_hour >= 0.99 && other_usage.seven_day >= 0.99;
-                if !other_exhausted {
-                    crate::logging::info(&format!(
-                        "Switching to Anthropic account '{}' (5h: {:.0}%, 7d: {:.0}%)",
-                        account.label,
-                        other_usage.five_hour * 100.0,
-                        other_usage.seven_day * 100.0,
+            match provider {
+                ActiveProvider::Claude => {
+                    crate::auth::claude::set_active_account_override(Some(
+                        alternative.label.clone(),
                     ));
-                    crate::auth::claude::set_active_account_override(Some(account.label.clone()));
+                    clear_all_provider_unavailability_for_account();
+                    clear_all_model_unavailability_for_account();
                     if let Some(ref anthropic) = self.anthropic {
                         let _ = tokio::task::block_in_place(|| {
                             tokio::runtime::Handle::current()
                                 .block_on(anthropic.invalidate_credentials())
                         });
                     }
-                    let notice = format!(
-                        "⚡ Auto-switched Anthropic account: **{}** -> **{}** (previous account exhausted)",
-                        current_label, account.label
-                    );
-                    self.startup_notices.write().unwrap().push(notice);
-                    return;
-                } else {
-                    crate::logging::info(&format!(
-                        "Anthropic account '{}' also exhausted (5h: {:.0}%, 7d: {:.0}%)",
-                        account.label,
-                        other_usage.five_hour * 100.0,
-                        other_usage.seven_day * 100.0,
-                    ));
                 }
+                ActiveProvider::OpenAI => {
+                    crate::auth::codex::set_active_account_override(Some(
+                        alternative.label.clone(),
+                    ));
+                    clear_all_provider_unavailability_for_account();
+                    clear_all_model_unavailability_for_account();
+                    if let Some(ref openai) = self.openai {
+                        let _ = tokio::task::block_in_place(|| {
+                            tokio::runtime::Handle::current()
+                                .block_on(openai.invalidate_credentials())
+                        });
+                    }
+                }
+                _ => return,
             }
+
+            let notice = format!(
+                "⚡ Auto-switched {} account: **{}** -> **{}** (previous account exhausted)",
+                provider_name, probe.current_label, alternative.label
+            );
+            self.startup_notices.write().unwrap().push(notice);
+            return;
         }
 
-        crate::logging::info("All Anthropic accounts are exhausted");
-        let notice =
-            "⚠ All Anthropic accounts exhausted - will fall back to other providers if available"
-                .to_string();
-        self.startup_notices.write().unwrap().push(notice);
+        if probe.all_accounts_exhausted() {
+            crate::logging::info(&format!("All {} accounts are exhausted", provider_name));
+            let notice = format!(
+                "⚠ All {} accounts exhausted - will fall back to other providers if available",
+                provider_name
+            );
+            self.startup_notices.write().unwrap().push(notice);
+        }
     }
 }
 
@@ -4052,7 +4234,23 @@ mod tests {
 
     #[test]
     fn test_no_provider_error_mentions_tokens_and_details() {
-        let err = MultiProvider::no_provider_available_error(&[
+        let provider = MultiProvider {
+            claude: None,
+            anthropic: None,
+            openai: None,
+            copilot_api: RwLock::new(None),
+            gemini: RwLock::new(None),
+            openrouter: None,
+            active: RwLock::new(ActiveProvider::OpenAI),
+            has_claude_creds: false,
+            has_openai_creds: false,
+            has_gemini_creds: false,
+            has_openrouter_creds: false,
+            use_claude_cli: false,
+            startup_notices: RwLock::new(Vec::new()),
+            forced_provider: None,
+        };
+        let err = provider.no_provider_available_error(&[
             "OpenAI: rate limited".to_string(),
             "GitHub Copilot: not configured".to_string(),
         ]);
@@ -4060,6 +4258,58 @@ mod tests {
         assert!(text.contains("No tokens/providers left"));
         assert!(text.contains("OpenAI: rate limited"));
         assert!(text.contains("GitHub Copilot: not configured"));
+    }
+
+    #[test]
+    fn test_openai_provider_unavailability_is_scoped_per_account() {
+        let _guard = crate::storage::lock_test_env();
+
+        crate::auth::codex::set_active_account_override(Some("work".to_string()));
+        clear_all_provider_unavailability_for_account();
+        record_provider_unavailable_for_account("openai", "work rate limit");
+        assert!(
+            provider_unavailability_detail_for_account("openai")
+                .unwrap_or_default()
+                .contains("work rate limit")
+        );
+
+        crate::auth::codex::set_active_account_override(Some("personal".to_string()));
+        clear_all_provider_unavailability_for_account();
+        assert!(provider_unavailability_detail_for_account("openai").is_none());
+
+        crate::auth::codex::set_active_account_override(Some("work".to_string()));
+        assert!(
+            provider_unavailability_detail_for_account("openai")
+                .unwrap_or_default()
+                .contains("work rate limit")
+        );
+
+        clear_all_provider_unavailability_for_account();
+        crate::auth::codex::set_active_account_override(None);
+    }
+
+    #[test]
+    fn test_openai_model_catalog_is_scoped_per_account() {
+        let _guard = crate::storage::lock_test_env();
+        let work_model = "scoped-work-model-123";
+        let personal_model = "scoped-personal-model-456";
+
+        crate::auth::codex::set_active_account_override(Some("work".to_string()));
+        populate_account_models(vec![work_model.to_string()]);
+        assert!(known_openai_model_ids().contains(&work_model.to_string()));
+        assert!(!known_openai_model_ids().contains(&personal_model.to_string()));
+
+        crate::auth::codex::set_active_account_override(Some("personal".to_string()));
+        assert!(!known_openai_model_ids().contains(&work_model.to_string()));
+        populate_account_models(vec![personal_model.to_string()]);
+        assert!(known_openai_model_ids().contains(&personal_model.to_string()));
+        assert!(!known_openai_model_ids().contains(&work_model.to_string()));
+
+        crate::auth::codex::set_active_account_override(Some("work".to_string()));
+        assert!(known_openai_model_ids().contains(&work_model.to_string()));
+        assert!(!known_openai_model_ids().contains(&personal_model.to_string()));
+
+        crate::auth::codex::set_active_account_override(None);
     }
 
     #[test]
