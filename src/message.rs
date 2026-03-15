@@ -6,6 +6,74 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::OnceLock;
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InputShellResult {
+    pub command: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    pub output: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    pub duration_ms: u64,
+    #[serde(default)]
+    pub truncated: bool,
+    #[serde(default)]
+    pub failed_to_start: bool,
+}
+
+fn sanitize_fenced_block(text: &str) -> String {
+    text.replace("```", "``\u{200b}`")
+}
+
+pub fn format_input_shell_result_markdown(shell: &InputShellResult) -> String {
+    let status = if shell.failed_to_start {
+        "✗ failed to start".to_string()
+    } else if shell.exit_code == Some(0) {
+        "✓ exit 0".to_string()
+    } else if let Some(code) = shell.exit_code {
+        format!("✗ exit {}", code)
+    } else {
+        "✗ terminated".to_string()
+    };
+
+    let mut meta = vec![status, Message::format_duration(shell.duration_ms)];
+    if let Some(cwd) = shell.cwd.as_deref() {
+        meta.push(format!("cwd `{}`", cwd));
+    }
+    if shell.truncated {
+        meta.push("truncated".to_string());
+    }
+
+    let mut message = format!(
+        "**Shell command** · {}\n\n```bash\n{}\n```",
+        meta.join(" · "),
+        sanitize_fenced_block(&shell.command)
+    );
+
+    if shell.output.trim().is_empty() {
+        message.push_str("\n\n_No output._");
+    } else {
+        message.push_str(&format!(
+            "\n\n```text\n{}\n```",
+            sanitize_fenced_block(shell.output.trim_end())
+        ));
+    }
+
+    message
+}
+
+pub fn input_shell_status_notice(shell: &InputShellResult) -> String {
+    if shell.failed_to_start {
+        "Shell command failed to start".to_string()
+    } else if shell.exit_code == Some(0) {
+        "Shell command completed".to_string()
+    } else if let Some(code) = shell.exit_code {
+        format!("Shell command failed (exit {})", code)
+    } else {
+        "Shell command terminated".to_string()
+    }
+}
+
 /// Role in conversation
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -165,11 +233,13 @@ impl Message {
     }
 
     fn should_skip_timestamp_injection(&self) -> bool {
-        self.content.iter().find_map(|block| match block {
-            ContentBlock::Text { text, .. } => Some(text.trim_start()),
-            _ => None,
-        })
-        .is_some_and(|text| text.starts_with("<system-reminder>"))
+        self.content
+            .iter()
+            .find_map(|block| match block {
+                ContentBlock::Text { text, .. } => Some(text.trim_start()),
+                _ => None,
+            })
+            .is_some_and(|text| text.starts_with("<system-reminder>"))
     }
 
     fn tool_result_tag(&self, ts: &chrono::DateTime<Utc>) -> String {

@@ -8,8 +8,59 @@ use crate::agent::{Agent, SoftInterruptSource, StreamError};
 use crate::protocol::{FeatureToggle, NotificationType, ServerEvent};
 use crate::session::Session;
 use std::collections::{HashMap, HashSet};
+use std::process::Stdio;
 use std::sync::Arc;
+use std::time::Instant;
+use tokio::process::Command;
 use tokio::sync::{Mutex, RwLock, broadcast, mpsc};
+
+const INPUT_SHELL_MAX_OUTPUT_LEN: usize = 30_000;
+
+fn build_input_shell_command(command: &str) -> Command {
+    #[cfg(windows)]
+    {
+        let mut cmd = Command::new("cmd.exe");
+        cmd.arg("/C").arg(command);
+        cmd
+    }
+
+    #[cfg(not(windows))]
+    {
+        let mut cmd = Command::new("bash");
+        cmd.arg("-c").arg(command);
+        cmd
+    }
+}
+
+fn combine_input_shell_output(stdout: &[u8], stderr: &[u8]) -> (String, bool) {
+    let stdout = String::from_utf8_lossy(stdout);
+    let stderr = String::from_utf8_lossy(stderr);
+    let mut output = String::new();
+
+    if !stdout.is_empty() {
+        output.push_str(&stdout);
+    }
+    if !stderr.is_empty() {
+        if !output.is_empty() && !output.ends_with('\n') {
+            output.push('\n');
+        }
+        output.push_str("[stderr]\n");
+        output.push_str(&stderr);
+    }
+
+    let truncated = if output.len() > INPUT_SHELL_MAX_OUTPUT_LEN {
+        output.truncate(INPUT_SHELL_MAX_OUTPUT_LEN);
+        if !output.ends_with('\n') {
+            output.push('\n');
+        }
+        output.push_str("… output truncated");
+        true
+    } else {
+        false
+    };
+
+    (output, truncated)
+}
 
 pub(super) async fn handle_notify_session(
     id: u64,
@@ -71,6 +122,60 @@ pub(super) async fn handle_notify_session(
             retry_after_secs: None,
         });
     }
+}
+
+pub(super) fn handle_input_shell(
+    id: u64,
+    command: String,
+    agent: &Arc<Mutex<Agent>>,
+    client_event_tx: &mpsc::UnboundedSender<ServerEvent>,
+) {
+    let agent = Arc::clone(agent);
+    let tx = client_event_tx.clone();
+
+    tokio::spawn(async move {
+        let cwd = {
+            let agent_guard = agent.lock().await;
+            agent_guard.working_dir().map(|dir| dir.to_string())
+        };
+
+        let started = Instant::now();
+        let mut cmd = build_input_shell_command(&command);
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        if let Some(dir) = cwd.as_ref() {
+            cmd.current_dir(dir);
+        }
+
+        let result = match cmd.output().await {
+            Ok(output) => {
+                let (combined_output, truncated) =
+                    combine_input_shell_output(&output.stdout, &output.stderr);
+                crate::message::InputShellResult {
+                    command,
+                    cwd,
+                    output: combined_output,
+                    exit_code: output.status.code(),
+                    duration_ms: started.elapsed().as_millis().min(u64::MAX as u128) as u64,
+                    truncated,
+                    failed_to_start: false,
+                }
+            }
+            Err(error) => crate::message::InputShellResult {
+                command,
+                cwd,
+                output: format!("Failed to run command: {}", error),
+                exit_code: None,
+                duration_ms: started.elapsed().as_millis().min(u64::MAX as u128) as u64,
+                truncated: false,
+                failed_to_start: true,
+            },
+        };
+
+        let _ = tx.send(ServerEvent::InputShellResult { result });
+        let _ = tx.send(ServerEvent::Done { id });
+    });
 }
 
 pub(super) async fn handle_set_feature(

@@ -1269,6 +1269,43 @@ fn submit_transcript_input(app: &mut App) {
     }
 }
 
+async fn submit_remote_input_shell(
+    app: &mut App,
+    remote: &mut RemoteConnection,
+    raw_input: String,
+    command: String,
+) -> Result<()> {
+    app.push_display_message(DisplayMessage::user(raw_input));
+
+    if command.trim().is_empty() {
+        app.push_display_message(DisplayMessage::system(
+            "Shell command cannot be empty after `!`.",
+        ));
+        app.set_status_notice("Shell command is empty");
+        return Ok(());
+    }
+
+    let request_id = remote.send_input_shell(command.clone()).await?;
+    app.current_message_id = Some(request_id);
+    app.is_processing = true;
+    app.status = ProcessingStatus::Sending;
+    app.processing_started = Some(Instant::now());
+    app.last_stream_activity = Some(Instant::now());
+    app.streaming_tps_start = None;
+    app.streaming_tps_elapsed = Duration::ZERO;
+    app.streaming_total_output_tokens = 0;
+    app.thought_line_inserted = false;
+    app.thinking_prefix_emitted = false;
+    app.thinking_buffer.clear();
+    app.rate_limit_pending_message = None;
+    remote.reset_call_output_tokens_seen();
+    app.set_status_notice(format!(
+        "Running remote shell: {}",
+        crate::util::truncate_str(&command, 48)
+    ));
+    Ok(())
+}
+
 pub(super) fn apply_transcript_event(app: &mut App, text: String, mode: TranscriptMode) {
     if text.trim().is_empty() {
         app.set_status_notice("Transcript was empty");
@@ -2128,6 +2165,13 @@ pub(super) fn handle_server_event(
         }
         ServerEvent::Transcript { text, mode } => {
             apply_transcript_event(app, text, mode);
+            false
+        }
+        ServerEvent::InputShellResult { result } => {
+            app.push_display_message(DisplayMessage::system(
+                crate::message::format_input_shell_result_markdown(&result),
+            ));
+            app.set_status_notice(crate::message::input_shell_status_notice(&result));
             false
         }
         ServerEvent::Compaction {
@@ -3587,6 +3631,17 @@ pub(super) async fn handle_remote_key(
                     app.input = trimmed.to_string();
                     app.cursor_pos = app.input.len();
                     app.submit_input();
+                    return Ok(());
+                }
+
+                if let Some(command) = input::extract_input_shell_command(&prepared.expanded) {
+                    submit_remote_input_shell(
+                        app,
+                        remote,
+                        prepared.raw_input,
+                        command.to_string(),
+                    )
+                    .await?;
                     return Ok(());
                 }
 

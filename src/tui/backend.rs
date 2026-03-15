@@ -477,6 +477,18 @@ impl RemoteConnection {
         self.send_request(request).await
     }
 
+    /// Execute a `!cmd` shell command in the active remote session.
+    pub async fn send_input_shell(&mut self, command: String) -> Result<u64> {
+        let id = self.next_request_id;
+        let request = Request::InputShell {
+            id,
+            command,
+        };
+        self.next_request_id += 1;
+        self.send_request(request).await?;
+        Ok(id)
+    }
+
     /// Send stdin input back to a running command
     pub async fn send_stdin_response(&mut self, request_id: &str, input: &str) -> Result<()> {
         let request = Request::StdinResponse {

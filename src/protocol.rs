@@ -14,6 +14,16 @@ use crate::message::ToolCall;
 use crate::plan::PlanItem;
 use crate::side_panel::SidePanelSnapshot;
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TranscriptMode {
+    Insert,
+    Append,
+    Replace,
+    #[default]
+    Send,
+}
+
 /// A message in conversation history (for sync)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HistoryMessage {
@@ -120,6 +130,21 @@ pub enum Request {
         session_id: String,
         message: String,
     },
+
+    /// Inject externally transcribed text into a live TUI session.
+    #[serde(rename = "transcript")]
+    Transcript {
+        id: u64,
+        text: String,
+        #[serde(default)]
+        mode: TranscriptMode,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_id: Option<String>,
+    },
+
+    /// Execute a shell command from `!cmd` in the active remote session.
+    #[serde(rename = "input_shell")]
+    InputShell { id: u64, command: String },
 
     /// Cycle the active model (direction: 1 for next, -1 for previous)
     #[serde(rename = "cycle_model")]
@@ -742,6 +767,16 @@ pub enum ServerEvent {
         message: String,
     },
 
+    /// External transcript text targeted at the active TUI input.
+    #[serde(rename = "transcript")]
+    Transcript { text: String, mode: TranscriptMode },
+
+    /// Completed `!cmd` shell execution for a connected remote client.
+    #[serde(rename = "input_shell_result")]
+    InputShellResult {
+        result: crate::message::InputShellResult,
+    },
+
     /// Response to comm_read request
     #[serde(rename = "comm_context")]
     CommContext {
@@ -935,6 +970,8 @@ impl Request {
             Request::Reload { id } => *id,
             Request::ResumeSession { id, .. } => *id,
             Request::NotifySession { id, .. } => *id,
+            Request::Transcript { id, .. } => *id,
+            Request::InputShell { id, .. } => *id,
             Request::CycleModel { id, .. } => *id,
             Request::SetModel { id, .. } => *id,
             Request::SetReasoningEffort { id, .. } => *id,
@@ -1330,6 +1367,96 @@ mod tests {
                 assert!(summary.contains("fox"));
             }
             _ => panic!("expected CommAwaitMembersResponse"),
+        }
+    }
+
+    #[test]
+    fn test_transcript_request_roundtrip() {
+        let req = Request::Transcript {
+            id: 77,
+            text: "hello from whisper".to_string(),
+            mode: TranscriptMode::Send,
+            session_id: Some("sess_abc".to_string()),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains("\"type\":\"transcript\""));
+        let decoded: Request = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.id(), 77);
+        match decoded {
+            Request::Transcript {
+                text,
+                mode,
+                session_id,
+                ..
+            } => {
+                assert_eq!(text, "hello from whisper");
+                assert_eq!(mode, TranscriptMode::Send);
+                assert_eq!(session_id.as_deref(), Some("sess_abc"));
+            }
+            _ => panic!("expected Transcript request"),
+        }
+    }
+
+    #[test]
+    fn test_transcript_event_roundtrip() {
+        let event = ServerEvent::Transcript {
+            text: "dictated text".to_string(),
+            mode: TranscriptMode::Replace,
+        };
+        let json = encode_event(&event);
+        assert!(json.contains("\"type\":\"transcript\""));
+        let decoded: ServerEvent = serde_json::from_str(json.trim()).unwrap();
+        match decoded {
+            ServerEvent::Transcript { text, mode } => {
+                assert_eq!(text, "dictated text");
+                assert_eq!(mode, TranscriptMode::Replace);
+            }
+            _ => panic!("expected Transcript event"),
+        }
+    }
+
+    #[test]
+    fn test_input_shell_request_roundtrip() {
+        let req = Request::InputShell {
+            id: 88,
+            command: "ls -la".to_string(),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains("\"type\":\"input_shell\""));
+        let decoded: Request = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.id(), 88);
+        match decoded {
+            Request::InputShell { id, command } => {
+                assert_eq!(id, 88);
+                assert_eq!(command, "ls -la");
+            }
+            _ => panic!("expected InputShell request"),
+        }
+    }
+
+    #[test]
+    fn test_input_shell_result_event_roundtrip() {
+        let event = ServerEvent::InputShellResult {
+            result: crate::message::InputShellResult {
+                command: "pwd".to_string(),
+                cwd: Some("/tmp/project".to_string()),
+                output: "/tmp/project\n".to_string(),
+                exit_code: Some(0),
+                duration_ms: 7,
+                truncated: false,
+                failed_to_start: false,
+            },
+        };
+        let json = encode_event(&event);
+        assert!(json.contains("\"type\":\"input_shell_result\""));
+        let decoded: ServerEvent = serde_json::from_str(json.trim()).unwrap();
+        match decoded {
+            ServerEvent::InputShellResult { result } => {
+                assert_eq!(result.command, "pwd");
+                assert_eq!(result.cwd.as_deref(), Some("/tmp/project"));
+                assert_eq!(result.exit_code, Some(0));
+            }
+            _ => panic!("expected InputShellResult event"),
         }
     }
 }

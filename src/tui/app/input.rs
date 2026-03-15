@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 const INPUT_SHELL_MAX_OUTPUT_LEN: usize = 30_000;
 
-fn extract_input_shell_command(input: &str) -> Option<&str> {
+pub(super) fn extract_input_shell_command(input: &str) -> Option<&str> {
     input.trim().strip_prefix('!').map(str::trim)
 }
 
@@ -79,24 +79,28 @@ fn spawn_input_shell_command(session_id: String, command: String, cwd: Option<St
                     combine_shell_output(&output.stdout, &output.stderr);
                 InputShellCompleted {
                     session_id,
-                    command,
-                    cwd,
-                    output: combined_output,
-                    exit_code: output.status.code(),
-                    duration_ms: started.elapsed().as_millis().min(u64::MAX as u128) as u64,
-                    truncated,
-                    failed_to_start: false,
+                    result: crate::message::InputShellResult {
+                        command,
+                        cwd,
+                        output: combined_output,
+                        exit_code: output.status.code(),
+                        duration_ms: started.elapsed().as_millis().min(u64::MAX as u128) as u64,
+                        truncated,
+                        failed_to_start: false,
+                    },
                 }
             }
             Err(error) => InputShellCompleted {
                 session_id,
-                command,
-                cwd,
-                output: format!("Failed to run command: {}", error),
-                exit_code: None,
-                duration_ms: started.elapsed().as_millis().min(u64::MAX as u128) as u64,
-                truncated: false,
-                failed_to_start: true,
+                result: crate::message::InputShellResult {
+                    command,
+                    cwd,
+                    output: format!("Failed to run command: {}", error),
+                    exit_code: None,
+                    duration_ms: started.elapsed().as_millis().min(u64::MAX as u128) as u64,
+                    truncated: false,
+                    failed_to_start: true,
+                },
             },
         };
 

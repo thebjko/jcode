@@ -1793,28 +1793,62 @@ fn test_handle_input_shell_completed_renders_markdown_blocks() {
     let mut app = create_test_app();
     let event = BusEvent::InputShellCompleted(InputShellCompleted {
         session_id: app.session.id.clone(),
-        command: "ls -la".to_string(),
-        cwd: Some("/tmp/project".to_string()),
-        output: "Cargo.toml\nsrc\n".to_string(),
-        exit_code: Some(0),
-        duration_ms: 42,
-        truncated: false,
-        failed_to_start: false,
+        result: crate::message::InputShellResult {
+            command: "ls -la".to_string(),
+            cwd: Some("/tmp/project".to_string()),
+            output: "Cargo.toml\nsrc\n".to_string(),
+            exit_code: Some(0),
+            duration_ms: 42,
+            truncated: false,
+            failed_to_start: false,
+        },
     });
 
     super::local::handle_bus_event(&mut app, Ok(event));
 
     let rendered = app.display_messages().last().expect("shell result message");
     assert_eq!(rendered.role, "system");
-    assert!(rendered.content.contains("**Local shell**"));
+    assert!(rendered.content.contains("**Shell command**"));
     assert!(rendered.content.contains("```bash"));
     assert!(rendered.content.contains("ls -la"));
     assert!(rendered.content.contains("```text"));
     assert!(rendered.content.contains("Cargo.toml"));
     assert_eq!(
         app.status_notice(),
-        Some("Local shell command completed".to_string())
+        Some("Shell command completed".to_string())
     );
+}
+
+#[test]
+fn test_handle_server_event_input_shell_result_renders_markdown_blocks() {
+    let mut app = create_test_app();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let mut remote = crate::tui::backend::RemoteConnection::dummy();
+
+    app.handle_server_event(
+        crate::protocol::ServerEvent::InputShellResult {
+            result: crate::message::InputShellResult {
+                command: "pwd".to_string(),
+                cwd: Some("/tmp/project".to_string()),
+                output: "/tmp/project\n".to_string(),
+                exit_code: Some(0),
+                duration_ms: 5,
+                truncated: false,
+                failed_to_start: false,
+            },
+        },
+        &mut remote,
+    );
+
+    let rendered = app.display_messages().last().expect("shell result message");
+    assert_eq!(rendered.role, "system");
+    assert!(rendered.content.contains("**Shell command**"));
+    assert!(rendered.content.contains("```bash"));
+    assert!(rendered.content.contains("pwd"));
+    assert!(rendered.content.contains("```text"));
+    assert!(rendered.content.contains("/tmp/project"));
+    assert_eq!(app.status_notice(), Some("Shell command completed".to_string()));
 }
 
 #[test]

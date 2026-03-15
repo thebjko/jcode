@@ -158,13 +158,7 @@ pub struct LoginCompleted {
 #[derive(Clone, Debug)]
 pub struct InputShellCompleted {
     pub session_id: String,
-    pub command: String,
-    pub cwd: Option<String>,
-    pub output: String,
-    pub exit_code: Option<i32>,
-    pub duration_ms: u64,
-    pub truncated: bool,
-    pub failed_to_start: bool,
+    pub result: crate::message::InputShellResult,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
