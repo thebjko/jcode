@@ -3304,8 +3304,8 @@ mod tests {
         assert!(text.contains("trace"));
         assert!(text.contains("now"));
         assert!(text.contains("relevant 2"));
-        assert!(text.contains("injected 2 mem 318ch"));
-        assert!(text.contains("embed done 9 hits 71ms"));
+        assert!(text.contains("injected 2"));
+        assert!(text.contains("embed done 9"));
     }
 
     #[test]

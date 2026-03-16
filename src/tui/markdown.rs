@@ -286,6 +286,16 @@ impl IncrementalMarkdownRenderer {
             return self.rendered_lines.clone();
         }
 
+        // Prefer correctness over incremental patching for structured markdown.
+        // Block-level constructs (especially headings during streaming) can cause
+        // visible duplication/staleness when only the suffix is re-rendered.
+        if streaming_requires_full_rerender(full_text) {
+            self.rendered_lines = render_markdown_with_width(full_text, self.max_width);
+            self.rendered_text = full_text.to_string();
+            self.refresh_checkpoint(full_text, true);
+            return self.rendered_lines.clone();
+        }
+
         // Fast path: text was only appended
         if full_text.starts_with(&self.rendered_text) {
             // Find a safe re-render point
@@ -421,6 +431,42 @@ impl IncrementalMarkdownRenderer {
             self.reset();
         }
     }
+}
+
+fn streaming_requires_full_rerender(text: &str) -> bool {
+    text.lines().any(|line| {
+        let trimmed = line.trim_start();
+        if trimmed.is_empty() {
+            return false;
+        }
+
+        trimmed.starts_with("```")
+            || trimmed.starts_with("~~~")
+            || trimmed.starts_with("$$")
+            || trimmed.starts_with('>')
+            || trimmed.starts_with("- ")
+            || trimmed.starts_with("* ")
+            || trimmed.starts_with("+ ")
+            || is_heading_line(trimmed)
+            || is_ordered_list_line(trimmed)
+            || looks_like_table_row(trimmed)
+    })
+}
+
+fn is_heading_line(line: &str) -> bool {
+    let hashes = line.chars().take_while(|c| *c == '#').count();
+    hashes > 0 && hashes <= 6 && line.chars().nth(hashes) == Some(' ')
+}
+
+fn is_ordered_list_line(line: &str) -> bool {
+    let digits = line.chars().take_while(|c| c.is_ascii_digit()).count();
+    digits > 0
+        && matches!(line.as_bytes().get(digits), Some(b'.' | b')'))
+        && matches!(line.as_bytes().get(digits + 1), Some(b' '))
+}
+
+fn looks_like_table_row(line: &str) -> bool {
+    line.starts_with('|') || (line.contains('|') && line.matches('|').count() >= 2)
 }
 
 // Colors matching ui.rs palette
@@ -1800,12 +1846,22 @@ fn render_table(rows: &[Vec<String>], max_width: Option<usize>) -> Vec<Line<'sta
         if available > 0 && num_cols > 0 {
             let total_width: usize = col_widths.iter().sum();
             if total_width > available {
-                // Shrink columns proportionally, with minimum of 5 chars
-                let min_col_width = 5;
-                let scale = available as f64 / total_width as f64;
+                let min_col_width = (available / num_cols).clamp(1, 5);
                 for width in &mut col_widths {
-                    *width = (*width as f64 * scale).round() as usize;
                     *width = (*width).max(min_col_width);
+                }
+
+                while col_widths.iter().sum::<usize>() > available {
+                    if let Some((idx, _)) = col_widths
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, width)| **width > min_col_width)
+                        .max_by_key(|(_, width)| **width)
+                    {
+                        col_widths[idx] -= 1;
+                    } else {
+                        break;
+                    }
                 }
             }
         }
@@ -2852,6 +2908,10 @@ pub fn wrap_line(line: Line<'static>, width: usize) -> Vec<Line<'static>> {
     // Preserve the original alignment
     let alignment = line.alignment;
 
+    if let Some(balanced) = wrap_line_balanced(&line, width) {
+        return balanced;
+    }
+
     let mut result: Vec<Line<'static>> = Vec::new();
     let mut current_spans: Vec<Span<'static>> = Vec::with_capacity(line.spans.len());
     let mut current_width = 0usize;
@@ -2961,6 +3021,212 @@ pub fn wrap_line(line: Line<'static>, width: usize) -> Vec<Line<'static>> {
     }
 
     result
+}
+
+#[derive(Clone)]
+struct StyledPiece {
+    text: String,
+    style: Style,
+}
+
+#[derive(Clone)]
+struct WrapToken {
+    word: Vec<StyledPiece>,
+    spaces: Vec<StyledPiece>,
+    word_width: usize,
+    space_width: usize,
+}
+
+fn wrap_line_balanced(line: &Line<'static>, width: usize) -> Option<Vec<Line<'static>>> {
+    let alignment = line.alignment?;
+    if alignment == Alignment::Left {
+        return None;
+    }
+
+    let flat_text: String = line
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect();
+    if UnicodeWidthStr::width(flat_text.as_str()) <= width || !flat_text.contains(' ') {
+        return None;
+    }
+    if flat_text.starts_with(char::is_whitespace)
+        || flat_text.ends_with(char::is_whitespace)
+        || flat_text.contains("  ")
+        || flat_text.contains('\t')
+    {
+        return None;
+    }
+
+    let tokens = tokenize_balanced_wrap(line)?;
+    if tokens.len() < 3 || tokens.iter().any(|token| token.word_width > width) {
+        return None;
+    }
+
+    let (breaks, line_count) = balanced_wrap_breaks(&tokens, width)?;
+    if line_count <= 1 {
+        return None;
+    }
+
+    let mut result = Vec::with_capacity(line_count);
+    let mut start = 0usize;
+    while start < tokens.len() {
+        let end = breaks[start];
+        if end <= start {
+            return None;
+        }
+        let spans = build_balanced_line_spans(&tokens[start..end]);
+        result.push(Line::from(spans).alignment(alignment));
+        start = end;
+    }
+    Some(result)
+}
+
+fn tokenize_balanced_wrap(line: &Line<'static>) -> Option<Vec<WrapToken>> {
+    let mut tokens = Vec::new();
+    let mut word = Vec::new();
+    let mut spaces = Vec::new();
+    let mut word_width = 0usize;
+    let mut space_width = 0usize;
+    let mut seen_word_char = false;
+    let mut in_spaces = false;
+
+    for span in &line.spans {
+        let style = span.style;
+        for ch in span.content.chars() {
+            let ch_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+            if ch.is_whitespace() {
+                if !seen_word_char {
+                    return None;
+                }
+                in_spaces = true;
+                push_piece_char(&mut spaces, ch, style);
+                space_width += ch_width;
+            } else {
+                if in_spaces {
+                    tokens.push(WrapToken {
+                        word: std::mem::take(&mut word),
+                        spaces: std::mem::take(&mut spaces),
+                        word_width,
+                        space_width,
+                    });
+                    word_width = 0;
+                    space_width = 0;
+                    in_spaces = false;
+                }
+                seen_word_char = true;
+                push_piece_char(&mut word, ch, style);
+                word_width += ch_width;
+            }
+        }
+    }
+
+    if !seen_word_char || in_spaces {
+        return None;
+    }
+
+    tokens.push(WrapToken {
+        word,
+        spaces,
+        word_width,
+        space_width,
+    });
+    Some(tokens)
+}
+
+fn push_piece_char(pieces: &mut Vec<StyledPiece>, ch: char, style: Style) {
+    if let Some(last) = pieces.last_mut() {
+        if last.style == style {
+            last.text.push(ch);
+            return;
+        }
+    }
+    pieces.push(StyledPiece {
+        text: ch.to_string(),
+        style,
+    });
+}
+
+fn balanced_wrap_breaks(tokens: &[WrapToken], width: usize) -> Option<(Vec<usize>, usize)> {
+    let n = tokens.len();
+    let mut dp = vec![usize::MAX; n + 1];
+    let mut breaks = vec![0usize; n];
+    let mut line_counts = vec![usize::MAX; n + 1];
+    dp[n] = 0;
+    line_counts[n] = 0;
+
+    for start in (0..n).rev() {
+        let mut line_width = 0usize;
+        for end in start..n {
+            if end == start {
+                line_width = tokens[end].word_width;
+            } else {
+                line_width = line_width
+                    .saturating_add(tokens[end - 1].space_width)
+                    .saturating_add(tokens[end].word_width);
+            }
+
+            if line_width > width {
+                break;
+            }
+
+            if dp[end + 1] == usize::MAX {
+                continue;
+            }
+
+            let slack = width - line_width;
+            let cost = slack.saturating_mul(slack).saturating_add(dp[end + 1]);
+            let lines_used = 1usize.saturating_add(line_counts[end + 1]);
+
+            let should_replace = cost < dp[start]
+                || (cost == dp[start] && lines_used < line_counts[start])
+                || (cost == dp[start]
+                    && lines_used == line_counts[start]
+                    && line_width < line_width_for_break(tokens, start, breaks[start]));
+
+            if should_replace {
+                dp[start] = cost;
+                breaks[start] = end + 1;
+                line_counts[start] = lines_used;
+            }
+        }
+    }
+
+    if dp[0] == usize::MAX {
+        None
+    } else {
+        Some((breaks, line_counts[0]))
+    }
+}
+
+fn line_width_for_break(tokens: &[WrapToken], start: usize, end: usize) -> usize {
+    if end <= start {
+        return usize::MAX;
+    }
+    let mut width = 0usize;
+    for idx in start..end {
+        if idx > start {
+            width = width.saturating_add(tokens[idx - 1].space_width);
+        }
+        width = width.saturating_add(tokens[idx].word_width);
+    }
+    width
+}
+
+fn build_balanced_line_spans(tokens: &[WrapToken]) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    for (idx, token) in tokens.iter().enumerate() {
+        for piece in &token.word {
+            spans.push(Span::styled(piece.text.clone(), piece.style));
+        }
+        if idx + 1 < tokens.len() {
+            for piece in &token.spaces {
+                spans.push(Span::styled(piece.text.clone(), piece.style));
+            }
+        }
+    }
+    spans
 }
 
 /// Wrap multiple lines to fit within a given width
@@ -3091,6 +3357,27 @@ mod tests {
             .max()
             .unwrap_or(0);
         assert!(max_len <= 20);
+    }
+
+    #[test]
+    fn test_table_width_truncation_with_three_columns_stays_within_limit() {
+        let md = "| # | Principle | Story Ready |\n| - | - | - |\n| 1 | Customer Obsession | unchecked |";
+        let lines = render_markdown_with_width(md, Some(24));
+        let rendered: Vec<String> = lines.iter().map(line_to_string).collect();
+
+        assert!(
+            rendered.iter().any(|line| line.contains("─┼─")),
+            "expected table separator line: {:?}",
+            rendered
+        );
+
+        let max_width = rendered.iter().map(|line| line.width()).max().unwrap_or(0);
+        assert!(
+            max_width <= 24,
+            "expected all rendered table lines to fit width 24, got {} in {:?}",
+            max_width,
+            rendered
+        );
     }
 
     #[test]
@@ -3400,6 +3687,19 @@ mod tests {
     }
 
     #[test]
+    fn test_incremental_renderer_streaming_heading_does_not_duplicate() {
+        let mut renderer = IncrementalMarkdownRenderer::new(Some(80));
+
+        let _ = renderer.update("## Planning");
+        let _ = renderer.update("## Planning\n\n");
+        let lines = renderer.update("## Planning\n\nNext step");
+        let rendered = lines_to_string(&lines);
+
+        assert_eq!(rendered.matches("Planning").count(), 1, "{rendered}");
+        assert!(rendered.contains("Next step"), "{rendered}");
+    }
+
+    #[test]
     fn test_incremental_renderer_streaming_inline_math() {
         let mut renderer = IncrementalMarkdownRenderer::new(Some(80));
         let _ = renderer.update("Compute $x");
@@ -3475,6 +3775,18 @@ mod tests {
             "Expected unclosed bracket line to remain visible: {}",
             rendered
         );
+    }
+
+    #[test]
+    fn test_center_aligned_wrap_balances_lines() {
+        let line = Line::from("aa aa aa aa aa aa aa aa aa").alignment(Alignment::Center);
+        let wrapped = wrap_line(line, 20);
+        let widths: Vec<usize> = wrapped.iter().map(Line::width).collect();
+
+        assert_eq!(wrapped.len(), 2, "{wrapped:?}");
+        let min = widths.iter().copied().min().unwrap_or(0);
+        let max = widths.iter().copied().max().unwrap_or(0);
+        assert!(max - min <= 3, "expected balanced widths, got {widths:?}");
     }
 
     #[test]

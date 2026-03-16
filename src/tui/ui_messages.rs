@@ -1,6 +1,7 @@
 use super::*;
 use std::collections::{HashMap, VecDeque};
 use std::hash::{DefaultHasher, Hash, Hasher};
+use unicode_width::UnicodeWidthStr;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct MessageCacheKey {
@@ -102,14 +103,63 @@ pub(crate) fn render_assistant_message(
     let content_width = width as usize;
     let mut lines = markdown::render_markdown_with_width(&msg.content, Some(content_width));
     if !msg.tool_calls.is_empty() {
-        lines.push(Line::from(vec![
-            Span::raw("  "),
-            Span::styled(
-                msg.tool_calls.join(" "),
-                Style::default().fg(accent_color()).dim(),
-            ),
-        ]));
+        lines.extend(render_assistant_tool_call_lines(&msg.tool_calls, content_width));
     }
+    lines
+}
+
+fn render_assistant_tool_call_lines(tool_calls: &[String], width: usize) -> Vec<Line<'static>> {
+    if tool_calls.is_empty() {
+        return Vec::new();
+    }
+
+    const TOOL_SEPARATOR: &str = " · ";
+
+    let label = if tool_calls.len() == 1 { "tool:" } else { "tools:" };
+    let prefix = format!("  {} ", label);
+    let continuation_prefix = " ".repeat(prefix.width());
+    let prefix_width = prefix.width();
+    let available_width = width.max(prefix_width.saturating_add(1));
+
+    let prefix_style = Style::default().fg(tool_color()).dim();
+    let separator_style = Style::default().fg(dim_color()).dim();
+    let name_style = Style::default().fg(accent_color()).dim();
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut current_spans = vec![Span::styled(prefix.clone(), prefix_style)];
+    let mut current_width = prefix_width;
+    let mut first_on_line = true;
+
+    let flush_line = |lines: &mut Vec<Line<'static>>, spans: &mut Vec<Span<'static>>| {
+        if !spans.is_empty() {
+            lines.push(Line::from(std::mem::take(spans)));
+        }
+    };
+
+    for tool_name in tool_calls {
+        let tool_width = tool_name.width();
+        let separator_width = if first_on_line { 0 } else { TOOL_SEPARATOR.width() };
+
+        if !first_on_line
+            && current_width.saturating_add(separator_width + tool_width) > available_width
+        {
+            flush_line(&mut lines, &mut current_spans);
+            current_spans.push(Span::styled(continuation_prefix.clone(), prefix_style));
+            current_width = prefix_width;
+            first_on_line = true;
+        }
+
+        if !first_on_line {
+            current_spans.push(Span::styled(TOOL_SEPARATOR, separator_style));
+            current_width = current_width.saturating_add(separator_width);
+        }
+
+        current_spans.push(Span::styled(tool_name.clone(), name_style));
+        current_width = current_width.saturating_add(tool_width);
+        first_on_line = false;
+    }
+
+    flush_line(&mut lines, &mut current_spans);
     lines
 }
 
@@ -569,6 +619,44 @@ mod tests {
         }
 
         crate::tui::markdown::set_center_code_blocks(false);
+    }
+
+    #[test]
+    fn render_assistant_message_wraps_tool_calls_with_hanging_indent() {
+        let msg = DisplayMessage {
+            role: "assistant".to_string(),
+            content: "Done.".to_string(),
+            tool_calls: vec![
+                "read".to_string(),
+                "grep".to_string(),
+                "apply_patch".to_string(),
+                "batch".to_string(),
+            ],
+            duration_secs: None,
+            title: None,
+            tool_data: None,
+        };
+
+        let lines = render_assistant_message(&msg, 20, crate::config::DiffDisplayMode::Off);
+        let tool_lines: Vec<String> = lines
+            .iter()
+            .skip(1)
+            .map(|line| line.spans.iter().map(|span| span.content.as_ref()).collect())
+            .collect();
+
+        assert!(tool_lines.len() >= 2, "expected wrapped tool-call lines: {tool_lines:?}");
+        assert!(
+            tool_lines[0].contains("tools:"),
+            "expected tool summary label on first line: {tool_lines:?}"
+        );
+        assert!(
+            tool_lines[1].starts_with("         "),
+            "expected continuation line to use hanging indent: {tool_lines:?}"
+        );
+        assert!(
+            tool_lines.iter().all(|line| line.width() <= 20),
+            "wrapped tool-call lines should respect available width: {tool_lines:?}"
+        );
     }
 }
 

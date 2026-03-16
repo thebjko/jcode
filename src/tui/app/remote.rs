@@ -3635,13 +3635,8 @@ pub(super) async fn handle_remote_key(
                 }
 
                 if let Some(command) = input::extract_input_shell_command(&prepared.expanded) {
-                    submit_remote_input_shell(
-                        app,
-                        remote,
-                        prepared.raw_input,
-                        command.to_string(),
-                    )
-                    .await?;
+                    submit_remote_input_shell(app, remote, prepared.raw_input, command.to_string())
+                        .await?;
                     return Ok(());
                 }
 

@@ -480,10 +480,7 @@ impl RemoteConnection {
     /// Execute a `!cmd` shell command in the active remote session.
     pub async fn send_input_shell(&mut self, command: String) -> Result<u64> {
         let id = self.next_request_id;
-        let request = Request::InputShell {
-            id,
-            command,
-        };
+        let request = Request::InputShell { id, command };
         self.next_request_id += 1;
         self.send_request(request).await?;
         Ok(id)

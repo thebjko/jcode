@@ -727,7 +727,7 @@ impl FrameCaptureBuilder {
     }
 }
 
-/// Check for the specific "Shift+Enter" hint anomaly
+/// Check for the specific alternate-send hint anomaly.
 pub fn check_shift_enter_anomaly(
     builder: &mut FrameCaptureBuilder,
     is_processing: bool,
@@ -739,7 +739,7 @@ pub fn check_shift_enter_anomaly(
 
     if hint_shown != should_show {
         builder.anomaly(format!(
-            "Shift+Enter hint mismatch: shown={}, should_show={} (is_processing={}, input_len={})",
+            "alternate-send hint mismatch: shown={}, should_show={} (is_processing={}, input_len={})",
             hint_shown,
             should_show,
             is_processing,
