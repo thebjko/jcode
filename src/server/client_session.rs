@@ -600,7 +600,7 @@ mod tests {
         let mut session =
             crate::session::Session::create_with_id("session_test_reload".to_string(), None, None);
         session.model = Some("mock".to_string());
-        session.messages = messages;
+        session.replace_messages(messages);
         Agent::new_with_session(provider, registry, session, None)
     }
 

@@ -552,9 +552,7 @@ pub fn load_session(id_or_path: &str) -> Result<Session> {
     // Try as file path first
     let path = Path::new(id_or_path);
     if path.exists() {
-        let data = std::fs::read_to_string(path)?;
-        let session: Session = serde_json::from_str(&data)?;
-        return Ok(session);
+        return Session::load_from_path(path);
     }
 
     // Try as session ID in the sessions directory
@@ -562,9 +560,7 @@ pub fn load_session(id_or_path: &str) -> Result<Session> {
     // Try exact match
     let exact = sessions_dir.join(format!("{}.json", id_or_path));
     if exact.exists() {
-        let data = std::fs::read_to_string(&exact)?;
-        let session: Session = serde_json::from_str(&data)?;
-        return Ok(session);
+        return Session::load_from_path(&exact);
     }
 
     // Try prefix match (session_<id>.json or session_<name>_<ts>.json)
@@ -572,9 +568,7 @@ pub fn load_session(id_or_path: &str) -> Result<Session> {
         let entry = entry?;
         let name = entry.file_name().to_string_lossy().to_string();
         if name.contains(id_or_path) && name.ends_with(".json") {
-            let data = std::fs::read_to_string(entry.path())?;
-            let session: Session = serde_json::from_str(&data)?;
-            return Ok(session);
+            return Session::load_from_path(&entry.path());
         }
     }
 
@@ -614,11 +608,7 @@ pub fn load_swarm_sessions(
         if !path.extension().map(|e| e == "json").unwrap_or(false) {
             continue;
         }
-        let data = match std::fs::read_to_string(&path) {
-            Ok(data) => data,
-            Err(_) => continue,
-        };
-        let Ok(session) = serde_json::from_str::<Session>(&data) else {
+        let Ok(session) = Session::load_from_path(&path) else {
             continue;
         };
         all_sessions.push(session);

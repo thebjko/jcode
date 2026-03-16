@@ -314,7 +314,7 @@ pub(super) async fn handle_split(
         let model = Some(agent_guard.provider_model());
 
         let mut child = Session::create(Some(parent_session_id), None);
-        child.messages = messages;
+        child.replace_messages(messages);
         child.working_dir = working_dir;
         child.model = model;
         child.status = crate::session::SessionStatus::Closed;

@@ -7,6 +7,8 @@ use anyhow::Result;
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::io::{BufRead, BufReader};
+use std::path::Path;
 use std::path::PathBuf;
 
 /// Session exit status - why the session ended
@@ -255,7 +257,66 @@ pub struct Session {
     /// Non-conversation UI/state events persisted for higher-fidelity replay.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub replay_events: Vec<StoredReplayEvent>,
+    #[serde(skip)]
+    persist_state: SessionPersistState,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+struct SessionJournalMeta {
+    parent_id: Option<String>,
+    title: Option<String>,
+    updated_at: DateTime<Utc>,
+    compaction: Option<StoredCompactionState>,
+    provider_session_id: Option<String>,
+    model: Option<String>,
+    is_canary: bool,
+    testing_build: Option<String>,
+    working_dir: Option<String>,
+    short_name: Option<String>,
+    status: SessionStatus,
+    last_pid: Option<u32>,
+    last_active_at: Option<DateTime<Utc>>,
+    is_debug: bool,
+    saved: bool,
+    save_label: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SessionJournalEntry {
+    meta: SessionJournalMeta,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    append_messages: Vec<StoredMessage>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    append_env_snapshots: Vec<EnvSnapshot>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    append_memory_injections: Vec<StoredMemoryInjection>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    append_replay_events: Vec<StoredReplayEvent>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum PersistVectorMode {
+    #[default]
+    Clean,
+    Append,
+    Full,
+}
+
+#[derive(Debug, Clone, Default)]
+struct SessionPersistState {
+    snapshot_exists: bool,
+    messages_len: usize,
+    env_snapshots_len: usize,
+    memory_injections_len: usize,
+    replay_events_len: usize,
+    messages_mode: PersistVectorMode,
+    env_snapshots_mode: PersistVectorMode,
+    memory_injections_mode: PersistVectorMode,
+    replay_events_mode: PersistVectorMode,
+    last_meta: Option<SessionJournalMeta>,
+}
+
+const MAX_SESSION_JOURNAL_BYTES: u64 = 512 * 1024;
 
 /// Max number of environment snapshots to retain per session
 const MAX_ENV_SNAPSHOTS: usize = 8;
@@ -305,6 +366,162 @@ pub struct EnvSnapshot {
 }
 
 impl Session {
+    fn journal_meta(&self) -> SessionJournalMeta {
+        SessionJournalMeta {
+            parent_id: self.parent_id.clone(),
+            title: self.title.clone(),
+            updated_at: self.updated_at,
+            compaction: self.compaction.clone(),
+            provider_session_id: self.provider_session_id.clone(),
+            model: self.model.clone(),
+            is_canary: self.is_canary,
+            testing_build: self.testing_build.clone(),
+            working_dir: self.working_dir.clone(),
+            short_name: self.short_name.clone(),
+            status: self.status.clone(),
+            last_pid: self.last_pid,
+            last_active_at: self.last_active_at,
+            is_debug: self.is_debug,
+            saved: self.saved,
+            save_label: self.save_label.clone(),
+        }
+    }
+
+    fn reset_persist_state(&mut self, snapshot_exists: bool) {
+        self.persist_state = SessionPersistState {
+            snapshot_exists,
+            messages_len: self.messages.len(),
+            env_snapshots_len: self.env_snapshots.len(),
+            memory_injections_len: self.memory_injections.len(),
+            replay_events_len: self.replay_events.len(),
+            messages_mode: PersistVectorMode::Clean,
+            env_snapshots_mode: PersistVectorMode::Clean,
+            memory_injections_mode: PersistVectorMode::Clean,
+            replay_events_mode: PersistVectorMode::Clean,
+            last_meta: Some(self.journal_meta()),
+        };
+    }
+
+    fn mark_messages_append_dirty(&mut self) {
+        if self.persist_state.messages_mode != PersistVectorMode::Full {
+            self.persist_state.messages_mode = PersistVectorMode::Append;
+        }
+    }
+
+    fn mark_messages_full_dirty(&mut self) {
+        self.persist_state.messages_mode = PersistVectorMode::Full;
+    }
+
+    fn mark_env_snapshots_append_dirty(&mut self) {
+        if self.persist_state.env_snapshots_mode != PersistVectorMode::Full {
+            self.persist_state.env_snapshots_mode = PersistVectorMode::Append;
+        }
+    }
+
+    fn mark_env_snapshots_full_dirty(&mut self) {
+        self.persist_state.env_snapshots_mode = PersistVectorMode::Full;
+    }
+
+    fn mark_memory_injections_append_dirty(&mut self) {
+        if self.persist_state.memory_injections_mode != PersistVectorMode::Full {
+            self.persist_state.memory_injections_mode = PersistVectorMode::Append;
+        }
+    }
+
+    fn mark_memory_injections_full_dirty(&mut self) {
+        self.persist_state.memory_injections_mode = PersistVectorMode::Full;
+    }
+
+    fn mark_replay_events_append_dirty(&mut self) {
+        if self.persist_state.replay_events_mode != PersistVectorMode::Full {
+            self.persist_state.replay_events_mode = PersistVectorMode::Append;
+        }
+    }
+
+    fn mark_replay_events_full_dirty(&mut self) {
+        self.persist_state.replay_events_mode = PersistVectorMode::Full;
+    }
+
+    fn metadata_requires_snapshot(prev: &SessionJournalMeta, current: &SessionJournalMeta) -> bool {
+        prev.parent_id != current.parent_id
+            || prev.title != current.title
+            || prev.is_canary != current.is_canary
+            || prev.testing_build != current.testing_build
+            || prev.working_dir != current.working_dir
+            || prev.short_name != current.short_name
+            || prev.status != current.status
+            || prev.is_debug != current.is_debug
+            || prev.saved != current.saved
+            || prev.save_label != current.save_label
+    }
+
+    fn apply_journal_meta(&mut self, meta: SessionJournalMeta) {
+        self.parent_id = meta.parent_id;
+        self.title = meta.title;
+        self.updated_at = meta.updated_at;
+        self.compaction = meta.compaction;
+        self.provider_session_id = meta.provider_session_id;
+        self.model = meta.model;
+        self.is_canary = meta.is_canary;
+        self.testing_build = meta.testing_build;
+        self.working_dir = meta.working_dir;
+        self.short_name = meta.short_name;
+        self.status = meta.status;
+        self.last_pid = meta.last_pid;
+        self.last_active_at = meta.last_active_at;
+        self.is_debug = meta.is_debug;
+        self.saved = meta.saved;
+        self.save_label = meta.save_label;
+    }
+
+    fn apply_journal_entry(&mut self, entry: SessionJournalEntry) {
+        self.apply_journal_meta(entry.meta);
+        self.messages.extend(entry.append_messages);
+        self.env_snapshots.extend(entry.append_env_snapshots);
+        self.memory_injections
+            .extend(entry.append_memory_injections);
+        self.replay_events.extend(entry.append_replay_events);
+    }
+
+    fn checkpoint_snapshot(&mut self, snapshot_path: &Path, journal_path: &Path) -> Result<()> {
+        storage::write_json_fast(snapshot_path, self)?;
+        if journal_path.exists() {
+            let _ = std::fs::remove_file(journal_path);
+        }
+        self.reset_persist_state(true);
+        Ok(())
+    }
+
+    pub fn load_from_path(path: &Path) -> Result<Self> {
+        let mut session: Session = storage::read_json(path)?;
+        let journal_path = session_journal_path_from_snapshot(path);
+        if journal_path.exists() {
+            let file = std::fs::File::open(&journal_path)?;
+            let reader = BufReader::new(file);
+            for (line_idx, line) in reader.lines().enumerate() {
+                let line = line?;
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                match serde_json::from_str::<SessionJournalEntry>(trimmed) {
+                    Ok(entry) => session.apply_journal_entry(entry),
+                    Err(err) => {
+                        crate::logging::warn(&format!(
+                            "Session journal parse failed at {} line {}: {}",
+                            journal_path.display(),
+                            line_idx + 1,
+                            err
+                        ));
+                        break;
+                    }
+                }
+            }
+        }
+        session.reset_persist_state(path.exists());
+        Ok(session)
+    }
+
     pub fn create_with_id(
         session_id: String,
         parent_id: Option<String>,
@@ -314,7 +531,7 @@ impl Session {
         let is_debug = default_is_test_session();
         // Try to extract short name from ID if it's a memorable ID
         let short_name = extract_session_name(&session_id).map(|s| s.to_string());
-        Self {
+        let mut session = Self {
             id: session_id,
             parent_id,
             title,
@@ -339,14 +556,17 @@ impl Session {
             env_snapshots: Vec::new(),
             memory_injections: Vec::new(),
             replay_events: Vec::new(),
-        }
+            persist_state: SessionPersistState::default(),
+        };
+        session.reset_persist_state(false);
+        session
     }
 
     pub fn create(parent_id: Option<String>, title: Option<String>) -> Self {
         let now = Utc::now();
         let (id, short_name) = new_memorable_session_id();
         let is_debug = default_is_test_session();
-        Self {
+        let mut session = Self {
             id,
             parent_id,
             title,
@@ -371,7 +591,10 @@ impl Session {
             env_snapshots: Vec::new(),
             memory_injections: Vec::new(),
             replay_events: Vec::new(),
-        }
+            persist_state: SessionPersistState::default(),
+        };
+        session.reset_persist_state(false);
+        session
     }
 
     /// Mark this session as a debug/test session
@@ -399,6 +622,9 @@ impl Session {
         if self.env_snapshots.len() > MAX_ENV_SNAPSHOTS {
             let excess = self.env_snapshots.len() - MAX_ENV_SNAPSHOTS;
             self.env_snapshots.drain(0..excess);
+            self.mark_env_snapshots_full_dirty();
+        } else {
+            self.mark_env_snapshots_append_dirty();
         }
     }
 
@@ -507,14 +733,66 @@ impl Session {
 
     pub fn load(session_id: &str) -> Result<Self> {
         let path = session_path(session_id)?;
-        storage::read_json(&path)
+        Self::load_from_path(&path)
     }
 
     pub fn save(&mut self) -> Result<()> {
         self.updated_at = Utc::now();
         let path = session_path(&self.id)?;
+        let journal_path = session_journal_path_from_snapshot(&path);
         let start = std::time::Instant::now();
-        let result = storage::write_json_fast(&path, self);
+        let current_meta = self.journal_meta();
+        let metadata_needs_snapshot = self
+            .persist_state
+            .last_meta
+            .as_ref()
+            .is_some_and(|prev| Self::metadata_requires_snapshot(prev, &current_meta));
+        let vectors_need_snapshot = !self.persist_state.snapshot_exists
+            || self.persist_state.messages_mode == PersistVectorMode::Full
+            || self.persist_state.env_snapshots_mode == PersistVectorMode::Full
+            || self.persist_state.memory_injections_mode == PersistVectorMode::Full
+            || self.persist_state.replay_events_mode == PersistVectorMode::Full
+            || self.messages.len() < self.persist_state.messages_len
+            || self.env_snapshots.len() < self.persist_state.env_snapshots_len
+            || self.memory_injections.len() < self.persist_state.memory_injections_len
+            || self.replay_events.len() < self.persist_state.replay_events_len;
+
+        let result = if metadata_needs_snapshot || vectors_need_snapshot {
+            self.checkpoint_snapshot(&path, &journal_path)
+        } else {
+            let entry = SessionJournalEntry {
+                meta: current_meta.clone(),
+                append_messages: self.messages[self.persist_state.messages_len..].to_vec(),
+                append_env_snapshots: self.env_snapshots[self.persist_state.env_snapshots_len..]
+                    .to_vec(),
+                append_memory_injections: self.memory_injections
+                    [self.persist_state.memory_injections_len..]
+                    .to_vec(),
+                append_replay_events: self.replay_events[self.persist_state.replay_events_len..]
+                    .to_vec(),
+            };
+            let append_result = storage::append_json_line_fast(&journal_path, &entry);
+            match append_result {
+                Ok(()) => {
+                    self.reset_persist_state(true);
+                    if std::fs::metadata(&journal_path)
+                        .map(|meta| meta.len() > MAX_SESSION_JOURNAL_BYTES)
+                        .unwrap_or(false)
+                    {
+                        self.checkpoint_snapshot(&path, &journal_path)
+                    } else {
+                        Ok(())
+                    }
+                }
+                Err(err) => {
+                    crate::logging::warn(&format!(
+                        "Session journal append failed for {} ({}); checkpointing full snapshot",
+                        self.id, err
+                    ));
+                    self.checkpoint_snapshot(&path, &journal_path)
+                }
+            }
+        };
         let elapsed = start.elapsed();
         if elapsed.as_millis() > 50 {
             crate::logging::info(&format!(
@@ -614,7 +892,7 @@ impl Session {
         display_role: Option<StoredDisplayRole>,
     ) -> String {
         let id = new_id("message");
-        self.messages.push(StoredMessage {
+        self.append_stored_message(StoredMessage {
             id: id.clone(),
             role,
             content,
@@ -624,6 +902,28 @@ impl Session {
             token_usage,
         });
         id
+    }
+
+    pub fn append_stored_message(&mut self, message: StoredMessage) {
+        self.messages.push(message);
+        self.mark_messages_append_dirty();
+    }
+
+    pub fn insert_message(&mut self, index: usize, message: StoredMessage) {
+        self.messages.insert(index, message);
+        self.mark_messages_full_dirty();
+    }
+
+    pub fn replace_messages(&mut self, messages: Vec<StoredMessage>) {
+        self.messages = messages;
+        self.mark_messages_full_dirty();
+    }
+
+    pub fn truncate_messages(&mut self, len: usize) {
+        if len < self.messages.len() {
+            self.messages.truncate(len);
+            self.mark_messages_full_dirty();
+        }
     }
 
     /// Record a memory injection event for replay visualization
@@ -642,6 +942,7 @@ impl Session {
             before_message: Some(self.messages.len()),
             timestamp: Utc::now(),
         });
+        self.mark_memory_injections_append_dirty();
     }
 
     pub fn record_replay_display_message(
@@ -658,6 +959,7 @@ impl Session {
                 content: content.into(),
             },
         });
+        self.mark_replay_events_append_dirty();
     }
 
     pub fn record_swarm_status_event(&mut self, members: Vec<crate::protocol::SwarmMemberStatus>) {
@@ -673,6 +975,7 @@ impl Session {
             timestamp: Utc::now(),
             kind,
         });
+        self.mark_replay_events_append_dirty();
     }
 
     pub fn record_swarm_plan_event(
@@ -701,6 +1004,7 @@ impl Session {
             timestamp: Utc::now(),
             kind,
         });
+        self.mark_replay_events_append_dirty();
     }
 
     pub fn messages_for_provider(&self) -> Vec<Message> {
@@ -714,6 +1018,7 @@ impl Session {
             if msg.id == *message_id {
                 msg.content
                     .retain(|block| !matches!(block, ContentBlock::ToolUse { .. }));
+                self.mark_messages_full_dirty();
                 break;
             }
         }
@@ -878,9 +1183,24 @@ fn session_path_in_dir(base: &std::path::Path, session_id: &str) -> PathBuf {
     base.join("sessions").join(format!("{}.json", session_id))
 }
 
+pub(crate) fn session_journal_path_from_snapshot(path: &Path) -> PathBuf {
+    let mut name = path
+        .file_stem()
+        .map(|stem| stem.to_os_string())
+        .unwrap_or_default();
+    name.push(".journal.jsonl");
+    path.with_file_name(name)
+}
+
 pub fn session_path(session_id: &str) -> Result<PathBuf> {
     let base = storage::jcode_dir()?;
     Ok(session_path_in_dir(&base, session_id))
+}
+
+pub fn session_journal_path(session_id: &str) -> Result<PathBuf> {
+    Ok(session_journal_path_from_snapshot(&session_path(
+        session_id,
+    )?))
 }
 
 pub fn session_exists(session_id: &str) -> bool {
@@ -1092,6 +1412,102 @@ mod tests {
 
         let loaded = Session::load("session_compaction_persist_test").expect("load saved session");
         assert_eq!(loaded.compaction, session.compaction);
+    }
+
+    #[test]
+    fn test_save_appends_journal_and_load_replays_it() {
+        let _env_lock = lock_env();
+        let temp_home = tempfile::Builder::new()
+            .prefix("jcode-session-journal-test-")
+            .tempdir()
+            .expect("create temp JCODE_HOME");
+        let _home = EnvVarGuard::set("JCODE_HOME", temp_home.path().as_os_str());
+
+        let mut session = Session::create_with_id(
+            "session_journal_append_test".to_string(),
+            None,
+            Some("journal append test".to_string()),
+        );
+        session.add_message(
+            Role::User,
+            vec![ContentBlock::Text {
+                text: "first".to_string(),
+                cache_control: None,
+            }],
+        );
+        session.save().expect("save initial snapshot");
+
+        let snapshot_path = session_path("session_journal_append_test").expect("snapshot path");
+        let journal_path =
+            session_journal_path("session_journal_append_test").expect("journal path");
+        assert!(snapshot_path.exists());
+        assert!(!journal_path.exists());
+
+        session.add_message(
+            Role::Assistant,
+            vec![ContentBlock::Text {
+                text: "second".to_string(),
+                cache_control: None,
+            }],
+        );
+        session.save().expect("append journal delta");
+
+        assert!(journal_path.exists());
+        let journal = std::fs::read_to_string(&journal_path).expect("read journal");
+        assert!(journal.contains("second"));
+
+        let loaded = Session::load("session_journal_append_test").expect("load with journal");
+        assert_eq!(loaded.messages.len(), 2);
+        assert_eq!(loaded.messages[1].content_preview(), "second");
+    }
+
+    #[test]
+    fn test_save_checkpoints_after_full_mutation_and_clears_journal() {
+        let _env_lock = lock_env();
+        let temp_home = tempfile::Builder::new()
+            .prefix("jcode-session-checkpoint-test-")
+            .tempdir()
+            .expect("create temp JCODE_HOME");
+        let _home = EnvVarGuard::set("JCODE_HOME", temp_home.path().as_os_str());
+
+        let mut session = Session::create_with_id(
+            "session_journal_checkpoint_test".to_string(),
+            None,
+            Some("checkpoint test".to_string()),
+        );
+        session.add_message(
+            Role::User,
+            vec![ContentBlock::Text {
+                text: "one".to_string(),
+                cache_control: None,
+            }],
+        );
+        session.save().expect("save initial snapshot");
+
+        session.add_message(
+            Role::Assistant,
+            vec![ContentBlock::Text {
+                text: "two".to_string(),
+                cache_control: None,
+            }],
+        );
+        session.save().expect("save journal append");
+
+        let journal_path =
+            session_journal_path("session_journal_checkpoint_test").expect("journal path");
+        assert!(journal_path.exists());
+
+        session.truncate_messages(1);
+        session.title = Some("checkpointed title".to_string());
+        session.save().expect("checkpoint snapshot");
+
+        assert!(!journal_path.exists());
+
+        let loaded =
+            Session::load("session_journal_checkpoint_test").expect("load checkpointed session");
+        assert_eq!(loaded.title.as_deref(), Some("checkpointed title"));
+        assert_eq!(loaded.messages.len(), 1);
+        assert_eq!(loaded.messages[0].content_preview(), "one");
     }
 
     #[test]

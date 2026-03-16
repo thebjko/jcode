@@ -440,7 +440,7 @@ pub fn import_session_from_file(path: &PathBuf, session_id: &str) -> Result<Sess
                 .clone()
                 .unwrap_or_else(|| crate::id::new_id("msg"));
 
-            session.messages.push(StoredMessage {
+            session.append_stored_message(StoredMessage {
                 id: msg_id,
                 role,
                 content: content_blocks,

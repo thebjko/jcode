@@ -224,7 +224,7 @@ pub(super) fn handle_session_command(app: &mut App, trimmed: &str) -> bool {
         match num_str.parse::<usize>() {
             Ok(n) if n > 0 && n <= app.session.messages.len() => {
                 let removed = app.session.messages.len() - n;
-                app.session.messages.truncate(n);
+                app.session.truncate_messages(n);
                 app.replace_provider_messages(app.session.messages_for_provider());
                 app.session.updated_at = chrono::Utc::now();
 

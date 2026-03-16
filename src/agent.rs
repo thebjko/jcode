@@ -668,8 +668,7 @@ impl Agent {
                         token_usage: None,
                     };
                     self.session
-                        .messages
-                        .insert(index + 1 + offset, stored_message);
+                        .insert_message(index + 1 + offset, stored_message);
                     repaired += 1;
                 }
                 index += missing_for_message.len();

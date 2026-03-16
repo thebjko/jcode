@@ -1,6 +1,7 @@
 use anyhow::Result;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 #[cfg(test)]
 use std::sync::{Mutex, MutexGuard, OnceLock};
@@ -280,4 +281,21 @@ pub fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T> {
             }
         }
     }
+}
+
+/// Fast append of a single JSON value followed by a newline.
+/// Intended for append-only journals where per-write fsync is not required.
+pub fn append_json_line_fast<T: Serialize + ?Sized>(path: &Path, value: &T) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        ensure_dir(parent)?;
+    }
+
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    serde_json::to_writer(&mut file, value)?;
+    file.write_all(b"\n")?;
+    file.flush()?;
+    Ok(())
 }

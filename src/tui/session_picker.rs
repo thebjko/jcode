@@ -23,6 +23,7 @@ use serde::Deserialize;
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::fs::File;
+use std::io::BufRead;
 use std::io::BufReader;
 use std::io::IsTerminal;
 use std::path::Path;
@@ -365,10 +366,77 @@ impl SessionTokenUsageSummary {
     }
 }
 
+#[derive(Deserialize)]
+struct SessionJournalSummaryMeta {
+    #[serde(default)]
+    title: Option<String>,
+    updated_at: chrono::DateTime<chrono::Utc>,
+    #[serde(default)]
+    working_dir: Option<String>,
+    #[serde(default)]
+    short_name: Option<String>,
+    #[serde(default)]
+    is_canary: bool,
+    #[serde(default)]
+    is_debug: bool,
+    #[serde(default)]
+    saved: bool,
+    #[serde(default)]
+    save_label: Option<String>,
+    #[serde(default)]
+    status: SessionStatus,
+}
+
+#[derive(Deserialize)]
+struct SessionJournalSummaryEntry {
+    meta: SessionJournalSummaryMeta,
+    #[serde(default)]
+    append_messages: Vec<SessionMessageSummary>,
+}
+
 fn load_session_summary(path: &Path) -> Result<SessionSummary> {
     let file = File::open(path)?;
     let reader = BufReader::new(file);
-    Ok(serde_json::from_reader(reader)?)
+    let mut summary: SessionSummary = serde_json::from_reader(reader)?;
+
+    let journal_path = session::session_journal_path_from_snapshot(path);
+    if journal_path.exists() {
+        let file = File::open(&journal_path)?;
+        let reader = BufReader::new(file);
+        for (line_idx, line) in reader.lines().enumerate() {
+            let line = line?;
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            match serde_json::from_str::<SessionJournalSummaryEntry>(trimmed) {
+                Ok(entry) => {
+                    summary.title = entry.meta.title;
+                    summary.updated_at = entry.meta.updated_at;
+                    summary.working_dir = entry.meta.working_dir;
+                    summary.short_name = entry.meta.short_name;
+                    summary.is_canary = entry.meta.is_canary;
+                    summary.is_debug = entry.meta.is_debug;
+                    summary.saved = entry.meta.saved;
+                    summary.save_label = entry.meta.save_label;
+                    summary.status = entry.meta.status;
+                    summary.messages.extend(entry.append_messages);
+                }
+                Err(err) => {
+                    crate::logging::warn(&format!(
+                        "Session picker journal parse failed at {} line {}: {}",
+                        journal_path.display(),
+                        line_idx + 1,
+                        err
+                    ));
+                    break;
+                }
+            }
+        }
+    }
+
+    Ok(summary)
 }
 
 fn build_messages_preview(session: &Session) -> Vec<PreviewMessage> {
