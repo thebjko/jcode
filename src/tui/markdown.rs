@@ -13,7 +13,7 @@ use syntect::highlighting::{Style as SynStyle, ThemeSet};
 use syntect::parsing::SyntaxSet;
 use unicode_width::UnicodeWidthStr;
 
-use crate::config::{DiagramDisplayMode, MarkdownSpacingMode, config};
+use crate::config::{config, DiagramDisplayMode, MarkdownSpacingMode};
 use crate::tui::mermaid;
 use crate::tui::ui::{CopyTargetKind, RawCopyTarget};
 
@@ -286,16 +286,6 @@ impl IncrementalMarkdownRenderer {
             return self.rendered_lines.clone();
         }
 
-        // Prefer correctness over incremental patching for structured markdown.
-        // Block-level constructs (especially headings during streaming) can cause
-        // visible duplication/staleness when only the suffix is re-rendered.
-        if streaming_requires_full_rerender(full_text) {
-            self.rendered_lines = render_markdown_with_width(full_text, self.max_width);
-            self.rendered_text = full_text.to_string();
-            self.refresh_checkpoint(full_text, true);
-            return self.rendered_lines.clone();
-        }
-
         // Fast path: text was only appended
         if full_text.starts_with(&self.rendered_text) {
             // Find a safe re-render point
@@ -381,6 +371,8 @@ impl IncrementalMarkdownRenderer {
                             } else {
                                 checkpoint = Some(line_end_including_newline);
                             }
+                        } else if line_ends_with_newline && is_heading_line(line.trim_start()) {
+                            checkpoint = Some(line_end_including_newline);
                         } else if line.trim().is_empty() {
                             checkpoint = Some(line_end_including_newline);
                         }
@@ -433,40 +425,9 @@ impl IncrementalMarkdownRenderer {
     }
 }
 
-fn streaming_requires_full_rerender(text: &str) -> bool {
-    text.lines().any(|line| {
-        let trimmed = line.trim_start();
-        if trimmed.is_empty() {
-            return false;
-        }
-
-        trimmed.starts_with("```")
-            || trimmed.starts_with("~~~")
-            || trimmed.starts_with("$$")
-            || trimmed.starts_with('>')
-            || trimmed.starts_with("- ")
-            || trimmed.starts_with("* ")
-            || trimmed.starts_with("+ ")
-            || is_heading_line(trimmed)
-            || is_ordered_list_line(trimmed)
-            || looks_like_table_row(trimmed)
-    })
-}
-
 fn is_heading_line(line: &str) -> bool {
     let hashes = line.chars().take_while(|c| *c == '#').count();
     hashes > 0 && hashes <= 6 && line.chars().nth(hashes) == Some(' ')
-}
-
-fn is_ordered_list_line(line: &str) -> bool {
-    let digits = line.chars().take_while(|c| c.is_ascii_digit()).count();
-    digits > 0
-        && matches!(line.as_bytes().get(digits), Some(b'.' | b')'))
-        && matches!(line.as_bytes().get(digits + 1), Some(b' '))
-}
-
-fn looks_like_table_row(line: &str) -> bool {
-    line.starts_with('|') || (line.contains('|') && line.matches('|').count() >= 2)
 }
 
 // Colors matching ui.rs palette
@@ -513,6 +474,13 @@ const RULE_LEN: usize = 24;
 struct ListRenderState {
     ordered: bool,
     next_index: u64,
+}
+
+#[derive(Debug, Default)]
+struct CenteredStructuredBlockState {
+    depth: usize,
+    start_line: Option<usize>,
+    ranges: Vec<std::ops::Range<usize>>,
 }
 
 fn diagram_side_only() -> bool {
@@ -582,32 +550,82 @@ fn flush_current_line_with_alignment(
     }
 }
 
-fn center_left_aligned_runs(lines: &mut [Line<'static>], width: usize) {
+fn enter_centered_structured_block(state: &mut CenteredStructuredBlockState, current_line: usize) {
+    if state.depth == 0 {
+        state.start_line = Some(current_line);
+    }
+    state.depth = state.depth.saturating_add(1);
+}
+
+fn exit_centered_structured_block(state: &mut CenteredStructuredBlockState, current_line: usize) {
+    if state.depth == 0 {
+        return;
+    }
+    state.depth = state.depth.saturating_sub(1);
+    if state.depth == 0 {
+        if let Some(start) = state.start_line.take() {
+            if current_line > start {
+                state.ranges.push(start..current_line);
+            }
+        }
+    }
+}
+
+fn record_centered_standalone_block(
+    state: &mut CenteredStructuredBlockState,
+    start_line: usize,
+    end_line: usize,
+) {
+    if state.depth == 0 && end_line > start_line {
+        state.ranges.push(start_line..end_line);
+    }
+}
+
+fn finalize_centered_structured_blocks(
+    state: &mut CenteredStructuredBlockState,
+    current_line: usize,
+) {
+    if state.depth > 0 {
+        state.depth = 0;
+        if let Some(start) = state.start_line.take() {
+            if current_line > start {
+                state.ranges.push(start..current_line);
+            }
+        }
+    }
+}
+
+fn center_structured_block_ranges(
+    lines: &mut [Line<'static>],
+    width: usize,
+    ranges: &[std::ops::Range<usize>],
+) {
     if width == 0 {
         return;
     }
 
-    let mut run_start: Option<usize> = None;
-    for idx in 0..=lines.len() {
-        let in_run = idx < lines.len()
-            && lines[idx].alignment == Some(Alignment::Left)
-            && !lines[idx].spans.is_empty();
+    for range in ranges {
+        if range.start >= range.end || range.end > lines.len() {
+            continue;
+        }
 
-        match (run_start, in_run) {
-            (None, true) => run_start = Some(idx),
-            (Some(start), false) => {
-                let run = &mut lines[start..idx];
-                let max_line_width = run.iter().map(Line::width).max().unwrap_or(0);
-                let pad = width.saturating_sub(max_line_width) / 2;
-                if pad > 0 {
-                    let pad_str = " ".repeat(pad);
-                    for line in run {
-                        line.spans.insert(0, Span::raw(pad_str.clone()));
-                    }
+        let run = &mut lines[range.start..range.end];
+        let max_line_width = run
+            .iter()
+            .filter(|line| !line_is_blank(line))
+            .map(Line::width)
+            .max()
+            .unwrap_or(0);
+        let pad = width.saturating_sub(max_line_width) / 2;
+        if pad > 0 {
+            let pad_str = " ".repeat(pad);
+            for line in run {
+                if line_is_blank(line) {
+                    continue;
                 }
-                run_start = None;
+                line.spans.insert(0, Span::raw(pad_str.clone()));
+                line.alignment = Some(Alignment::Left);
             }
-            _ => {}
         }
     }
 }
@@ -892,6 +910,7 @@ pub fn render_markdown_with_width(text: &str, max_width: Option<usize>) -> Vec<L
     let mut in_definition_list = false;
     let mut in_definition_item = false;
     let mut in_footnote_definition = false;
+    let mut centered_blocks = CenteredStructuredBlockState::default();
 
     // Table state
     let mut in_table = false;
@@ -979,6 +998,7 @@ pub fn render_markdown_with_width(text: &str, max_width: Option<usize>) -> Vec<L
                         in_footnote_definition,
                     ),
                 );
+                enter_centered_structured_block(&mut centered_blocks, lines.len());
                 blockquote_depth += 1;
             }
             Event::End(TagEnd::BlockQuote(_)) => {
@@ -993,6 +1013,7 @@ pub fn render_markdown_with_width(text: &str, max_width: Option<usize>) -> Vec<L
                     ),
                 );
                 blockquote_depth = blockquote_depth.saturating_sub(1);
+                exit_centered_structured_block(&mut centered_blocks, lines.len());
                 if blockquote_depth == 0
                     && list_stack.is_empty()
                     && !in_definition_list
@@ -1003,6 +1024,7 @@ pub fn render_markdown_with_width(text: &str, max_width: Option<usize>) -> Vec<L
             }
 
             Event::Start(Tag::List(start)) => {
+                enter_centered_structured_block(&mut centered_blocks, lines.len());
                 let state = ListRenderState {
                     ordered: start.is_some(),
                     next_index: start.unwrap_or(1),
@@ -1021,6 +1043,7 @@ pub fn render_markdown_with_width(text: &str, max_width: Option<usize>) -> Vec<L
                     ),
                 );
                 list_stack.pop();
+                exit_centered_structured_block(&mut centered_blocks, lines.len());
                 if blockquote_depth == 0
                     && list_stack.is_empty()
                     && !in_definition_list
@@ -1081,6 +1104,7 @@ pub fn render_markdown_with_width(text: &str, max_width: Option<usize>) -> Vec<L
                         in_footnote_definition,
                     ),
                 );
+                enter_centered_structured_block(&mut centered_blocks, lines.len());
                 in_footnote_definition = true;
                 ensure_blockquote_prefix(&mut current_spans, blockquote_depth);
                 current_spans.push(Span::styled(
@@ -1099,6 +1123,7 @@ pub fn render_markdown_with_width(text: &str, max_width: Option<usize>) -> Vec<L
                         in_footnote_definition,
                     ),
                 );
+                exit_centered_structured_block(&mut centered_blocks, lines.len());
                 in_footnote_definition = false;
             }
 
@@ -1113,6 +1138,7 @@ pub fn render_markdown_with_width(text: &str, max_width: Option<usize>) -> Vec<L
                         in_footnote_definition,
                     ),
                 );
+                enter_centered_structured_block(&mut centered_blocks, lines.len());
                 in_definition_list = true;
             }
             Event::End(TagEnd::DefinitionList) => {
@@ -1127,6 +1153,7 @@ pub fn render_markdown_with_width(text: &str, max_width: Option<usize>) -> Vec<L
                     ),
                 );
                 in_definition_list = false;
+                exit_centered_structured_block(&mut centered_blocks, lines.len());
                 if blockquote_depth == 0 && list_stack.is_empty() && !in_footnote_definition {
                     push_block_separator(
                         &mut lines,
@@ -1203,6 +1230,7 @@ pub fn render_markdown_with_width(text: &str, max_width: Option<usize>) -> Vec<L
                         in_footnote_definition,
                     ),
                 );
+                enter_centered_structured_block(&mut centered_blocks, lines.len());
                 in_code_block = true;
                 code_block_lang = match kind {
                     CodeBlockKind::Fenced(lang) if !lang.is_empty() => Some(lang.to_string()),
@@ -1277,6 +1305,7 @@ pub fn render_markdown_with_width(text: &str, max_width: Option<usize>) -> Vec<L
                             .left_aligned(),
                     );
                 }
+                exit_centered_structured_block(&mut centered_blocks, lines.len());
                 in_code_block = false;
                 code_block_lang = None;
                 code_block_content.clear();
@@ -1349,9 +1378,15 @@ pub fn render_markdown_with_width(text: &str, max_width: Option<usize>) -> Vec<L
                     current_cell.push_str(&math);
                     current_cell.push_str("$$");
                 } else {
+                    let block_start = lines.len();
                     for line in math_display_lines(&math) {
                         lines.push(with_blockquote_prefix(line, blockquote_depth));
                     }
+                    record_centered_standalone_block(
+                        &mut centered_blocks,
+                        block_start,
+                        lines.len(),
+                    );
                     if blockquote_depth == 0
                         && list_stack.is_empty()
                         && !in_definition_list
@@ -1428,12 +1463,14 @@ pub fn render_markdown_with_width(text: &str, max_width: Option<usize>) -> Vec<L
                         in_footnote_definition,
                     ),
                 );
+                let block_start = lines.len();
                 let width = max_width.unwrap_or(RULE_LEN);
                 let rule = Span::styled("─".repeat(width), Style::default().fg(md_dim_color()));
                 lines.push(with_blockquote_prefix(
                     Line::from(rule).left_aligned(),
                     blockquote_depth,
                 ));
+                record_centered_standalone_block(&mut centered_blocks, block_start, lines.len());
                 if blockquote_depth == 0
                     && list_stack.is_empty()
                     && !in_definition_list
@@ -1454,6 +1491,7 @@ pub fn render_markdown_with_width(text: &str, max_width: Option<usize>) -> Vec<L
                         in_footnote_definition,
                     ),
                 );
+                let block_start = lines.len();
                 for raw in html.lines() {
                     let span =
                         Span::styled(raw.to_string(), Style::default().fg(html_fg()).italic());
@@ -1462,6 +1500,7 @@ pub fn render_markdown_with_width(text: &str, max_width: Option<usize>) -> Vec<L
                         blockquote_depth,
                     ));
                 }
+                record_centered_standalone_block(&mut centered_blocks, block_start, lines.len());
                 if blockquote_depth == 0
                     && list_stack.is_empty()
                     && !in_definition_list
@@ -1586,6 +1625,7 @@ pub fn render_markdown_with_width(text: &str, max_width: Option<usize>) -> Vec<L
                         in_footnote_definition,
                     ),
                 );
+                enter_centered_structured_block(&mut centered_blocks, lines.len());
                 in_table = true;
                 table_rows.clear();
             }
@@ -1594,6 +1634,7 @@ pub fn render_markdown_with_width(text: &str, max_width: Option<usize>) -> Vec<L
                 if !table_rows.is_empty() {
                     let rendered = render_table(&table_rows, max_width);
                     lines.extend(rendered);
+                    exit_centered_structured_block(&mut centered_blocks, lines.len());
                     if blockquote_depth == 0
                         && list_stack.is_empty()
                         && !in_definition_list
@@ -1601,6 +1642,8 @@ pub fn render_markdown_with_width(text: &str, max_width: Option<usize>) -> Vec<L
                     {
                         push_block_separator(&mut lines, MarkdownBlockKind::Table, spacing_mode);
                     }
+                } else {
+                    exit_centered_structured_block(&mut centered_blocks, lines.len());
                 }
                 in_table = false;
                 table_rows.clear();
@@ -1738,11 +1781,13 @@ pub fn render_markdown_with_width(text: &str, max_width: Option<usize>) -> Vec<L
         ),
     );
 
+    finalize_centered_structured_blocks(&mut centered_blocks, lines.len());
+
     normalize_block_separators(&mut lines);
 
     if center_code_blocks() {
         if let Some(width) = max_width {
-            center_left_aligned_runs(&mut lines, width);
+            center_structured_block_ranges(&mut lines, width, &centered_blocks.ranges);
         }
     }
 
@@ -2099,6 +2144,7 @@ pub fn render_markdown_lazy(
     let mut current_spans: Vec<Span<'static>> = Vec::new();
     let side_only = diagram_side_only();
     let spacing_mode = effective_markdown_spacing_mode();
+    let mut centered_blocks = CenteredStructuredBlockState::default();
 
     // Style stack for nested formatting
     let mut bold = false;
@@ -2194,6 +2240,7 @@ pub fn render_markdown_lazy(
                         in_footnote_definition,
                     ),
                 );
+                enter_centered_structured_block(&mut centered_blocks, lines.len());
                 blockquote_depth += 1;
             }
             Event::End(TagEnd::BlockQuote(_)) => {
@@ -2208,6 +2255,7 @@ pub fn render_markdown_lazy(
                     ),
                 );
                 blockquote_depth = blockquote_depth.saturating_sub(1);
+                exit_centered_structured_block(&mut centered_blocks, lines.len());
                 if blockquote_depth == 0
                     && list_stack.is_empty()
                     && !in_definition_list
@@ -2218,6 +2266,7 @@ pub fn render_markdown_lazy(
             }
 
             Event::Start(Tag::List(start)) => {
+                enter_centered_structured_block(&mut centered_blocks, lines.len());
                 let state = ListRenderState {
                     ordered: start.is_some(),
                     next_index: start.unwrap_or(1),
@@ -2236,6 +2285,7 @@ pub fn render_markdown_lazy(
                     ),
                 );
                 list_stack.pop();
+                exit_centered_structured_block(&mut centered_blocks, lines.len());
                 if blockquote_depth == 0
                     && list_stack.is_empty()
                     && !in_definition_list
@@ -2296,6 +2346,7 @@ pub fn render_markdown_lazy(
                         in_footnote_definition,
                     ),
                 );
+                enter_centered_structured_block(&mut centered_blocks, lines.len());
                 in_footnote_definition = true;
                 ensure_blockquote_prefix(&mut current_spans, blockquote_depth);
                 current_spans.push(Span::styled(
@@ -2314,6 +2365,7 @@ pub fn render_markdown_lazy(
                         in_footnote_definition,
                     ),
                 );
+                exit_centered_structured_block(&mut centered_blocks, lines.len());
                 in_footnote_definition = false;
             }
 
@@ -2328,6 +2380,7 @@ pub fn render_markdown_lazy(
                         in_footnote_definition,
                     ),
                 );
+                enter_centered_structured_block(&mut centered_blocks, lines.len());
                 in_definition_list = true;
             }
             Event::End(TagEnd::DefinitionList) => {
@@ -2342,6 +2395,7 @@ pub fn render_markdown_lazy(
                     ),
                 );
                 in_definition_list = false;
+                exit_centered_structured_block(&mut centered_blocks, lines.len());
                 if blockquote_depth == 0 && list_stack.is_empty() && !in_footnote_definition {
                     push_block_separator(
                         &mut lines,
@@ -2416,6 +2470,7 @@ pub fn render_markdown_lazy(
                         in_footnote_definition,
                     ),
                 );
+                enter_centered_structured_block(&mut centered_blocks, lines.len());
                 in_code_block = true;
                 code_block_start_line = lines.len();
                 code_block_lang = match kind {
@@ -2497,6 +2552,7 @@ pub fn render_markdown_lazy(
                             .left_aligned(),
                     );
                 }
+                exit_centered_structured_block(&mut centered_blocks, lines.len());
                 in_code_block = false;
                 code_block_lang = None;
                 code_block_content.clear();
@@ -2569,9 +2625,15 @@ pub fn render_markdown_lazy(
                     current_cell.push_str(&math);
                     current_cell.push_str("$$");
                 } else {
+                    let block_start = lines.len();
                     for line in math_display_lines(&math) {
                         lines.push(with_blockquote_prefix(line, blockquote_depth));
                     }
+                    record_centered_standalone_block(
+                        &mut centered_blocks,
+                        block_start,
+                        lines.len(),
+                    );
                     if blockquote_depth == 0
                         && list_stack.is_empty()
                         && !in_definition_list
@@ -2647,12 +2709,14 @@ pub fn render_markdown_lazy(
                         in_footnote_definition,
                     ),
                 );
+                let block_start = lines.len();
                 let width = max_width.unwrap_or(RULE_LEN);
                 let rule = Span::styled("─".repeat(width), Style::default().fg(md_dim_color()));
                 lines.push(with_blockquote_prefix(
                     Line::from(rule).left_aligned(),
                     blockquote_depth,
                 ));
+                record_centered_standalone_block(&mut centered_blocks, block_start, lines.len());
                 if blockquote_depth == 0
                     && list_stack.is_empty()
                     && !in_definition_list
@@ -2673,6 +2737,7 @@ pub fn render_markdown_lazy(
                         in_footnote_definition,
                     ),
                 );
+                let block_start = lines.len();
                 for raw in html.lines() {
                     let span =
                         Span::styled(raw.to_string(), Style::default().fg(html_fg()).italic());
@@ -2681,6 +2746,7 @@ pub fn render_markdown_lazy(
                         blockquote_depth,
                     ));
                 }
+                record_centered_standalone_block(&mut centered_blocks, block_start, lines.len());
                 if blockquote_depth == 0
                     && list_stack.is_empty()
                     && !in_definition_list
@@ -2801,6 +2867,7 @@ pub fn render_markdown_lazy(
                         in_footnote_definition,
                     ),
                 );
+                enter_centered_structured_block(&mut centered_blocks, lines.len());
                 in_table = true;
                 table_rows.clear();
             }
@@ -2808,6 +2875,7 @@ pub fn render_markdown_lazy(
                 if !table_rows.is_empty() {
                     let rendered = render_table(&table_rows, max_width);
                     lines.extend(rendered);
+                    exit_centered_structured_block(&mut centered_blocks, lines.len());
                     if blockquote_depth == 0
                         && list_stack.is_empty()
                         && !in_definition_list
@@ -2815,6 +2883,8 @@ pub fn render_markdown_lazy(
                     {
                         push_block_separator(&mut lines, MarkdownBlockKind::Table, spacing_mode);
                     }
+                } else {
+                    exit_centered_structured_block(&mut centered_blocks, lines.len());
                 }
                 in_table = false;
                 table_rows.clear();
@@ -2887,11 +2957,13 @@ pub fn render_markdown_lazy(
         ),
     );
 
+    finalize_centered_structured_blocks(&mut centered_blocks, lines.len());
+
     normalize_block_separators(&mut lines);
 
     if center_code_blocks() {
         if let Some(width) = max_width {
-            center_left_aligned_runs(&mut lines, width);
+            center_structured_block_ranges(&mut lines, width, &centered_blocks.ranges);
         }
     }
 
@@ -3271,6 +3343,10 @@ mod tests {
         line.spans.iter().map(|s| s.content.as_ref()).collect()
     }
 
+    fn leading_spaces(text: &str) -> usize {
+        text.chars().take_while(|c| *c == ' ').count()
+    }
+
     fn render_markdown_with_mode(text: &str, mode: MarkdownSpacingMode) -> Vec<Line<'static>> {
         with_markdown_spacing_mode_override(Some(mode), || render_markdown(text))
     }
@@ -3336,11 +3412,9 @@ mod tests {
         let lines = render_markdown(md);
         let rendered: Vec<String> = lines.iter().map(line_to_string).collect();
 
-        assert!(
-            rendered
-                .iter()
-                .any(|l| l.contains('│') && l.contains('A') && l.contains('B'))
-        );
+        assert!(rendered
+            .iter()
+            .any(|l| l.contains('│') && l.contains('A') && l.contains('B')));
         assert!(rendered.iter().any(|l| l.contains('─') && l.contains('┼')));
     }
 
@@ -3584,6 +3658,110 @@ mod tests {
     }
 
     #[test]
+    fn test_centered_mode_keeps_list_markers_flush_left() {
+        let md = concat!(
+            "1. Create a goal\n",
+            "   - title\n",
+            "   - description / \"why this matters\"\n",
+            "   - success criteria\n",
+            "2. Break it down\n",
+            "   - milestones\n",
+            "   - steps\n"
+        );
+
+        let saved = center_code_blocks();
+        set_center_code_blocks(true);
+        let lines = render_markdown_with_width(md, Some(80));
+        set_center_code_blocks(saved);
+
+        let numbered_1 = lines
+            .iter()
+            .find(|line| line_to_string(line).contains("1. Create a goal"))
+            .expect("numbered list item");
+        let numbered_2 = lines
+            .iter()
+            .find(|line| line_to_string(line).contains("2. Break it down"))
+            .expect("second numbered list item");
+        let bullet = lines
+            .iter()
+            .find(|line| line_to_string(line).contains("description /"))
+            .expect("nested bullet item");
+
+        let numbered_1_text = line_to_string(numbered_1);
+        let numbered_2_text = line_to_string(numbered_2);
+        let bullet_text = line_to_string(bullet);
+
+        let numbered_pad = leading_spaces(&numbered_1_text);
+        let numbered_2_pad = leading_spaces(&numbered_2_text);
+        let bullet_pad = leading_spaces(&bullet_text);
+
+        assert!(
+            numbered_pad > 0,
+            "numbered list should be centered as a block: {lines:?}"
+        );
+        assert!(
+            numbered_pad == numbered_2_pad,
+            "numbered items should share the same block padding: {lines:?}"
+        );
+        assert!(
+            bullet_pad > numbered_pad,
+            "nested bullet should keep additional internal indent within the centered block: {lines:?}"
+        );
+        assert!(
+            numbered_1_text[numbered_pad..].starts_with("1. Create a goal"),
+            "number marker should stay left-aligned within centered block: {lines:?}"
+        );
+        assert!(
+            bullet_text[bullet_pad..].starts_with("• description /"),
+            "bullet marker should stay left-aligned within centered block: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn test_centered_mode_centers_other_structured_blocks_as_blocks() {
+        let md = concat!(
+            "> quoted line\n\n",
+            "[^a]: footnote body\n\n",
+            "Term\n  : definition text\n\n",
+            "| A | B |\n| - | - |\n| 1 | 2 |\n"
+        );
+
+        let saved = center_code_blocks();
+        set_center_code_blocks(true);
+        let lines = render_markdown_with_width(md, Some(50));
+        set_center_code_blocks(saved);
+
+        for snippet in ["│ quoted line", "[^a]: footnote body", "• Term", "A │ B"] {
+            let line = lines
+                .iter()
+                .find(|line| line_to_string(line).contains(snippet))
+                .unwrap_or_else(|| panic!("missing '{snippet}' in {lines:?}"));
+            let text = line_to_string(line);
+            assert!(
+                leading_spaces(&text) > 0,
+                "structured block line should be centered as a block: {text:?} / {lines:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_centered_mode_still_centers_framed_code_blocks() {
+        let saved = center_code_blocks();
+        set_center_code_blocks(true);
+        let lines = render_markdown_with_width("```rust\nfn main() {}\n```", Some(40));
+        set_center_code_blocks(saved);
+
+        let header = lines
+            .iter()
+            .find(|line| line_to_string(line).contains("┌─ rust "))
+            .expect("code block header");
+        assert!(
+            line_to_string(header).starts_with(' '),
+            "framed code block should keep centered padding: {lines:?}"
+        );
+    }
+
+    #[test]
     fn test_rule_and_inline_html_render() {
         let md = "before\n\n---\n\ninline <span>html</span> tag";
         let lines = render_markdown(md);
@@ -3617,9 +3795,7 @@ mod tests {
 
         assert_eq!(
             rendered,
-            vec![
-                "Intro", "", "Body", "", "• one", "• two", "", "Next", "", "Body"
-            ]
+            vec!["Intro", "", "Body", "", "• one", "• two", "", "Next", "", "Body"]
         );
     }
 
@@ -3748,6 +3924,14 @@ mod tests {
         let text = "Intro\n\n```\nProcess A\n\nProcess B";
         let checkpoint = renderer.find_last_complete_block(text);
         assert_eq!(checkpoint, Some("Intro\n\n".len()));
+    }
+
+    #[test]
+    fn test_checkpoint_advances_after_heading_line() {
+        let renderer = IncrementalMarkdownRenderer::new(Some(80));
+        let text = "## Planning\nNext item";
+        let checkpoint = renderer.find_last_complete_block(text);
+        assert_eq!(checkpoint, Some("## Planning\n".len()));
     }
 
     #[test]
