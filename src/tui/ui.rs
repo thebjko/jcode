@@ -1150,8 +1150,9 @@ struct CopyTarget {
 #[derive(Clone)]
 struct PreparedMessages {
     wrapped_lines: Vec<Line<'static>>,
-    raw_plain_lines: Vec<String>,
-    wrapped_line_map: Vec<WrappedLineMap>,
+    wrapped_plain_lines: Arc<Vec<String>>,
+    raw_plain_lines: Arc<Vec<String>>,
+    wrapped_line_map: Arc<Vec<WrappedLineMap>>,
     wrapped_user_indices: Vec<usize>,
     /// Wrapped line indices where a user prompt line starts
     wrapped_user_prompt_starts: Vec<usize>,
@@ -1479,9 +1480,9 @@ pub fn last_layout_snapshot() -> Option<LayoutSnapshot> {
 #[derive(Clone, Debug)]
 struct CopyViewportSnapshot {
     pane: crate::tui::CopySelectionPane,
-    wrapped_plain_lines: Vec<String>,
-    raw_plain_lines: Vec<String>,
-    wrapped_line_map: Vec<WrappedLineMap>,
+    wrapped_plain_lines: Arc<Vec<String>>,
+    raw_plain_lines: Arc<Vec<String>>,
+    wrapped_line_map: Arc<Vec<WrappedLineMap>>,
     scroll: usize,
     visible_end: usize,
     content_area: Rect,
@@ -1533,9 +1534,9 @@ pub(crate) fn line_plain_text(line: &Line<'_>) -> String {
 
 fn record_copy_pane_snapshot(
     pane: crate::tui::CopySelectionPane,
-    wrapped_lines: &[Line<'static>],
-    raw_plain_lines: &[String],
-    wrapped_line_map: &[WrappedLineMap],
+    wrapped_plain_lines: Arc<Vec<String>>,
+    raw_plain_lines: Arc<Vec<String>>,
+    wrapped_line_map: Arc<Vec<WrappedLineMap>>,
     scroll: usize,
     visible_end: usize,
     content_area: Rect,
@@ -1544,9 +1545,9 @@ fn record_copy_pane_snapshot(
     if let Ok(mut state) = copy_viewport_state().lock() {
         *copy_snapshot_slot_mut(&mut state, pane) = Some(CopyViewportSnapshot {
             pane,
-            wrapped_plain_lines: wrapped_lines.iter().map(line_plain_text).collect(),
-            raw_plain_lines: raw_plain_lines.to_vec(),
-            wrapped_line_map: wrapped_line_map.to_vec(),
+            wrapped_plain_lines,
+            raw_plain_lines,
+            wrapped_line_map,
             scroll,
             visible_end,
             content_area,
@@ -1556,9 +1557,9 @@ fn record_copy_pane_snapshot(
 }
 
 pub(crate) fn record_copy_viewport_snapshot(
-    wrapped_lines: &[Line<'static>],
-    raw_plain_lines: &[String],
-    wrapped_line_map: &[WrappedLineMap],
+    wrapped_plain_lines: Arc<Vec<String>>,
+    raw_plain_lines: Arc<Vec<String>>,
+    wrapped_line_map: Arc<Vec<WrappedLineMap>>,
     scroll: usize,
     visible_end: usize,
     content_area: Rect,
@@ -1566,7 +1567,7 @@ pub(crate) fn record_copy_viewport_snapshot(
 ) {
     record_copy_pane_snapshot(
         crate::tui::CopySelectionPane::Chat,
-        wrapped_lines,
+        wrapped_plain_lines,
         raw_plain_lines,
         wrapped_line_map,
         scroll,
@@ -1600,9 +1601,9 @@ pub(crate) fn record_side_pane_snapshot(
     let left_margins = line_left_margins_for_area(wrapped_lines, content_area.width);
     record_copy_pane_snapshot(
         crate::tui::CopySelectionPane::SidePane,
-        wrapped_lines,
-        &[],
-        &[],
+        Arc::new(wrapped_lines.iter().map(line_plain_text).collect()),
+        Arc::new(Vec::new()),
+        Arc::new(Vec::new()),
         scroll,
         visible_end,
         content_area,
@@ -3403,8 +3404,9 @@ mod tests {
     fn test_active_file_diff_context_resolves_visible_edit() {
         let prepared = PreparedMessages {
             wrapped_lines: vec![Line::from("a"); 20],
-            raw_plain_lines: Vec::new(),
-            wrapped_line_map: Vec::new(),
+            wrapped_plain_lines: Arc::new(vec!["a".to_string(); 20]),
+            raw_plain_lines: Arc::new(Vec::new()),
+            wrapped_line_map: Arc::new(Vec::new()),
             wrapped_user_indices: Vec::new(),
             wrapped_user_prompt_starts: Vec::new(),
             wrapped_user_prompt_ends: Vec::new(),
@@ -3451,8 +3453,9 @@ mod tests {
 
         let prepared_a = Arc::new(PreparedMessages {
             wrapped_lines: vec![Line::from("a")],
-            raw_plain_lines: Vec::new(),
-            wrapped_line_map: Vec::new(),
+            wrapped_plain_lines: Arc::new(vec!["a".to_string()]),
+            raw_plain_lines: Arc::new(Vec::new()),
+            wrapped_line_map: Arc::new(Vec::new()),
             wrapped_user_indices: Vec::new(),
             wrapped_user_prompt_starts: Vec::new(),
             wrapped_user_prompt_ends: Vec::new(),
@@ -3463,8 +3466,9 @@ mod tests {
         });
         let prepared_b = Arc::new(PreparedMessages {
             wrapped_lines: vec![Line::from("b")],
-            raw_plain_lines: Vec::new(),
-            wrapped_line_map: Vec::new(),
+            wrapped_plain_lines: Arc::new(vec!["b".to_string()]),
+            raw_plain_lines: Arc::new(Vec::new()),
+            wrapped_line_map: Arc::new(Vec::new()),
             wrapped_user_indices: Vec::new(),
             wrapped_user_prompt_starts: Vec::new(),
             wrapped_user_prompt_ends: Vec::new(),
@@ -3504,8 +3508,9 @@ mod tests {
             };
             let prepared = Arc::new(PreparedMessages {
                 wrapped_lines: vec![Line::from(format!("{idx}"))],
-                raw_plain_lines: Vec::new(),
-                wrapped_line_map: Vec::new(),
+                wrapped_plain_lines: Arc::new(vec![format!("{idx}")]),
+                raw_plain_lines: Arc::new(Vec::new()),
+                wrapped_line_map: Arc::new(Vec::new()),
                 wrapped_user_indices: Vec::new(),
                 wrapped_user_prompt_starts: Vec::new(),
                 wrapped_user_prompt_ends: Vec::new(),

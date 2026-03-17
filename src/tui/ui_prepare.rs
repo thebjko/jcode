@@ -1,5 +1,52 @@
 use super::*;
+use crate::tui::ui::{self, WrappedLineMap};
 use std::hash::{Hash, Hasher};
+
+fn content_prefers_display_as_logical_lines(content: &str) -> bool {
+    content.lines().any(|line| {
+        let trimmed = line.trim();
+        trimmed.starts_with('|') && trimmed.matches('|').count() >= 2
+    })
+}
+
+fn map_display_lines_to_logical_lines(
+    display_lines: &[Line<'static>],
+    logical_plain_lines: &[String],
+    raw_base: usize,
+) -> Option<Vec<WrappedLineMap>> {
+    let mut maps = Vec::with_capacity(display_lines.len());
+    let mut logical_idx = 0usize;
+    let mut logical_col = 0usize;
+
+    for line in display_lines {
+        while logical_idx < logical_plain_lines.len() {
+            let logical_width =
+                unicode_width::UnicodeWidthStr::width(logical_plain_lines[logical_idx].as_str());
+            if logical_col < logical_width || logical_width == 0 {
+                break;
+            }
+            logical_idx += 1;
+            logical_col = 0;
+        }
+
+        let logical_text = logical_plain_lines.get(logical_idx)?;
+        let logical_width = unicode_width::UnicodeWidthStr::width(logical_text.as_str());
+        let display_width = line.width();
+        let remaining = logical_width.saturating_sub(logical_col);
+        if display_width > remaining {
+            return None;
+        }
+
+        maps.push(WrappedLineMap {
+            raw_line: raw_base + logical_idx,
+            start_col: logical_col,
+            end_col: logical_col + display_width,
+        });
+        logical_col += display_width;
+    }
+
+    Some(maps)
+}
 
 fn user_prompt_number_style(color: Color) -> Style {
     Style::default().fg(color).bg(user_bg())
@@ -36,6 +83,9 @@ fn assistant_message_copy_targets(
 fn empty_prepared_messages() -> PreparedMessages {
     PreparedMessages {
         wrapped_lines: Vec::new(),
+        wrapped_plain_lines: Arc::new(Vec::new()),
+        raw_plain_lines: Arc::new(Vec::new()),
+        wrapped_line_map: Arc::new(Vec::new()),
         wrapped_user_indices: Vec::new(),
         wrapped_user_prompt_starts: Vec::new(),
         wrapped_user_prompt_ends: Vec::new(),
@@ -165,7 +215,7 @@ fn prepare_active_batch_progress(
         pad_lines_for_centered_mode(&mut lines, width);
     }
 
-    wrap_lines_with_map(lines, &[], &[], width, &[], &[])
+    wrap_lines_with_map(lines, &[], &[], &[], &[], width, &[], &[])
 }
 
 pub(super) fn prepare_messages(
@@ -236,6 +286,9 @@ fn prepare_messages_inner(
     } else {
         PreparedMessages {
             wrapped_lines: Vec::new(),
+            wrapped_plain_lines: Arc::new(Vec::new()),
+            raw_plain_lines: Arc::new(Vec::new()),
+            wrapped_line_map: Arc::new(Vec::new()),
             wrapped_user_indices: Vec::new(),
             wrapped_user_prompt_starts: Vec::new(),
             wrapped_user_prompt_ends: Vec::new(),
@@ -265,6 +318,8 @@ fn prepare_messages_inner(
     };
 
     let mut wrapped_lines: Vec<Line<'static>>;
+    let raw_plain_lines;
+    let wrapped_line_map;
     let wrapped_user_indices;
     let wrapped_user_prompt_starts;
     let wrapped_user_prompt_ends;
@@ -309,6 +364,8 @@ fn prepare_messages_inner(
         }
         wrapped_lines.extend(content_lines);
         wrapped_user_indices = Vec::new();
+        raw_plain_lines = Vec::new();
+        wrapped_line_map = Vec::new();
         wrapped_user_prompt_starts = Vec::new();
         wrapped_user_prompt_ends = Vec::new();
         user_prompt_texts = Vec::new();
@@ -387,6 +444,70 @@ fn prepare_messages_inner(
             wrapped_lines = centered;
         }
 
+        if is_initial_empty {
+            raw_plain_lines = Vec::new();
+            wrapped_line_map = Vec::new();
+        } else {
+            let header_raw_len = header_prepared.raw_plain_lines.len();
+            let startup_raw_len = startup_prepared.raw_plain_lines.len();
+            let body_raw_len = body_prepared.raw_plain_lines.len();
+            let batch_raw_len = batch_progress_prepared.raw_plain_lines.len();
+
+            let mut all_raw_plain_lines = Vec::with_capacity(
+                header_raw_len
+                    + startup_raw_len
+                    + body_raw_len
+                    + batch_raw_len
+                    + streaming_prepared.raw_plain_lines.len(),
+            );
+            all_raw_plain_lines.extend(header_prepared.raw_plain_lines.iter().cloned());
+            all_raw_plain_lines.extend(startup_prepared.raw_plain_lines.iter().cloned());
+            all_raw_plain_lines.extend(body_prepared.raw_plain_lines.iter().cloned());
+            all_raw_plain_lines.extend(batch_progress_prepared.raw_plain_lines.iter().cloned());
+            all_raw_plain_lines.extend(streaming_prepared.raw_plain_lines.iter().cloned());
+
+            let startup_raw_offset = header_raw_len;
+            let body_raw_offset = startup_raw_offset + startup_raw_len;
+            let batch_raw_offset = body_raw_offset + body_raw_len;
+            let streaming_raw_offset = batch_raw_offset + batch_raw_len;
+
+            let mut all_wrapped_line_map = Vec::with_capacity(
+                header_prepared.wrapped_line_map.len()
+                    + startup_prepared.wrapped_line_map.len()
+                    + body_prepared.wrapped_line_map.len()
+                    + batch_progress_prepared.wrapped_line_map.len()
+                    + streaming_prepared.wrapped_line_map.len(),
+            );
+            all_wrapped_line_map.extend(header_prepared.wrapped_line_map.iter().copied());
+            all_wrapped_line_map.extend(startup_prepared.wrapped_line_map.iter().map(|map| {
+                WrappedLineMap {
+                    raw_line: map.raw_line + startup_raw_offset,
+                    ..*map
+                }
+            }));
+            all_wrapped_line_map.extend(body_prepared.wrapped_line_map.iter().map(|map| {
+                WrappedLineMap {
+                    raw_line: map.raw_line + body_raw_offset,
+                    ..*map
+                }
+            }));
+            all_wrapped_line_map.extend(batch_progress_prepared.wrapped_line_map.iter().map(
+                |map| WrappedLineMap {
+                    raw_line: map.raw_line + batch_raw_offset,
+                    ..*map
+                },
+            ));
+            all_wrapped_line_map.extend(streaming_prepared.wrapped_line_map.iter().map(|map| {
+                WrappedLineMap {
+                    raw_line: map.raw_line + streaming_raw_offset,
+                    ..*map
+                }
+            }));
+
+            raw_plain_lines = all_raw_plain_lines;
+            wrapped_line_map = all_wrapped_line_map;
+        }
+
         let header_len = wrapped_lines.len();
         let startup_len = startup_prepared.wrapped_lines.len();
         wrapped_lines.extend(startup_prepared.wrapped_lines);
@@ -458,8 +579,13 @@ fn prepare_messages_inner(
             .collect();
     }
 
+    let wrapped_plain_lines = Arc::new(wrapped_lines.iter().map(ui::line_plain_text).collect());
+
     PreparedMessages {
         wrapped_lines,
+        wrapped_plain_lines,
+        raw_plain_lines: Arc::new(raw_plain_lines),
+        wrapped_line_map: Arc::new(wrapped_line_map),
         wrapped_user_indices,
         wrapped_user_prompt_starts,
         wrapped_user_prompt_ends,
@@ -764,6 +890,8 @@ fn prepare_body_incremental(
 
     let new_wrapped = wrap_lines_with_map(
         new_lines,
+        &[],
+        &[],
         &new_user_line_indices,
         &new_user_prompt_texts,
         width,
@@ -775,6 +903,18 @@ fn prepare_body_incremental(
     let mut wrapped_lines = Vec::with_capacity(prev_len + new_wrapped.wrapped_lines.len());
     wrapped_lines.extend_from_slice(&prev.wrapped_lines);
     wrapped_lines.extend(new_wrapped.wrapped_lines);
+
+    let prev_raw_len = prev.raw_plain_lines.len();
+    let mut raw_plain_lines = prev.raw_plain_lines.as_ref().clone();
+    raw_plain_lines.extend(new_wrapped.raw_plain_lines.iter().cloned());
+
+    let mut wrapped_line_map = prev.wrapped_line_map.as_ref().clone();
+    for map in new_wrapped.wrapped_line_map.iter().copied() {
+        wrapped_line_map.push(WrappedLineMap {
+            raw_line: map.raw_line + prev_raw_len,
+            ..map
+        });
+    }
 
     let mut wrapped_user_indices = prev.wrapped_user_indices.clone();
     for idx in new_wrapped.wrapped_user_indices {
@@ -824,8 +964,13 @@ fn prepare_body_incremental(
         });
     }
 
+    let wrapped_plain_lines = Arc::new(wrapped_lines.iter().map(ui::line_plain_text).collect());
+
     Arc::new(PreparedMessages {
         wrapped_lines,
+        wrapped_plain_lines,
+        raw_plain_lines: Arc::new(raw_plain_lines),
+        wrapped_line_map: Arc::new(wrapped_line_map),
         wrapped_user_indices,
         wrapped_user_prompt_starts,
         wrapped_user_prompt_ends,
@@ -845,6 +990,9 @@ fn prepare_streaming_cached(
     if streaming.is_empty() {
         return PreparedMessages {
             wrapped_lines: Vec::new(),
+            wrapped_plain_lines: Arc::new(Vec::new()),
+            raw_plain_lines: Arc::new(Vec::new()),
+            wrapped_line_map: Arc::new(Vec::new()),
             wrapped_user_indices: Vec::new(),
             wrapped_user_prompt_starts: Vec::new(),
             wrapped_user_prompt_ends: Vec::new(),
@@ -879,6 +1027,8 @@ fn prepare_streaming_cached(
 
 fn prepare_body(app: &dyn TuiState, width: u16, include_streaming: bool) -> PreparedMessages {
     let mut lines: Vec<Line> = Vec::new();
+    let mut raw_plain_lines: Vec<String> = Vec::new();
+    let mut line_raw_overrides: Vec<Option<WrappedLineMap>> = Vec::new();
     let mut user_line_indices: Vec<usize> = Vec::new();
     let mut user_prompt_texts: Vec<String> = Vec::new();
     let mut edit_tool_line_ranges: Vec<(usize, String, usize, usize)> = Vec::new();
@@ -902,6 +1052,7 @@ fn prepare_body(app: &dyn TuiState, width: u16, include_streaming: bool) -> Prep
     for (msg_idx, msg) in app.display_messages().iter().enumerate() {
         if !lines.is_empty() && msg.role != "tool" && msg.role != "meta" && msg.role != "swarm" {
             lines.push(Line::from(""));
+            line_raw_overrides.push(None);
         }
 
         match msg.role.as_str() {
@@ -922,6 +1073,7 @@ fn prepare_body(app: &dyn TuiState, width: u16, include_streaming: bool) -> Prep
                     ])
                     .alignment(align),
                 );
+                line_raw_overrides.push(None);
             }
             "assistant" => {
                 let content_width = width.saturating_sub(4);
@@ -941,8 +1093,43 @@ fn prepare_body(app: &dyn TuiState, width: u16, include_streaming: bool) -> Prep
                         badge_raw_line: lines.len() + target.badge_raw_line,
                     });
                 }
-                for line in cached {
+                let content_lines = markdown::render_markdown_with_width(
+                    &msg.content,
+                    Some(content_width as usize),
+                );
+                let content_line_count = content_lines.len().min(cached.len());
+                let logical_plain_lines: Vec<String> =
+                    if content_prefers_display_as_logical_lines(&msg.content) {
+                        cached
+                            .iter()
+                            .take(content_line_count)
+                            .map(ui::line_plain_text)
+                            .collect()
+                    } else {
+                        markdown::render_markdown(&msg.content)
+                            .into_iter()
+                            .map(|line| ui::line_plain_text(&align_if_unset(line, align)))
+                            .collect()
+                    };
+                let raw_base = raw_plain_lines.len();
+                raw_plain_lines.extend(logical_plain_lines.iter().cloned());
+                let content_maps = map_display_lines_to_logical_lines(
+                    &cached[..content_line_count],
+                    &logical_plain_lines,
+                    raw_base,
+                );
+
+                for (idx, line) in cached.into_iter().enumerate() {
                     lines.push(align_if_unset(line, align));
+                    if idx < content_line_count {
+                        line_raw_overrides.push(
+                            content_maps
+                                .as_ref()
+                                .and_then(|maps| maps.get(idx).copied()),
+                        );
+                    } else {
+                        line_raw_overrides.push(None);
+                    }
                 }
             }
             "meta" => {
@@ -953,6 +1140,7 @@ fn prepare_body(app: &dyn TuiState, width: u16, include_streaming: bool) -> Prep
                     ])
                     .alignment(align),
                 );
+                line_raw_overrides.push(None);
             }
             "tool" => {
                 let tool_start_line = lines.len();
@@ -960,6 +1148,7 @@ fn prepare_body(app: &dyn TuiState, width: u16, include_streaming: bool) -> Prep
                     get_cached_message_lines(msg, width, app.diff_mode(), render_tool_message);
                 for line in cached {
                     lines.push(align_if_unset(line, align));
+                    line_raw_overrides.push(None);
                 }
                 if let Some(ref tc) = msg.tool_data {
                     let is_edit_tool = matches!(
@@ -1013,6 +1202,7 @@ fn prepare_body(app: &dyn TuiState, width: u16, include_streaming: bool) -> Prep
                 );
                 for line in cached {
                     lines.push(align_if_unset(line, align));
+                    line_raw_overrides.push(None);
                 }
             }
             "memory" => {
@@ -1078,6 +1268,7 @@ fn prepare_body(app: &dyn TuiState, width: u16, include_streaming: bool) -> Prep
                 );
                 for line in tile_lines {
                     lines.push(align_if_unset(line, align));
+                    line_raw_overrides.push(None);
                 }
             }
             "usage" => {
@@ -1088,6 +1279,7 @@ fn prepare_body(app: &dyn TuiState, width: u16, include_streaming: bool) -> Prep
                     ])
                     .alignment(align),
                 );
+                line_raw_overrides.push(None);
             }
             "error" => {
                 lines.push(
@@ -1100,6 +1292,7 @@ fn prepare_body(app: &dyn TuiState, width: u16, include_streaming: bool) -> Prep
                     ])
                     .alignment(align),
                 );
+                line_raw_overrides.push(None);
             }
             _ => {}
         }
@@ -1108,16 +1301,20 @@ fn prepare_body(app: &dyn TuiState, width: u16, include_streaming: bool) -> Prep
     if include_streaming && app.is_processing() && !app.streaming_text().is_empty() {
         if !lines.is_empty() {
             lines.push(Line::from(""));
+            line_raw_overrides.push(None);
         }
         let content_width = width.saturating_sub(4) as usize;
         let md_lines = app.render_streaming_markdown(content_width);
         for line in md_lines {
             lines.push(align_if_unset(line, align));
+            line_raw_overrides.push(None);
         }
     }
 
     wrap_lines_with_map(
         lines,
+        &raw_plain_lines,
+        &line_raw_overrides,
         &user_line_indices,
         &user_prompt_texts,
         width,
@@ -1137,6 +1334,8 @@ fn wrap_lines(
     let mut wrapped_user_indices: Vec<usize> = Vec::new();
     let mut wrapped_user_prompt_starts: Vec<usize> = Vec::new();
     let mut wrapped_user_prompt_ends: Vec<usize> = Vec::new();
+    let mut raw_plain_lines: Vec<String> = Vec::with_capacity(lines.len());
+    let mut wrapped_line_map: Vec<WrappedLineMap> = Vec::new();
     let mut user_line_mask = vec![false; lines.len()];
     for &idx in user_line_indices {
         if idx < user_line_mask.len() {
@@ -1147,10 +1346,25 @@ fn wrap_lines(
 
     let mut wrapped_lines: Vec<Line> = Vec::new();
     for (orig_idx, line) in lines.into_iter().enumerate() {
+        let raw_text = ui::line_plain_text(&line);
+        let raw_width = unicode_width::UnicodeWidthStr::width(raw_text.as_str());
+        raw_plain_lines.push(raw_text);
         let is_user_line = user_line_mask.get(orig_idx).copied().unwrap_or(false);
         let wrap_width = if is_user_line { user_width } else { full_width };
         let new_lines = markdown::wrap_line(line, wrap_width);
         let count = new_lines.len();
+        let mut start_col = 0usize;
+
+        for wrapped_line in &new_lines {
+            let width = wrapped_line.width();
+            let end_col = (start_col + width).min(raw_width);
+            wrapped_line_map.push(WrappedLineMap {
+                raw_line: orig_idx,
+                start_col,
+                end_col,
+            });
+            start_col = end_col;
+        }
 
         if is_user_line {
             wrapped_user_prompt_starts.push(wrapped_idx);
@@ -1186,8 +1400,13 @@ fn wrap_lines(
         }
     }
 
+    let wrapped_plain_lines = Arc::new(wrapped_lines.iter().map(ui::line_plain_text).collect());
+
     PreparedMessages {
         wrapped_lines,
+        wrapped_plain_lines,
+        raw_plain_lines: Arc::new(raw_plain_lines),
+        wrapped_line_map: Arc::new(wrapped_line_map),
         wrapped_user_indices,
         wrapped_user_prompt_starts,
         wrapped_user_prompt_ends,
@@ -1200,6 +1419,8 @@ fn wrap_lines(
 
 fn wrap_lines_with_map(
     lines: Vec<Line<'static>>,
+    seeded_raw_plain_lines: &[String],
+    line_raw_overrides: &[Option<WrappedLineMap>],
     user_line_indices: &[usize],
     user_prompt_texts: &[String],
     width: u16,
@@ -1211,6 +1432,8 @@ fn wrap_lines_with_map(
     let mut wrapped_user_indices: Vec<usize> = Vec::new();
     let mut wrapped_user_prompt_starts: Vec<usize> = Vec::new();
     let mut wrapped_user_prompt_ends: Vec<usize> = Vec::new();
+    let mut raw_plain_lines: Vec<String> = seeded_raw_plain_lines.to_vec();
+    let mut wrapped_line_map: Vec<WrappedLineMap> = Vec::new();
     let mut user_line_mask = vec![false; lines.len()];
     for &idx in user_line_indices {
         if idx < user_line_mask.len() {
@@ -1223,11 +1446,33 @@ fn wrap_lines_with_map(
 
     let mut wrapped_lines: Vec<Line> = Vec::new();
     for (orig_idx, line) in lines.into_iter().enumerate() {
+        let (raw_line, start_col, end_col) =
+            if let Some(Some(map)) = line_raw_overrides.get(orig_idx) {
+                (map.raw_line, map.start_col, map.end_col)
+            } else {
+                let raw_text = ui::line_plain_text(&line);
+                let raw_width = unicode_width::UnicodeWidthStr::width(raw_text.as_str());
+                let raw_line = raw_plain_lines.len();
+                raw_plain_lines.push(raw_text);
+                (raw_line, 0usize, raw_width)
+            };
         raw_to_wrapped.push(wrapped_idx);
         let is_user_line = user_line_mask.get(orig_idx).copied().unwrap_or(false);
         let wrap_width = if is_user_line { user_width } else { full_width };
         let new_lines = markdown::wrap_line(line, wrap_width);
         let count = new_lines.len();
+        let mut segment_start = start_col;
+
+        for wrapped_line in &new_lines {
+            let width = wrapped_line.width();
+            let segment_end = (segment_start + width).min(end_col);
+            wrapped_line_map.push(WrappedLineMap {
+                raw_line,
+                start_col: segment_start,
+                end_col: segment_end,
+            });
+            segment_start = segment_end;
+        }
 
         if is_user_line {
             wrapped_user_prompt_starts.push(wrapped_idx);
@@ -1303,8 +1548,13 @@ fn wrap_lines_with_map(
         });
     }
 
+    let wrapped_plain_lines = Arc::new(wrapped_lines.iter().map(ui::line_plain_text).collect());
+
     PreparedMessages {
         wrapped_lines,
+        wrapped_plain_lines,
+        raw_plain_lines: Arc::new(raw_plain_lines),
+        wrapped_line_map: Arc::new(wrapped_line_map),
         wrapped_user_indices,
         wrapped_user_prompt_starts,
         wrapped_user_prompt_ends,

@@ -230,7 +230,9 @@ pub(super) fn draw_messages(
     let copy_badge_now = std::time::Instant::now();
 
     record_copy_viewport_snapshot(
-        wrapped_lines,
+        prepared.wrapped_plain_lines.clone(),
+        prepared.raw_plain_lines.clone(),
+        prepared.wrapped_line_map.clone(),
         scroll,
         visible_end,
         content_area,
