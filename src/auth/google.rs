@@ -74,6 +74,7 @@ pub fn tokens_path() -> Result<std::path::PathBuf> {
 
 pub fn load_credentials() -> Result<GoogleCredentials> {
     let path = credentials_path()?;
+    crate::storage::harden_secret_file_permissions(&path);
     let data = match std::fs::read_to_string(&path) {
         Ok(d) => d,
         Err(_) => return Err(anyhow::anyhow!("no_credentials")),
@@ -108,34 +109,22 @@ pub fn load_credentials() -> Result<GoogleCredentials> {
 
 pub fn save_credentials(creds: &GoogleCredentials) -> Result<()> {
     let path = credentials_path()?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-        crate::platform::set_directory_permissions_owner_only(parent)?;
-    }
-    let data = serde_json::to_string_pretty(creds)?;
-    std::fs::write(&path, data)?;
-    crate::platform::set_permissions_owner_only(&path)?;
-    Ok(())
+    crate::storage::write_json_secret(&path, creds)
 }
 
 pub fn load_tokens() -> Result<GoogleTokens> {
     let path = tokens_path()?;
-    let data = std::fs::read_to_string(&path)
-        .map_err(|_| anyhow::anyhow!("No Google tokens found. Run `jcode login google` first."))?;
-    let tokens: GoogleTokens = serde_json::from_str(&data)?;
-    Ok(tokens)
+    if !path.exists() {
+        anyhow::bail!("No Google tokens found. Run `jcode login google` first.");
+    }
+    crate::storage::harden_secret_file_permissions(&path);
+    crate::storage::read_json(&path)
+        .map_err(|_| anyhow::anyhow!("No Google tokens found. Run `jcode login google` first."))
 }
 
 pub fn save_tokens(tokens: &GoogleTokens) -> Result<()> {
     let path = tokens_path()?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-        crate::platform::set_directory_permissions_owner_only(parent)?;
-    }
-    let data = serde_json::to_string_pretty(tokens)?;
-    std::fs::write(&path, data)?;
-    crate::platform::set_permissions_owner_only(&path)?;
-    Ok(())
+    crate::storage::write_json_secret(&path, tokens)
 }
 
 pub fn has_tokens() -> bool {

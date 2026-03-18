@@ -79,9 +79,9 @@ fn legacy_auth_path() -> Result<PathBuf> {
 pub fn load_auth_file() -> Result<JcodeOpenAiAuthFile> {
     let path = jcode_auth_path()?;
     let mut auth = if path.exists() {
-        let content = std::fs::read_to_string(&path)
-            .with_context(|| format!("Could not read OpenAI credentials from {:?}", path))?;
-        serde_json::from_str(&content).context("Could not parse jcode OpenAI auth file")?
+        crate::storage::harden_secret_file_permissions(&path);
+        crate::storage::read_json(&path)
+            .with_context(|| format!("Could not read OpenAI credentials from {:?}", path))?
     } else {
         JcodeOpenAiAuthFile::default()
     };
@@ -109,20 +109,12 @@ pub fn load_auth_file() -> Result<JcodeOpenAiAuthFile> {
 
 pub fn save_auth_file(auth: &JcodeOpenAiAuthFile) -> Result<()> {
     let auth_path = jcode_auth_path()?;
-    let auth_dir = auth_path
-        .parent()
-        .context("OpenAI auth path has no parent directory")?;
-    std::fs::create_dir_all(auth_dir)?;
-    crate::platform::set_directory_permissions_owner_only(auth_dir)?;
-
     let clean = JcodeOpenAiAuthFile {
         openai_accounts: auth.openai_accounts.clone(),
         active_openai_account: auth.active_openai_account.clone(),
     };
 
-    let json = serde_json::to_string_pretty(&clean)?;
-    std::fs::write(&auth_path, json)?;
-    crate::platform::set_permissions_owner_only(&auth_path)?;
+    crate::storage::write_json_secret(&auth_path, &clean)?;
     Ok(())
 }
 

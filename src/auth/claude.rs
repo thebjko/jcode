@@ -117,11 +117,10 @@ pub fn load_auth_file() -> Result<JcodeAuthFile> {
         return Ok(JcodeAuthFile::default());
     }
 
-    let content = std::fs::read_to_string(&path)
-        .with_context(|| format!("Could not read jcode credentials from {:?}", path))?;
+    crate::storage::harden_secret_file_permissions(&path);
 
-    let mut auth: JcodeAuthFile =
-        serde_json::from_str(&content).context("Could not parse jcode auth.json")?;
+    let mut auth: JcodeAuthFile = crate::storage::read_json(&path)
+        .with_context(|| format!("Could not read jcode credentials from {:?}", path))?;
 
     if auth.anthropic_accounts.is_empty() {
         if let Some(legacy) = auth.anthropic.take() {
@@ -149,11 +148,6 @@ pub fn load_auth_file() -> Result<JcodeAuthFile> {
 /// Write the jcode auth file (multi-account format).
 pub fn save_auth_file(auth: &JcodeAuthFile) -> Result<()> {
     let auth_path = jcode_path()?;
-    let creds_dir = auth_path
-        .parent()
-        .context("jcode auth path has no parent directory")?;
-    std::fs::create_dir_all(creds_dir)?;
-    crate::platform::set_directory_permissions_owner_only(creds_dir)?;
 
     let clean = JcodeAuthFile {
         anthropic_accounts: auth.anthropic_accounts.clone(),
@@ -161,9 +155,7 @@ pub fn save_auth_file(auth: &JcodeAuthFile) -> Result<()> {
         anthropic: None,
     };
 
-    let json = serde_json::to_string_pretty(&clean)?;
-    std::fs::write(&auth_path, json)?;
-    crate::platform::set_permissions_owner_only(&auth_path)?;
+    crate::storage::write_json_secret(&auth_path, &clean)?;
     Ok(())
 }
 
