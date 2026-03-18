@@ -19,7 +19,6 @@ const STARTUP_VARIANTS: &[&str] = &[
     "octahedron",
     "lorenz",
     "rabbit",
-    "black_hole",
 ];
 
 const IDLE_VARIANTS: &[&str] = &["donut", "knot", "three_rings", "black_hole"];
@@ -1651,8 +1650,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn startup_variants_exclude_mobius() {
+    fn startup_variants_exclude_mobius_and_black_hole() {
         assert!(!STARTUP_VARIANTS.contains(&"mobius"));
+        assert!(!STARTUP_VARIANTS.contains(&"black_hole"));
     }
 
     #[test]
