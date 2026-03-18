@@ -616,21 +616,24 @@ pub fn cleanup_socket_pair(path: &std::path::Path) {
     }
 }
 
-/// Connect to a Unix socket, cleaning up stale socket files on connection-refused.
+/// Connect to a socket path.
+///
+/// Do not unlink the path on connection-refused here. A client-side cleanup can
+/// strand a live daemon behind an unlinked Unix socket pathname, leaving the
+/// process running with the daemon lock held while new clients can no longer
+/// discover or connect to it.
 pub async fn connect_socket(path: &std::path::Path) -> Result<Stream> {
     match Stream::connect(path).await {
         Ok(stream) => Ok(stream),
-        Err(err) => {
-            let is_stale = err.kind() == std::io::ErrorKind::ConnectionRefused && path.exists();
-            if is_stale {
-                cleanup_socket_pair(path);
-                anyhow::bail!(
-                    "Stale socket removed at {}. Start/restart jcode and retry.",
-                    path.display()
-                );
-            }
-            Err(err.into())
+        Err(err)
+            if err.kind() == std::io::ErrorKind::ConnectionRefused && path.exists() =>
+        {
+            anyhow::bail!(
+                "Socket exists but refused the connection at {}. Retry, or remove it after confirming no jcode server is running.",
+                path.display()
+            )
         }
+        Err(err) => Err(err.into()),
     }
 }
 
@@ -716,11 +719,12 @@ fn mark_close_on_exec<T: std::os::fd::AsRawFd>(io: &T) {
 mod socket_tests {
     use super::{
         ReloadPhase, ReloadState, ReloadWaitStatus, await_reload_handoff, cleanup_socket_pair,
-        clear_reload_marker, daemon_lock_path, inspect_reload_wait_status,
+        clear_reload_marker, connect_socket, daemon_lock_path, inspect_reload_wait_status,
         publish_reload_socket_ready, reload_marker_active, reload_marker_path,
         reload_process_alive, server_start_matches_existing_server, sibling_socket_path,
         try_acquire_daemon_lock, write_reload_state,
     };
+    use crate::transport::Listener;
     use std::time::Duration;
 
     #[test]
@@ -753,6 +757,34 @@ mod socket_tests {
 
         assert!(!main.exists(), "main socket file should be removed");
         assert!(!debug.exists(), "debug socket file should be removed");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn connect_socket_preserves_refused_socket_path() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let socket_path = temp.path().join("jcode.sock");
+
+        {
+            let _listener = Listener::bind(&socket_path).expect("bind listener");
+        }
+
+        assert!(
+            socket_path.exists(),
+            "listener drop should leave the socket path behind for stale-socket checks"
+        );
+
+        let err = connect_socket(&socket_path)
+            .await
+            .expect_err("connect should fail once the listener is gone");
+        assert!(
+            err.to_string().contains("refused the connection"),
+            "unexpected error: {err:#}"
+        );
+        assert!(
+            socket_path.exists(),
+            "connect_socket should not unlink the socket path on connection refusal"
+        );
     }
 
     #[cfg(unix)]
