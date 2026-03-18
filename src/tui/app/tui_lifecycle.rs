@@ -268,7 +268,7 @@ impl App {
             streaming_md_renderer: RefCell::new(IncrementalMarkdownRenderer::new(None)),
             ambient_system_prompt: None,
             pending_login: None,
-            pending_account_label: None,
+            pending_account_input: None,
             last_mouse_scroll: None,
             changelog_scroll: None,
             help_scroll: None,

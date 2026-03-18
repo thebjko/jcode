@@ -330,6 +330,20 @@ pub(super) fn get_tool_summary_with_bash_limit(tool: &ToolCall, bash_max_chars: 
             .and_then(|v| v.as_str())
             .map(|q| format!("'{}'", truncate(q, 40)))
             .unwrap_or_default(),
+        "launch" => {
+            let action = tool
+                .input
+                .get("action")
+                .and_then(|v| v.as_str())
+                .unwrap_or("open");
+            let target = tool
+                .input
+                .get("target")
+                .and_then(|v| v.as_str())
+                .map(|t| truncate(t, 40))
+                .unwrap_or_default();
+            format!("{} {}", action, target).trim().to_string()
+        }
         "mcp" => {
             let action = tool
                 .input

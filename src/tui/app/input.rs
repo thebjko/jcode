@@ -1351,8 +1351,8 @@ impl App {
             return;
         }
 
-        if let Some(pending) = self.pending_account_label.take() {
-            self.handle_pending_account_label_input(pending, input);
+        if let Some(pending) = self.pending_account_input.take() {
+            self.handle_pending_account_input(pending, input);
             return;
         }
 

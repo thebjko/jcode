@@ -454,8 +454,8 @@ pub struct App {
     ambient_system_prompt: Option<String>,
     /// Pending login flow: if set, next input is intercepted as OAuth code or API key
     pending_login: Option<PendingLogin>,
-    /// Pending label prompt for creating a new named account
-    pending_account_label: Option<auth::PendingAccountLabel>,
+    /// Pending account picker follow-up input (new label or setting value)
+    pending_account_input: Option<auth::PendingAccountInput>,
     /// Last mouse scroll event timestamp (for trackpad velocity detection)
     last_mouse_scroll: Option<Instant>,
     /// Scroll offset for changelog overlay (None = not visible)

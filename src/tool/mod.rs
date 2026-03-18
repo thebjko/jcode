@@ -15,6 +15,7 @@ mod gmail;
 mod goal;
 mod grep;
 mod invalid;
+mod launch;
 mod ls;
 mod lsp;
 pub mod mcp;
@@ -235,6 +236,7 @@ impl Registry {
             Self::insert_tool(&mut m, "grep", grep::GrepTool::new());
             Self::insert_tool(&mut m, "ls", ls::LsTool::new());
             Self::insert_tool(&mut m, "bash", bash::BashTool::new());
+            Self::insert_tool(&mut m, "launch", launch::LaunchTool::new());
             Self::insert_tool(&mut m, "webfetch", webfetch::WebFetchTool::new());
             Self::insert_tool(&mut m, "websearch", websearch::WebSearchTool::new());
             Self::insert_tool(&mut m, "codesearch", codesearch::CodeSearchTool::new());

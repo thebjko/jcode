@@ -545,6 +545,7 @@ mod tests {
             assert_eq!(sys.classify("patch"), ActionTier::RequiresPermission);
             assert_eq!(sys.classify("apply_patch"), ActionTier::RequiresPermission);
             assert_eq!(sys.classify("communicate"), ActionTier::RequiresPermission);
+            assert_eq!(sys.classify("launch"), ActionTier::RequiresPermission);
             assert_eq!(sys.classify("webfetch"), ActionTier::RequiresPermission);
             assert_eq!(sys.classify("websearch"), ActionTier::RequiresPermission);
             assert_eq!(sys.classify("unknown_tool"), ActionTier::RequiresPermission);

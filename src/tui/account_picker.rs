@@ -8,32 +8,22 @@ use ratatui::{
 const PANEL_BG: Color = Color::Rgb(24, 28, 40);
 const PANEL_BORDER: Color = Color::Rgb(90, 95, 110);
 const PANEL_BORDER_ACTIVE: Color = Color::Rgb(120, 140, 190);
-const PANEL_BORDER_INACTIVE: Color = Color::Rgb(70, 75, 90);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum AccountProviderKind {
     Anthropic,
     OpenAi,
 }
 
-impl AccountProviderKind {
-    pub fn display_name(self) -> &'static str {
-        match self {
-            Self::Anthropic => "Anthropic",
-            Self::OpenAi => "OpenAI",
-        }
-    }
-
-    pub fn short_name(self) -> &'static str {
-        match self {
-            Self::Anthropic => "CLAUDE",
-            Self::OpenAi => "OPENAI",
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub enum AccountPickerCommand {
+    SubmitInput(String),
+    PromptValue {
+        prompt: String,
+        command_prefix: String,
+        empty_value: Option<String>,
+        status_notice: String,
+    },
     Switch {
         provider: AccountProviderKind,
         label: String,
@@ -52,57 +42,28 @@ pub enum AccountPickerCommand {
 }
 
 #[derive(Debug, Clone)]
-pub enum AccountPickerItemKind {
-    Existing {
-        label: String,
-        masked_email: String,
-        status: String,
-        detail: String,
-        is_active: bool,
-    },
-    NewAccount,
-}
-
-#[derive(Debug, Clone)]
 pub struct AccountPickerItem {
-    pub provider: AccountProviderKind,
-    pub kind: AccountPickerItemKind,
+    pub provider_id: String,
+    pub provider_label: String,
+    pub title: String,
+    pub subtitle: String,
+    pub command: AccountPickerCommand,
 }
 
 impl AccountPickerItem {
-    fn title(&self) -> String {
-        match &self.kind {
-            AccountPickerItemKind::Existing { label, .. } => label.clone(),
-            AccountPickerItemKind::NewAccount => "Add account...".to_string(),
-        }
-    }
-
-    fn subtitle(&self) -> String {
-        match &self.kind {
-            AccountPickerItemKind::Existing {
-                masked_email,
-                status,
-                detail,
-                is_active,
-                ..
-            } => {
-                let active = if *is_active { "active" } else { "inactive" };
-                if detail.is_empty() {
-                    format!("{masked_email}  {status}  {active}")
-                } else {
-                    format!("{masked_email}  {status}  {detail}  {active}")
-                }
-            }
-            AccountPickerItemKind::NewAccount => {
-                "Start a browser login flow for a new labeled account".to_string()
-            }
-        }
-    }
-
-    fn actions(&self) -> &'static [&'static str] {
-        match self.kind {
-            AccountPickerItemKind::Existing { .. } => &["Switch", "Login", "Remove"],
-            AccountPickerItemKind::NewAccount => &["Create"],
+    pub fn action(
+        provider_id: impl Into<String>,
+        provider_label: impl Into<String>,
+        title: impl Into<String>,
+        subtitle: impl Into<String>,
+        command: AccountPickerCommand,
+    ) -> Self {
+        Self {
+            provider_id: provider_id.into(),
+            provider_label: provider_label.into(),
+            title: title.into(),
+            subtitle: subtitle.into(),
+            command,
         }
     }
 
@@ -111,10 +72,8 @@ impl AccountPickerItem {
             return true;
         }
         let haystack = format!(
-            "{} {} {}",
-            self.provider.display_name(),
-            self.title(),
-            self.subtitle()
+            "{} {} {} {}",
+            self.provider_id, self.provider_label, self.title, self.subtitle
         )
         .to_lowercase();
         filter
@@ -123,21 +82,13 @@ impl AccountPickerItem {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FocusPane {
-    List,
-    Action,
-}
-
 #[derive(Debug, Clone)]
 pub struct AccountPicker {
     title: String,
     items: Vec<AccountPickerItem>,
     filtered: Vec<usize>,
     selected: usize,
-    selected_action: usize,
     filter: String,
-    focus: FocusPane,
 }
 
 pub enum OverlayAction {
@@ -153,9 +104,7 @@ impl AccountPicker {
             items,
             filtered: Vec::new(),
             selected: 0,
-            selected_action: 0,
             filter: String::new(),
-            focus: FocusPane::List,
         };
         picker.apply_filter();
         picker
@@ -177,39 +126,6 @@ impl AccountPicker {
         if self.selected >= self.filtered.len() {
             self.selected = self.filtered.len().saturating_sub(1);
         }
-        let max_action = self
-            .selected_item()
-            .map(|item| item.actions().len().saturating_sub(1))
-            .unwrap_or(0);
-        self.selected_action = self.selected_action.min(max_action);
-    }
-
-    fn command_for_selected(&self) -> Option<AccountPickerCommand> {
-        let item = self.selected_item()?;
-        match (&item.kind, self.selected_action) {
-            (AccountPickerItemKind::Existing { label, .. }, 0) => {
-                Some(AccountPickerCommand::Switch {
-                    provider: item.provider,
-                    label: label.clone(),
-                })
-            }
-            (AccountPickerItemKind::Existing { label, .. }, 1) => {
-                Some(AccountPickerCommand::Login {
-                    provider: item.provider,
-                    label: label.clone(),
-                })
-            }
-            (AccountPickerItemKind::Existing { label, .. }, 2) => {
-                Some(AccountPickerCommand::Remove {
-                    provider: item.provider,
-                    label: label.clone(),
-                })
-            }
-            (AccountPickerItemKind::NewAccount, _) => Some(AccountPickerCommand::PromptNew {
-                provider: item.provider,
-            }),
-            _ => None,
-        }
     }
 
     pub fn handle_overlay_key(
@@ -230,28 +146,24 @@ impl AccountPicker {
                 return Ok(OverlayAction::Close);
             }
             KeyCode::Up | KeyCode::Char('k') => {
-                if self.focus == FocusPane::List {
-                    self.selected = self.selected.saturating_sub(1);
-                } else {
-                    self.selected_action = self.selected_action.saturating_sub(1);
-                }
+                self.selected = self.selected.saturating_sub(1);
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                if self.focus == FocusPane::List {
-                    let max = self.filtered.len().saturating_sub(1);
-                    self.selected = (self.selected + 1).min(max);
-                } else if let Some(item) = self.selected_item() {
-                    let max = item.actions().len().saturating_sub(1);
-                    self.selected_action = (self.selected_action + 1).min(max);
-                }
+                let max = self.filtered.len().saturating_sub(1);
+                self.selected = (self.selected + 1).min(max);
             }
-            KeyCode::Left | KeyCode::BackTab => {
-                self.focus = FocusPane::List;
+            KeyCode::PageUp | KeyCode::Char('K') => {
+                self.selected = self.selected.saturating_sub(8);
             }
-            KeyCode::Right | KeyCode::Tab => {
-                if self.selected_item().is_some() {
-                    self.focus = FocusPane::Action;
-                }
+            KeyCode::PageDown | KeyCode::Char('J') => {
+                let max = self.filtered.len().saturating_sub(1);
+                self.selected = (self.selected + 8).min(max);
+            }
+            KeyCode::Home | KeyCode::Char('g') => {
+                self.selected = 0;
+            }
+            KeyCode::End | KeyCode::Char('G') => {
+                self.selected = self.filtered.len().saturating_sub(1);
             }
             KeyCode::Backspace => {
                 if self.filter.pop().is_some() {
@@ -259,43 +171,25 @@ impl AccountPicker {
                 }
             }
             KeyCode::Enter => {
-                if self.filtered.is_empty() {
-                    return Ok(OverlayAction::Close);
+                if let Some(item) = self.selected_item() {
+                    return Ok(OverlayAction::Execute(item.command.clone()));
                 }
-                if self.focus == FocusPane::List
-                    && self
-                        .selected_item()
-                        .map(|item| item.actions().len() > 1)
-                        .unwrap_or(false)
-                {
-                    self.focus = FocusPane::Action;
-                    return Ok(OverlayAction::Continue);
-                }
-                if let Some(command) = self.command_for_selected() {
-                    return Ok(OverlayAction::Execute(command));
-                }
+                return Ok(OverlayAction::Close);
             }
             KeyCode::Char(c)
                 if !modifiers.contains(KeyModifiers::CONTROL)
-                    && !modifiers.contains(KeyModifiers::ALT)
-                    && !c.is_whitespace() =>
+                    && !modifiers.contains(KeyModifiers::ALT) =>
             {
                 self.filter.push(c);
                 self.apply_filter();
             }
             _ => {}
         }
-
-        let max_action = self
-            .selected_item()
-            .map(|item| item.actions().len().saturating_sub(1))
-            .unwrap_or(0);
-        self.selected_action = self.selected_action.min(max_action);
         Ok(OverlayAction::Continue)
     }
 
     pub fn render(&self, frame: &mut Frame) {
-        let area = centered_rect(82, 65, frame.area());
+        let area = centered_rect(84, 68, frame.area());
 
         let block = Block::default()
             .title(format!(" {} ", self.title))
@@ -304,12 +198,12 @@ impl AccountPicker {
                     " Enter ",
                     Style::default().fg(Color::White).bg(Color::DarkGray),
                 ),
-                Span::styled(" run action  ", Style::default().fg(Color::DarkGray)),
+                Span::styled(" run  ", Style::default().fg(Color::DarkGray)),
                 Span::styled(
-                    " Tab ",
+                    " / ",
                     Style::default().fg(Color::White).bg(Color::DarkGray),
                 ),
-                Span::styled(" actions  ", Style::default().fg(Color::DarkGray)),
+                Span::styled(" type to filter  ", Style::default().fg(Color::DarkGray)),
                 Span::styled(
                     " Esc ",
                     Style::default().fg(Color::White).bg(Color::DarkGray),
@@ -328,22 +222,14 @@ impl AccountPicker {
         };
         let rows = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(2),
-                Constraint::Min(8),
-                Constraint::Length(5),
-            ])
+            .constraints([Constraint::Length(2), Constraint::Min(10), Constraint::Length(2)])
             .split(inner);
-        let cols = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(54), Constraint::Percentage(46)])
-            .split(rows[1]);
 
         let filter_line = vec![
             Span::styled("Search ", Style::default().fg(Color::DarkGray)),
             Span::styled(
                 if self.filter.is_empty() {
-                    "type to filter".to_string()
+                    "type provider, account, or setting".to_string()
                 } else {
                     self.filter.clone()
                 },
@@ -362,160 +248,88 @@ impl AccountPicker {
 
         let list_block = Block::default()
             .title(Span::styled(
-                " Accounts ",
-                if self.focus == FocusPane::List {
-                    Style::default().fg(Color::White).bold()
-                } else {
-                    Style::default().fg(Color::Gray)
-                },
+                " Accounts & Provider Settings ",
+                Style::default().fg(Color::White).bold(),
             ))
             .borders(Borders::ALL)
             .style(Style::default().bg(PANEL_BG))
-            .border_style(Style::default().fg(if self.focus == FocusPane::List {
-                PANEL_BORDER_ACTIVE
-            } else {
-                PANEL_BORDER_INACTIVE
-            }));
+            .border_style(Style::default().fg(PANEL_BORDER_ACTIVE));
+        let list_inner = list_block.inner(rows[1]);
+        frame.render_widget(list_block, rows[1]);
 
-        let mut list_lines = Vec::new();
+        let available_rows = list_inner.height.max(1) as usize;
+        let start = self
+            .selected
+            .saturating_sub(available_rows.saturating_sub(1).min(available_rows / 2));
+        let end = (start + available_rows).min(self.filtered.len());
+
+        let mut lines = Vec::new();
         if self.filtered.is_empty() {
-            list_lines.push(Line::from(Span::styled(
-                "No matching accounts",
+            lines.push(Line::from(Span::styled(
+                "No matching account or provider actions",
                 Style::default().fg(Color::Gray).italic(),
             )));
         } else {
-            for (visible_idx, idx) in self.filtered.iter().enumerate() {
-                let item = &self.items[*idx];
+            for visible_idx in start..end {
+                let idx = self.filtered[visible_idx];
+                let item = &self.items[idx];
                 let selected = visible_idx == self.selected;
-                let provider_style = match item.provider {
-                    AccountProviderKind::Anthropic => {
-                        Style::default().fg(Color::Rgb(229, 187, 111))
-                    }
-                    AccountProviderKind::OpenAi => Style::default().fg(Color::Rgb(111, 214, 181)),
-                };
                 let row_style = if selected {
                     Style::default().bg(Color::Rgb(38, 42, 56))
                 } else {
                     Style::default()
                 };
-                let title_style = match &item.kind {
-                    AccountPickerItemKind::Existing {
-                        is_active: true, ..
-                    } => Style::default().fg(Color::White).bold(),
-                    AccountPickerItemKind::Existing { .. } => Style::default().fg(Color::White),
-                    AccountPickerItemKind::NewAccount => {
-                        Style::default().fg(Color::Rgb(180, 190, 220))
-                    }
-                };
-                list_lines.push(Line::from(vec![
+                lines.push(Line::from(vec![
                     Span::styled(
                         if selected { "▸ " } else { "  " },
                         row_style.fg(Color::White),
                     ),
                     Span::styled(
-                        format!("{:<7}", item.provider.short_name()),
-                        row_style.patch(provider_style),
+                        format!("{:<18}", item.provider_label),
+                        row_style.patch(provider_style(&item.provider_id)),
                     ),
-                    Span::styled(format!(" {}", item.title()), row_style.patch(title_style)),
+                    Span::styled(format!(" {}", item.title), row_style.fg(Color::White)),
                 ]));
-                list_lines.push(Line::from(vec![
+                lines.push(Line::from(vec![
                     Span::raw("  "),
                     Span::styled(
-                        truncate_line(&item.subtitle(), cols[0].width.saturating_sub(2) as usize),
+                        truncate_with_ellipsis(&item.subtitle, list_inner.width.saturating_sub(2) as usize),
                         row_style.fg(Color::Gray),
                     ),
                 ]));
-                list_lines.push(Line::from(""));
             }
         }
-        frame.render_widget(
-            Paragraph::new(list_lines)
-                .block(list_block)
-                .wrap(Wrap { trim: false }),
-            cols[0],
-        );
 
-        let detail_block = Block::default()
-            .title(Span::styled(
-                " Actions ",
-                if self.focus == FocusPane::Action {
-                    Style::default().fg(Color::White).bold()
-                } else {
-                    Style::default().fg(Color::Gray)
-                },
-            ))
-            .borders(Borders::ALL)
-            .style(Style::default().bg(PANEL_BG))
-            .border_style(Style::default().fg(if self.focus == FocusPane::Action {
-                PANEL_BORDER_ACTIVE
-            } else {
-                PANEL_BORDER_INACTIVE
-            }));
+        frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), list_inner);
 
-        let detail_lines = if let Some(item) = self.selected_item() {
-            let mut lines = vec![Line::from(vec![
-                Span::styled(
-                    item.provider.display_name(),
-                    Style::default().fg(Color::White).bold(),
-                ),
-                Span::raw("  "),
-                Span::styled(item.title(), Style::default().fg(Color::Gray)),
-            ])];
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                item.subtitle(),
+        let footer = Paragraph::new(Line::from(vec![
+            Span::styled("Tip ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                "Use `/account <provider> settings` for a text view or edit defaults directly here.",
                 Style::default().fg(Color::Gray),
-            )));
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "Available actions",
-                Style::default().fg(Color::DarkGray).bold(),
-            )));
-            for (idx, action) in item.actions().iter().enumerate() {
-                let selected = idx == self.selected_action;
-                let style = if selected {
-                    Style::default()
-                        .fg(Color::White)
-                        .bg(Color::Rgb(52, 70, 108))
-                        .bold()
-                } else {
-                    Style::default().fg(Color::Gray)
-                };
-                lines.push(Line::from(Span::styled(format!("  {}  ", action), style)));
-            }
-            lines
-        } else {
-            vec![Line::from(Span::styled(
-                "No accounts configured yet",
-                Style::default().fg(Color::Gray),
-            ))]
-        };
-        frame.render_widget(
-            Paragraph::new(detail_lines)
-                .block(detail_block)
-                .wrap(Wrap { trim: false }),
-            cols[1],
-        );
-
-        let footer = Paragraph::new(vec![
-            Line::from(Span::styled(
-                "Use this picker to switch accounts quickly, restart a login for an existing label, remove stale accounts, or create a new labeled login.",
-                Style::default().fg(Color::Gray),
-            )),
-            Line::from(""),
-            Line::from(vec![
-                Span::styled("Tip ", Style::default().fg(Color::DarkGray)),
-                Span::styled(
-                    "Create asks for a label next, then launches the provider login flow.",
-                    Style::default().fg(Color::White),
-                ),
-            ]),
-        ]);
+            ),
+        ]));
         frame.render_widget(footer, rows[2]);
     }
 }
 
-fn truncate_line(input: &str, width: usize) -> String {
+fn provider_style(provider_id: &str) -> Style {
+    let color = match provider_id {
+        "claude" => Color::Rgb(229, 187, 111),
+        "openai" => Color::Rgb(111, 214, 181),
+        "gemini" | "google" => Color::Rgb(129, 184, 255),
+        "copilot" => Color::Rgb(182, 154, 255),
+        "cursor" => Color::Rgb(131, 215, 255),
+        "openrouter" | "openai-compatible" | "opencode" | "opencode-go" | "zai"
+        | "chutes" | "cerebras" | "alibaba-coding-plan" | "jcode" => {
+            Color::Rgb(189, 200, 255)
+        }
+        _ => Color::Rgb(180, 190, 220),
+    };
+    Style::default().fg(color).bold()
+}
+
+fn truncate_with_ellipsis(input: &str, width: usize) -> String {
     if width == 0 {
         return String::new();
     }
@@ -559,10 +373,13 @@ mod tests {
     fn test_account_picker_preserves_underlying_background_outside_panels() {
         let picker = AccountPicker::new(
             " Accounts ",
-            vec![AccountPickerItem {
-                provider: AccountProviderKind::OpenAi,
-                kind: AccountPickerItemKind::NewAccount,
-            }],
+            vec![AccountPickerItem::action(
+                "openai",
+                "OpenAI",
+                "Add account",
+                "Start login flow",
+                AccountPickerCommand::SubmitInput("/account openai add default".to_string()),
+            )],
         );
 
         let backend = TestBackend::new(40, 12);
@@ -576,7 +393,7 @@ mod tests {
             })
             .expect("draw failed");
 
-        let overlay = centered_rect(82, 65, Rect::new(0, 0, 40, 12));
+        let overlay = centered_rect(84, 68, Rect::new(0, 0, 40, 12));
         let probe = &terminal.backend().buffer()[(overlay.x + overlay.width - 3, overlay.y + 2)];
         assert_eq!(probe.symbol(), "X");
         assert_ne!(probe.bg, Color::Rgb(18, 21, 30));
