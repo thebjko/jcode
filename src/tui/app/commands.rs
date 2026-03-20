@@ -21,14 +21,14 @@ pub(super) fn reset_current_session(app: &mut App) {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ManualSubagentSpec {
-    subagent_type: String,
-    model: Option<String>,
-    session_id: Option<String>,
-    prompt: String,
+pub(super) struct ManualSubagentSpec {
+    pub(super) subagent_type: String,
+    pub(super) model: Option<String>,
+    pub(super) session_id: Option<String>,
+    pub(super) prompt: String,
 }
 
-fn current_subagent_model_summary(app: &App) -> String {
+pub(super) fn current_subagent_model_summary(app: &App) -> String {
     match app.session.subagent_model.as_deref() {
         Some(model) => format!("fixed `{}`", model),
         None => format!("inherit current (`{}`)", app.provider.model()),
@@ -44,7 +44,7 @@ fn derive_subagent_description(prompt: &str) -> String {
     }
 }
 
-fn parse_manual_subagent_spec(rest: &str) -> Result<ManualSubagentSpec, String> {
+pub(super) fn parse_manual_subagent_spec(rest: &str) -> Result<ManualSubagentSpec, String> {
     let mut iter = rest.split_whitespace().peekable();
     let mut subagent_type = "general".to_string();
     let mut model = None;
@@ -208,8 +208,7 @@ fn handle_subagent_model_command(app: &mut App, trimmed: &str) -> bool {
 
     if app.is_remote {
         app.push_display_message(DisplayMessage::error(
-            "`/subagent-model` is currently only available in a local jcode TUI session."
-                .to_string(),
+            "`/subagent-model` requires a live jcode server connection in remote mode.".to_string(),
         ));
         return true;
     }
@@ -255,7 +254,7 @@ fn handle_subagent_command(app: &mut App, trimmed: &str) -> bool {
 
     if app.is_remote {
         app.push_display_message(DisplayMessage::error(
-            "`/subagent` is currently only available in a local jcode TUI session.".to_string(),
+            "`/subagent` requires a live jcode server connection in remote mode.".to_string(),
         ));
         return true;
     }

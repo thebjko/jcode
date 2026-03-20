@@ -400,6 +400,35 @@ impl RemoteConnection {
         self.send_request(request).await
     }
 
+    /// Set or clear the session-scoped subagent model on the server.
+    pub async fn set_subagent_model(&mut self, model: Option<String>) -> Result<()> {
+        let request = Request::SetSubagentModel {
+            id: self.next_request_id,
+            model,
+        };
+        self.next_request_id += 1;
+        self.send_request(request).await
+    }
+
+    /// Launch a subagent immediately on the active remote session.
+    pub async fn run_subagent(
+        &mut self,
+        prompt: String,
+        subagent_type: String,
+        model: Option<String>,
+        session_id: Option<String>,
+    ) -> Result<()> {
+        let request = Request::RunSubagent {
+            id: self.next_request_id,
+            prompt,
+            subagent_type,
+            model,
+            session_id,
+        };
+        self.next_request_id += 1;
+        self.send_request(request).await
+    }
+
     /// Set Copilot premium request conservation mode on the server
     pub async fn set_premium_mode(&mut self, mode: u8) -> Result<()> {
         let request = Request::SetPremiumMode {

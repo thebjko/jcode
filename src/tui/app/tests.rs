@@ -4,6 +4,18 @@ use crate::tui::TuiState;
 use ratatui::layout::Rect;
 use std::sync::{Arc as StdArc, Mutex as StdMutex};
 
+fn cleanup_background_task_files(task_id: &str) {
+    let task_dir = std::env::temp_dir().join("jcode-bg-tasks");
+    let _ = std::fs::remove_file(task_dir.join(format!("{}.status.json", task_id)));
+    let _ = std::fs::remove_file(task_dir.join(format!("{}.output", task_id)));
+}
+
+fn cleanup_reload_context_file(session_id: &str) {
+    if let Ok(path) = crate::tool::selfdev::ReloadContext::path_for_session(session_id) {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
 // Mock provider for testing
 struct MockProvider;
 
@@ -2958,6 +2970,7 @@ fn test_handle_server_event_history_clears_connection_type_on_session_change_whe
             images: vec![],
             provider_name: Some("claude".to_string()),
             provider_model: Some("claude-sonnet-4-20250514".to_string()),
+            subagent_model: None,
             available_models: vec![],
             available_model_routes: vec![],
             mcp_servers: vec![],
@@ -3003,6 +3016,7 @@ fn test_handle_server_event_history_preserves_connection_type_for_same_session_w
             images: vec![],
             provider_name: Some("claude".to_string()),
             provider_model: Some("claude-sonnet-4-20250514".to_string()),
+            subagent_model: None,
             available_models: vec![],
             available_model_routes: vec![],
             mcp_servers: vec![],
@@ -3492,6 +3506,7 @@ fn test_handle_server_event_history_with_interruption_queues_continuation() {
             images: vec![],
             provider_name: Some("claude".to_string()),
             provider_model: Some("claude-sonnet-4-20250514".to_string()),
+            subagent_model: None,
             available_models: vec![],
             available_model_routes: vec![],
             mcp_servers: vec![],
@@ -3554,6 +3569,7 @@ fn test_handle_server_event_history_without_interruption_does_not_queue() {
             images: vec![],
             provider_name: Some("claude".to_string()),
             provider_model: Some("claude-sonnet-4-20250514".to_string()),
+            subagent_model: None,
             available_models: vec![],
             available_model_routes: vec![],
             mcp_servers: vec![],
@@ -3612,6 +3628,79 @@ fn test_finalize_reload_reconnect_marker_only_does_not_queue_selfdev_continuatio
 }
 
 #[test]
+fn test_reload_persisted_background_tasks_note_mentions_running_task() {
+    let session_id = crate::id::new_id("ses_bg_note");
+    let manager = crate::background::global();
+    let info = manager.reserve_task_info();
+    let started_at = chrono::Utc::now().to_rfc3339();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+
+    rt.block_on(manager.register_detached_task(
+        &info,
+        "bash",
+        &session_id,
+        std::process::id(),
+        &started_at,
+        true,
+    ));
+
+    let note = reload_persisted_background_tasks_note(&session_id);
+
+    assert!(note.contains(&info.task_id));
+    assert!(note.contains("Do not rerun those commands"));
+    assert!(note.contains("bg action=\"status\""));
+
+    cleanup_background_task_files(&info.task_id);
+}
+
+#[test]
+fn test_finalize_reload_reconnect_mentions_persisted_background_task() {
+    let mut app = create_test_app();
+    let session_id = crate::id::new_id("ses_reload_bg");
+    let reload_ctx = crate::tool::selfdev::ReloadContext {
+        task_context: Some("Waiting for cargo build --release".to_string()),
+        version_before: "v0.1.100".to_string(),
+        version_after: "abc1234".to_string(),
+        session_id: session_id.clone(),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+    };
+    reload_ctx.save().expect("save reload context");
+
+    let manager = crate::background::global();
+    let info = manager.reserve_task_info();
+    let started_at = chrono::Utc::now().to_rfc3339();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(manager.register_detached_task(
+        &info,
+        "bash",
+        &session_id,
+        std::process::id(),
+        &started_at,
+        true,
+    ));
+
+    remote::finalize_reload_reconnect(
+        &mut app,
+        Some(session_id.as_str()),
+        remote::ReloadReconnectHints {
+            has_reload_ctx_for_session: true,
+            has_client_reload_marker: false,
+        },
+        false,
+    );
+
+    assert_eq!(app.hidden_queued_system_messages.len(), 1);
+    let continuation = &app.hidden_queued_system_messages[0];
+    assert!(continuation.contains("Persisted background task(s)"));
+    assert!(continuation.contains(&info.task_id));
+    assert!(continuation.contains("Do not rerun those commands"));
+    assert!(continuation.contains("bg action=\"output\""));
+
+    cleanup_background_task_files(&info.task_id);
+    cleanup_reload_context_file(&session_id);
+}
+
+#[test]
 fn test_handle_server_event_history_restores_side_panel_snapshot() {
     let mut app = create_test_app();
     let rt = tokio::runtime::Runtime::new().unwrap();
@@ -3638,6 +3727,7 @@ fn test_handle_server_event_history_restores_side_panel_snapshot() {
             images: vec![],
             provider_name: Some("claude".to_string()),
             provider_model: Some("claude-sonnet-4-20250514".to_string()),
+            subagent_model: None,
             available_models: vec![],
             available_model_routes: vec![],
             mcp_servers: vec![],
@@ -3811,6 +3901,7 @@ fn test_duplicate_history_for_same_session_is_ignored_after_fast_path_restore() 
             images: vec![],
             provider_name: Some("claude".to_string()),
             provider_model: Some("claude-sonnet-4-20250514".to_string()),
+            subagent_model: None,
             available_models: vec![],
             available_model_routes: vec![],
             mcp_servers: vec![],
@@ -4002,6 +4093,46 @@ fn test_info_widget_data_includes_connection_type() {
     app.connection_type = Some("https".to_string());
     let data = crate::tui::TuiState::info_widget_data(&app);
     assert_eq!(data.connection_type.as_deref(), Some("https"));
+}
+
+#[test]
+fn test_remote_tui_state_uses_cached_session_model_before_history() {
+    let _guard = crate::storage::lock_test_env();
+    let temp_home = tempfile::TempDir::new().expect("create temp home");
+    let prev_home = std::env::var_os("JCODE_HOME");
+    crate::env::set_var("JCODE_HOME", temp_home.path());
+
+    let session_id = "session_otter_123";
+    let mut session = crate::session::Session::create_with_id(
+        session_id.to_string(),
+        None,
+        Some("remote cached model".to_string()),
+    );
+    session.model = Some("gpt-5.4".to_string());
+    session.save().expect("save remote session");
+
+    let app = App::new_for_remote(Some(session_id.to_string()));
+
+    assert_eq!(crate::tui::TuiState::provider_model(&app), "gpt-5.4");
+    assert_eq!(crate::tui::TuiState::provider_name(&app), "openai");
+    assert_eq!(
+        crate::tui::TuiState::session_display_name(&app).as_deref(),
+        Some("otter")
+    );
+
+    if let Some(prev_home) = prev_home {
+        crate::env::set_var("JCODE_HOME", prev_home);
+    } else {
+        crate::env::remove_var("JCODE_HOME");
+    }
+}
+
+#[test]
+fn test_remote_tui_state_shows_connecting_placeholder_without_cached_model() {
+    let app = App::new_for_remote(None);
+
+    assert_eq!(crate::tui::TuiState::provider_model(&app), "connecting…");
+    assert_eq!(crate::tui::TuiState::provider_name(&app), "remote");
 }
 
 #[test]

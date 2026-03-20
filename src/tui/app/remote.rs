@@ -440,6 +440,12 @@ pub(super) async fn connect_with_retry(
 ) -> Result<ConnectOutcome> {
     match RemoteConnection::connect_with_session(session_to_resume).await {
         Ok(remote) => {
+            crate::logging::info(&format!(
+                "[TIMING] remote bootstrap: connected after {}ms (resume={:?}, reconnect_attempts={})",
+                app.app_started.elapsed().as_millis(),
+                session_to_resume,
+                state.reconnect_attempts
+            ));
             if let Some(idx) = state.disconnect_msg_idx.take() {
                 if idx < app.display_messages.len() {
                     app.display_messages.remove(idx);
@@ -831,10 +837,13 @@ pub(super) fn finalize_reload_reconnect(
                 .task_context
                 .map(|t| format!("\nTask context: {}", t))
                 .unwrap_or_default();
+            let background_task_note = session_to_resume
+                .map(super::reload_persisted_background_tasks_note)
+                .unwrap_or_default();
 
             let continuation_msg = format!(
-                "Reload succeeded ({} → {}).{} Continue immediately from where you left off. Do not ask the user what to do next. Do not summarize the reload.",
-                ctx.version_before, ctx.version_after, task_info
+                "Reload succeeded ({} → {}).{}{} Continue immediately from where you left off. Do not ask the user what to do next. Do not summarize the reload.",
+                ctx.version_before, ctx.version_after, task_info, background_task_note
             );
 
             crate::logging::info(&format!(
@@ -1715,6 +1724,7 @@ pub(super) fn handle_server_event(
             session_id,
             provider_name,
             provider_model,
+            subagent_model,
             available_models,
             available_model_routes,
             mcp_servers,
@@ -1736,6 +1746,9 @@ pub(super) fn handle_server_event(
             ..
         } => {
             let prev_session_id = app.remote_session_id.clone();
+            let history_message_count = messages.len();
+            let history_mcp_count = mcp_servers.len();
+            let history_model = provider_model.clone();
             remote.set_session_id(session_id.clone());
             app.remote_session_id = Some(session_id.clone());
             crate::set_current_session(&session_id);
@@ -1786,6 +1799,7 @@ pub(super) fn handle_server_event(
                 app.update_context_limit_for_model(&model);
                 app.remote_provider_model = Some(model);
             }
+            app.session.subagent_model = subagent_model;
             if upstream_provider.is_some() {
                 app.upstream_provider = upstream_provider;
             }
@@ -1830,6 +1844,15 @@ pub(super) fn handle_server_event(
 
             let should_apply_history_payload = session_changed || !remote.has_loaded_history();
             if should_apply_history_payload {
+                crate::logging::info(&format!(
+                    "[TIMING] remote bootstrap: history after {}ms (session={}, resumed={}, messages={}, mcp_servers={}, model={})",
+                    app.app_started.elapsed().as_millis(),
+                    session_id,
+                    app.resume_session_id.is_some(),
+                    history_message_count,
+                    history_mcp_count,
+                    history_model.as_deref().unwrap_or("<none>")
+                ));
                 remote.mark_history_loaded();
                 for msg in messages {
                     app.push_display_message(DisplayMessage {
@@ -2485,6 +2508,10 @@ pub(super) async fn handle_remote_key(
         return app.handle_session_picker_key(code, modifiers);
     }
 
+    if app.login_picker_overlay.is_some() {
+        return app.handle_login_picker_key(code, modifiers);
+    }
+
     if app.account_picker_overlay.is_some() {
         if let Some(command) = app.next_account_picker_action(code, modifiers)? {
             app.handle_account_picker_command_remote(remote, command)
@@ -3007,6 +3034,81 @@ pub(super) async fn handle_remote_key(
 
                 if trimmed == "/model" || trimmed == "/models" {
                     app.open_model_picker();
+                    return Ok(());
+                }
+
+                if trimmed.starts_with("/subagent-model") {
+                    let rest = trimmed
+                        .strip_prefix("/subagent-model")
+                        .unwrap_or_default()
+                        .trim();
+                    if rest.is_empty() || matches!(rest, "show" | "status") {
+                        let current_model = app
+                            .remote_provider_model
+                            .clone()
+                            .unwrap_or_else(|| app.provider.model());
+                        let summary = match app.session.subagent_model.as_deref() {
+                            Some(model) => format!("fixed `{}`", model),
+                            None => format!("inherit current (`{}`)", current_model),
+                        };
+                        app.push_display_message(DisplayMessage::system(format!(
+                            "Subagent model for this session: {}\n\nUse `/subagent-model <name>` to pin a model, or `/subagent-model inherit` to use the current model.",
+                            summary
+                        )));
+                        return Ok(());
+                    }
+                    if matches!(rest, "inherit" | "reset" | "clear") {
+                        let current_model = app
+                            .remote_provider_model
+                            .clone()
+                            .unwrap_or_else(|| app.provider.model());
+                        remote.set_subagent_model(None).await?;
+                        app.session.subagent_model = None;
+                        app.push_display_message(DisplayMessage::system(format!(
+                            "Subagent model reset to inherit the current model (`{}`).",
+                            current_model
+                        )));
+                        app.set_status_notice("Subagent model: inherit");
+                        return Ok(());
+                    }
+                    remote.set_subagent_model(Some(rest.to_string())).await?;
+                    app.session.subagent_model = Some(rest.to_string());
+                    app.push_display_message(DisplayMessage::system(format!(
+                        "Subagent model pinned to `{}` for this session.",
+                        rest
+                    )));
+                    app.set_status_notice(format!("Subagent model → {}", rest));
+                    return Ok(());
+                }
+
+                if trimmed.starts_with("/subagent") {
+                    let rest = trimmed.strip_prefix("/subagent").unwrap_or_default().trim();
+                    if rest.is_empty() {
+                        app.push_display_message(DisplayMessage::error(
+                            "Usage: `/subagent [--type <kind>] [--model <name>] [--continue <session_id>] <prompt>`",
+                        ));
+                        return Ok(());
+                    }
+                    match super::commands::parse_manual_subagent_spec(rest) {
+                        Ok(spec) => {
+                            remote
+                                .run_subagent(
+                                    spec.prompt,
+                                    spec.subagent_type,
+                                    spec.model,
+                                    spec.session_id,
+                                )
+                                .await?;
+                            app.subagent_status = Some("starting subagent".to_string());
+                            app.set_status_notice("Running subagent");
+                        }
+                        Err(error) => {
+                            app.push_display_message(DisplayMessage::error(format!(
+                                "{}\nUsage: `/subagent [--type <kind>] [--model <name>] [--continue <session_id>] <prompt>`",
+                                error
+                            )));
+                        }
+                    }
                     return Ok(());
                 }
 

@@ -1,6 +1,7 @@
 use super::client_actions::{
     handle_agent_task, handle_compact, handle_input_shell, handle_notify_session,
-    handle_set_feature, handle_split, handle_stdin_response, handle_trigger_memory_extraction,
+    handle_run_subagent, handle_set_feature, handle_set_subagent_model, handle_split,
+    handle_stdin_response, handle_trigger_memory_extraction,
 };
 use super::client_comm::{
     handle_comm_list, handle_comm_message, handle_comm_read, handle_comm_share,
@@ -721,6 +722,28 @@ pub(super) async fn handle_client(
 
             Request::SetModel { id, model } => {
                 handle_set_model(id, model, &agent, &client_event_tx).await;
+            }
+
+            Request::SetSubagentModel { id, model } => {
+                handle_set_subagent_model(id, model, &agent, &client_event_tx).await;
+            }
+
+            Request::RunSubagent {
+                id,
+                prompt,
+                subagent_type,
+                model,
+                session_id,
+            } => {
+                handle_run_subagent(
+                    id,
+                    prompt,
+                    subagent_type,
+                    model,
+                    session_id,
+                    &agent,
+                    &client_event_tx,
+                );
             }
 
             Request::SetReasoningEffort { id, effort } => {

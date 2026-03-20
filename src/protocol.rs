@@ -158,6 +158,26 @@ pub enum Request {
     #[serde(rename = "set_model")]
     SetModel { id: u64, model: String },
 
+    /// Set or clear the session-scoped subagent model preference.
+    #[serde(rename = "set_subagent_model")]
+    SetSubagentModel {
+        id: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
+    },
+
+    /// Launch a subagent immediately in the active session.
+    #[serde(rename = "run_subagent")]
+    RunSubagent {
+        id: u64,
+        prompt: String,
+        subagent_type: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_id: Option<String>,
+    },
+
     /// Set reasoning effort for OpenAI models (none|low|medium|high|xhigh)
     #[serde(rename = "set_reasoning_effort")]
     SetReasoningEffort { id: u64, effort: String },
@@ -684,6 +704,9 @@ pub enum ServerEvent {
         /// Service tier override for OpenAI models
         #[serde(skip_serializing_if = "Option::is_none")]
         service_tier: Option<String>,
+        /// Session-scoped preferred model for subagents.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        subagent_model: Option<String>,
         /// Active compaction mode for this session
         #[serde(default)]
         compaction_mode: crate::config::CompactionMode,
@@ -998,6 +1021,8 @@ impl Request {
             Request::InputShell { id, .. } => *id,
             Request::CycleModel { id, .. } => *id,
             Request::SetModel { id, .. } => *id,
+            Request::SetSubagentModel { id, .. } => *id,
+            Request::RunSubagent { id, .. } => *id,
             Request::SetReasoningEffort { id, .. } => *id,
             Request::SetServiceTier { id, .. } => *id,
             Request::SetTransport { id, .. } => *id,

@@ -1389,6 +1389,17 @@ impl Agent {
         Ok(())
     }
 
+    pub fn subagent_model(&self) -> Option<String> {
+        self.session.subagent_model.clone()
+    }
+
+    pub fn set_subagent_model(&mut self, model: Option<String>) -> Result<()> {
+        self.session.subagent_model = model;
+        self.log_env_snapshot("set_subagent_model");
+        self.session.save()?;
+        Ok(())
+    }
+
     /// Get the short/friendly name for this session (e.g., "fox")
     pub fn session_short_name(&self) -> Option<&str> {
         self.session.short_name.as_deref()
@@ -1744,6 +1755,55 @@ impl Agent {
             execution_mode: ToolExecutionMode::Direct,
         };
         self.registry.execute(name, input, ctx).await
+    }
+
+    pub fn add_manual_tool_use(
+        &mut self,
+        tool_call_id: String,
+        tool_name: String,
+        input: serde_json::Value,
+    ) -> Result<String> {
+        let message_id = self.add_message(
+            Role::Assistant,
+            vec![ContentBlock::ToolUse {
+                id: tool_call_id,
+                name: tool_name,
+                input,
+            }],
+        );
+        self.session.save()?;
+        Ok(message_id)
+    }
+
+    pub fn add_manual_tool_result(
+        &mut self,
+        tool_call_id: String,
+        output: crate::tool::ToolOutput,
+        duration_ms: u64,
+    ) -> Result<()> {
+        let blocks = tool_output_to_content_blocks(tool_call_id, output);
+        self.add_message_with_duration(Role::User, blocks, Some(duration_ms));
+        self.session.save()?;
+        Ok(())
+    }
+
+    pub fn add_manual_tool_error(
+        &mut self,
+        tool_call_id: String,
+        error: String,
+        duration_ms: u64,
+    ) -> Result<()> {
+        self.add_message_with_duration(
+            Role::User,
+            vec![ContentBlock::ToolResult {
+                tool_use_id: tool_call_id,
+                content: error,
+                is_error: Some(true),
+            }],
+            Some(duration_ms),
+        );
+        self.session.save()?;
+        Ok(())
     }
 
     fn validate_tool_allowed(&self, name: &str) -> Result<()> {
