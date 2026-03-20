@@ -596,9 +596,7 @@ impl crate::tui::TuiState for App {
                 })
                 .collect()
         } else {
-            session_id
-                .and_then(|id| crate::todo::load_todos(id).ok())
-                .unwrap_or_default()
+            gather_todos_for_session(session_id)
         };
 
         let context_info = self.context_info();
@@ -635,64 +633,7 @@ impl crate::tui::TuiState for App {
             }
         });
 
-        // Gather memory info
-        let memory_info = if self.memory_enabled {
-            use crate::memory::MemoryManager;
-
-            let manager = MemoryManager::new();
-            let project_graph = manager.load_project_graph().ok();
-            let global_graph = manager.load_global_graph().ok();
-
-            let (project_count, global_count, by_category) = {
-                let mut by_category = std::collections::HashMap::new();
-                let project_count = project_graph
-                    .as_ref()
-                    .map(|p| {
-                        for entry in p.memories.values() {
-                            *by_category.entry(entry.category.to_string()).or_insert(0) += 1;
-                        }
-                        p.memory_count()
-                    })
-                    .unwrap_or(0);
-                let global_count = global_graph
-                    .as_ref()
-                    .map(|g| {
-                        for entry in g.memories.values() {
-                            *by_category.entry(entry.category.to_string()).or_insert(0) += 1;
-                        }
-                        g.memory_count()
-                    })
-                    .unwrap_or(0);
-                (project_count, global_count, by_category)
-            };
-
-            let total_count = project_count + global_count;
-            let activity = crate::memory::get_activity();
-
-            // Build graph topology for visualization
-            let (graph_nodes, graph_edges) = crate::tui::info_widget::build_graph_topology(
-                project_graph.as_ref(),
-                global_graph.as_ref(),
-            );
-
-            // Show memory info if we have memories OR if there's activity (agent working)
-            if total_count > 0 || activity.is_some() {
-                Some(crate::tui::info_widget::MemoryInfo {
-                    total_count,
-                    project_count,
-                    global_count,
-                    by_category,
-                    sidecar_available: true,
-                    activity,
-                    graph_nodes,
-                    graph_edges,
-                })
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        let memory_info = gather_memory_info(self.memory_enabled);
 
         // Gather swarm info
         let swarm_info = if self.swarm_enabled {
@@ -840,38 +781,7 @@ impl crate::tui::TuiState for App {
             upstream_provider: self.upstream_provider.clone(),
             connection_type: self.connection_type.clone(),
             diagrams,
-            ambient_info: if crate::config::config().ambient.enabled {
-                let state = crate::ambient::AmbientState::load().unwrap_or_default();
-                let last_run_ago = state.last_run.map(|t| {
-                    let ago = chrono::Utc::now() - t;
-                    if ago.num_hours() > 0 {
-                        format!("{}h ago", ago.num_hours())
-                    } else {
-                        format!("{}m ago", ago.num_minutes().max(0))
-                    }
-                });
-                let next_wake = match &state.status {
-                    crate::ambient::AmbientStatus::Scheduled { next_wake } => {
-                        let until = *next_wake - chrono::Utc::now();
-                        let mins = until.num_minutes().max(0);
-                        Some(format!("in {}m", mins))
-                    }
-                    _ => None,
-                };
-                Some(crate::tui::info_widget::AmbientWidgetData {
-                    status: state.status,
-                    queue_count: crate::ambient::AmbientManager::new()
-                        .map(|m| m.queue().len())
-                        .unwrap_or(0),
-                    next_queue_preview: None,
-                    last_run_ago,
-                    last_summary: state.last_summary,
-                    next_wake,
-                    budget_percent: None,
-                })
-            } else {
-                None
-            },
+            ambient_info: gather_ambient_info(crate::config::config().ambient.enabled),
             observed_context_tokens: self.current_stream_context_tokens(),
             is_compacting: if !self.is_remote && self.provider.supports_compaction() {
                 let compaction = self.registry.compaction();

@@ -306,6 +306,14 @@ impl Agent {
         }
     }
 
+    pub fn available_skill_names(&self) -> Vec<String> {
+        self.skills
+            .list()
+            .iter()
+            .map(|skill| skill.name.clone())
+            .collect()
+    }
+
     fn is_context_limit_error(error: &str) -> bool {
         let lower = error.to_lowercase();
         lower.contains("context length")

@@ -80,6 +80,7 @@ pub(super) async fn send_history(
         provider_model,
         available_models,
         available_model_routes,
+        skills,
         tool_names,
         upstream_provider,
         connection_type,
@@ -98,6 +99,7 @@ pub(super) async fn send_history(
             agent_guard.provider_model(),
             agent_guard.available_models_display(),
             agent_guard.model_routes(),
+            agent_guard.available_skill_names(),
             agent_guard.tool_names().await,
             agent_guard.last_upstream_provider(),
             agent_guard.last_connection_type(),
@@ -120,16 +122,6 @@ pub(super) async fn send_history(
         .into_iter()
         .map(|(name, count)| format!("{name}:{count}"))
         .collect();
-
-    let skills = crate::skill::SkillRegistry::load()
-        .map(|registry| {
-            registry
-                .list()
-                .iter()
-                .map(|skill| skill.name.clone())
-                .collect()
-        })
-        .unwrap_or_default();
 
     let (all_sessions, current_client_count) = {
         let sessions_guard = sessions.read().await;

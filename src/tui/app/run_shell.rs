@@ -67,6 +67,15 @@ impl App {
         let mut remote_state = remote::RemoteRunState::default();
 
         'outer: loop {
+            if self.display_messages.is_empty() {
+                self.set_status_notice(if self.server_spawning {
+                    "Starting server..."
+                } else {
+                    "Connecting to server..."
+                });
+            }
+            terminal.draw(|frame| crate::tui::ui::draw(frame, &self))?;
+
             let session_to_resume = self.reconnect_target_session_id();
 
             let mut remote = match remote::connect_with_retry(

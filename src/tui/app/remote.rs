@@ -734,26 +734,13 @@ pub(super) async fn handle_post_connect<B: ratatui::backend::Backend>(
     state.reconnect_attempts = 0;
     state.initial_server_start = false;
 
-    if !same_session_reload_fast_path {
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
-        while !remote.has_loaded_history() {
-            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            if remaining.is_zero() {
-                crate::logging::warn("Timed out waiting for History event from server");
-                break;
-            }
-            match tokio::time::timeout(remaining, remote.next_event()).await {
-                Ok(RemoteRead::Event(event)) => {
-                    handle_server_event(app, event, remote);
-                }
-                _ => break,
-            }
-        }
-    } else {
+    if same_session_reload_fast_path {
         crate::logging::info(
             "Same-session reload fast path: skipping blocking History wait and reusing local display state",
         );
         remote.mark_history_loaded();
+    } else if !remote.has_loaded_history() {
+        app.set_status_notice("Loading session...");
     }
 
     if remote.has_loaded_history() && !app.is_processing && !app.queued_messages.is_empty() {
@@ -971,11 +958,15 @@ pub(super) fn handle_disconnect(
 }
 
 async fn process_remote_followups(app: &mut App, remote: &mut RemoteConnection) {
+    if !remote.has_loaded_history() {
+        return;
+    }
+
     if app.pending_server_reload && !app.is_processing {
         app.pending_server_reload = false;
         app.push_display_message(DisplayMessage::system(
             "ℹ Newer server binary detected. Automatic reload is disabled to avoid interrupting other attached clients. Use `/reload` manually when you're ready.".to_string(),
-        ));
+            ));
         app.set_status_notice("Server update available — manual /reload recommended");
     }
 

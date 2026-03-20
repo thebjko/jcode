@@ -1,4 +1,5 @@
-use crate::tui::info_widget::GitInfo;
+use crate::todo::TodoItem;
+use crate::tui::info_widget::{AmbientWidgetData, GitInfo, MemoryInfo};
 use crossterm::event::{KeyCode, KeyModifiers};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -802,6 +803,168 @@ pub(super) fn gather_git_info() -> Option<GitInfo> {
     }
 
     let result = gather_git_info_inner();
+
+    if let Ok(mut guard) = CACHE.lock() {
+        *guard = Some((Instant::now(), result.clone()));
+    }
+
+    result
+}
+
+pub(super) fn gather_todos_for_session(session_id: Option<&str>) -> Vec<TodoItem> {
+    use std::collections::HashMap;
+    use std::sync::{LazyLock, Mutex};
+    use std::time::Instant;
+
+    static CACHE: LazyLock<Mutex<HashMap<String, (Instant, Vec<TodoItem>)>>> =
+        LazyLock::new(|| Mutex::new(HashMap::new()));
+    const TTL: Duration = Duration::from_secs(1);
+
+    let Some(session_id) = session_id else {
+        return Vec::new();
+    };
+
+    if let Ok(cache) = CACHE.lock() {
+        if let Some((ts, todos)) = cache.get(session_id) {
+            if ts.elapsed() < TTL {
+                return todos.clone();
+            }
+        }
+    }
+
+    let todos = crate::todo::load_todos(session_id).unwrap_or_default();
+
+    if let Ok(mut cache) = CACHE.lock() {
+        cache.insert(session_id.to_string(), (Instant::now(), todos.clone()));
+    }
+
+    todos
+}
+
+pub(super) fn gather_memory_info(memory_enabled: bool) -> Option<MemoryInfo> {
+    use std::sync::Mutex;
+    use std::time::Instant;
+
+    static CACHE: Mutex<Option<(Instant, Option<MemoryInfo>)>> = Mutex::new(None);
+    const TTL: Duration = Duration::from_secs(2);
+
+    if !memory_enabled {
+        return None;
+    }
+
+    if let Ok(guard) = CACHE.lock() {
+        if let Some((ts, ref cached)) = *guard {
+            if ts.elapsed() < TTL {
+                return cached.clone();
+            }
+        }
+    }
+
+    use crate::memory::MemoryManager;
+
+    let manager = MemoryManager::new();
+    let project_graph = manager.load_project_graph().ok();
+    let global_graph = manager.load_global_graph().ok();
+
+    let (project_count, global_count, by_category) = {
+        let mut by_category = std::collections::HashMap::new();
+        let project_count = project_graph
+            .as_ref()
+            .map(|p| {
+                for entry in p.memories.values() {
+                    *by_category.entry(entry.category.to_string()).or_insert(0) += 1;
+                }
+                p.memory_count()
+            })
+            .unwrap_or(0);
+        let global_count = global_graph
+            .as_ref()
+            .map(|g| {
+                for entry in g.memories.values() {
+                    *by_category.entry(entry.category.to_string()).or_insert(0) += 1;
+                }
+                g.memory_count()
+            })
+            .unwrap_or(0);
+        (project_count, global_count, by_category)
+    };
+
+    let total_count = project_count + global_count;
+    let activity = crate::memory::get_activity();
+    let (graph_nodes, graph_edges) = crate::tui::info_widget::build_graph_topology(
+        project_graph.as_ref(),
+        global_graph.as_ref(),
+    );
+
+    let result = if total_count > 0 || activity.is_some() {
+        Some(MemoryInfo {
+            total_count,
+            project_count,
+            global_count,
+            by_category,
+            sidecar_available: true,
+            activity,
+            graph_nodes,
+            graph_edges,
+        })
+    } else {
+        None
+    };
+
+    if let Ok(mut guard) = CACHE.lock() {
+        *guard = Some((Instant::now(), result.clone()));
+    }
+
+    result
+}
+
+pub(super) fn gather_ambient_info(ambient_enabled: bool) -> Option<AmbientWidgetData> {
+    use std::sync::Mutex;
+    use std::time::Instant;
+
+    static CACHE: Mutex<Option<(Instant, Option<AmbientWidgetData>)>> = Mutex::new(None);
+    const TTL: Duration = Duration::from_secs(2);
+
+    if !ambient_enabled {
+        return None;
+    }
+
+    if let Ok(guard) = CACHE.lock() {
+        if let Some((ts, ref cached)) = *guard {
+            if ts.elapsed() < TTL {
+                return cached.clone();
+            }
+        }
+    }
+
+    let state = crate::ambient::AmbientState::load().unwrap_or_default();
+    let last_run_ago = state.last_run.map(|t| {
+        let ago = chrono::Utc::now() - t;
+        if ago.num_hours() > 0 {
+            format!("{}h ago", ago.num_hours())
+        } else {
+            format!("{}m ago", ago.num_minutes().max(0))
+        }
+    });
+    let next_wake = match &state.status {
+        crate::ambient::AmbientStatus::Scheduled { next_wake } => {
+            let until = *next_wake - chrono::Utc::now();
+            let mins = until.num_minutes().max(0);
+            Some(format!("in {}m", mins))
+        }
+        _ => None,
+    };
+    let result = Some(AmbientWidgetData {
+        status: state.status,
+        queue_count: crate::ambient::AmbientManager::new()
+            .map(|m| m.queue().len())
+            .unwrap_or(0),
+        next_queue_preview: None,
+        last_run_ago,
+        last_summary: state.last_summary,
+        next_wake,
+        budget_percent: None,
+    });
 
     if let Ok(mut guard) = CACHE.lock() {
         *guard = Some((Instant::now(), result.clone()));
