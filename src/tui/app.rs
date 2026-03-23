@@ -198,6 +198,21 @@ enum SendAction {
     Interleave,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ImproveMode {
+    Run,
+    Plan,
+}
+
+impl ImproveMode {
+    pub(super) fn status_label(self) -> &'static str {
+        match self {
+            Self::Run => "active improvement loop",
+            Self::Plan => "plan-only",
+        }
+    }
+}
+
 /// State for an in-progress OAuth/API-key login flow triggered by `/login`.
 
 /// TUI Application state
@@ -384,6 +399,8 @@ pub struct App {
     requested_exit_code: Option<i32>,
     // Memory feature toggle for this session
     memory_enabled: bool,
+    // Last requested `/improve` mode for this session.
+    improve_mode: Option<ImproveMode>,
     // Suppress duplicate memory injection messages for near-identical prompts.
     last_injected_memory_signature: Option<(String, Instant)>,
     // Swarm feature toggle for this session

@@ -898,6 +898,121 @@ fn test_commands_alias_shows_help() {
 }
 
 #[test]
+fn test_improve_command_starts_improvement_loop() {
+    let mut app = create_test_app();
+    app.input = "/improve".to_string();
+    app.submit_input();
+
+    assert_eq!(app.improve_mode, Some(ImproveMode::Run));
+    assert!(app.is_processing());
+
+    let msg = app.session.messages.last().expect("missing improve prompt");
+    assert!(matches!(
+        &msg.content[0],
+        ContentBlock::Text { text, .. }
+            if text.contains("You are entering improvement mode for this repository")
+                && text.contains("write a concise ranked todo list using `todowrite`")
+    ));
+
+    let display = app
+        .display_messages()
+        .last()
+        .expect("missing improve launch notice");
+    assert!(display.content.contains("Starting improvement loop"));
+}
+
+#[test]
+fn test_improve_plan_command_is_plan_only_and_accepts_focus() {
+    let mut app = create_test_app();
+    app.input = "/improve plan startup performance".to_string();
+    app.submit_input();
+
+    assert_eq!(app.improve_mode, Some(ImproveMode::Plan));
+    assert!(app.is_processing());
+
+    let msg = app.session.messages.last().expect("missing improve plan prompt");
+    assert!(matches!(
+        &msg.content[0],
+        ContentBlock::Text { text, .. }
+            if text.contains("improvement planning mode")
+                && text.contains("This is plan-only mode")
+                && text.contains("Focus area: startup performance")
+    ));
+}
+
+#[test]
+fn test_improve_status_summarizes_current_todos() {
+    with_temp_jcode_home(|| {
+        let mut app = create_test_app();
+        crate::todo::save_todos(
+            &app.session.id,
+            &[
+                crate::todo::TodoItem {
+                    id: "one".to_string(),
+                    content: "Profile startup path".to_string(),
+                    status: "in_progress".to_string(),
+                    priority: "high".to_string(),
+                    blocked_by: Vec::new(),
+                    assigned_to: None,
+                },
+                crate::todo::TodoItem {
+                    id: "two".to_string(),
+                    content: "Add regression test".to_string(),
+                    status: "completed".to_string(),
+                    priority: "medium".to_string(),
+                    blocked_by: Vec::new(),
+                    assigned_to: None,
+                },
+            ],
+        )
+        .expect("save todos");
+
+        app.improve_mode = Some(ImproveMode::Run);
+        app.input = "/improve status".to_string();
+        app.submit_input();
+
+        let msg = app
+            .display_messages()
+            .last()
+            .expect("missing improve status");
+        assert!(msg.content.contains("Improve status"));
+        assert!(msg.content.contains("1 incomplete · 1 completed · 0 cancelled"));
+        assert!(msg.content.contains("Profile startup path"));
+    });
+}
+
+#[test]
+fn test_improve_stop_without_active_run_reports_idle() {
+    let mut app = create_test_app();
+    app.input = "/improve stop".to_string();
+    app.submit_input();
+
+    let msg = app
+        .display_messages()
+        .last()
+        .expect("missing improve stop idle message");
+    assert!(msg.content.contains("No active improve loop to stop"));
+}
+
+#[test]
+fn test_improve_stop_queues_stop_prompt_and_clears_mode() {
+    let mut app = create_test_app();
+    app.improve_mode = Some(ImproveMode::Run);
+    app.input = "/improve stop".to_string();
+    app.submit_input();
+
+    assert_eq!(app.improve_mode, None);
+    assert!(app.is_processing());
+
+    let msg = app.session.messages.last().expect("missing improve stop prompt");
+    assert!(matches!(
+        &msg.content[0],
+        ContentBlock::Text { text, .. }
+            if text.contains("Stop improvement mode after the current safe point")
+    ));
+}
+
+#[test]
 fn test_fix_resets_provider_session() {
     let mut app = create_test_app();
     app.provider_session_id = Some("provider-session".to_string());
@@ -1672,6 +1787,14 @@ fn test_nested_command_suggestions_filter_partial_suffixes() {
     assert_eq!(
         suggestions.first().map(|(cmd, _)| cmd.as_str()),
         Some("/memory status")
+    );
+
+    let suggestions = app.get_suggestions_for("/improve st");
+    assert!(
+        suggestions
+            .iter()
+            .any(|(cmd, _)| cmd == "/improve status"),
+        "expected /improve status suggestion"
     );
 }
 

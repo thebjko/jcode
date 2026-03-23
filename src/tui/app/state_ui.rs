@@ -262,6 +262,10 @@ impl App {
             ("/rewind".into(), "Rewind conversation to previous message"),
             ("/poke".into(), "Poke model to resume with incomplete todos"),
             (
+                "/improve".into(),
+                "Autonomously find and implement highest-leverage improvements",
+            ),
+            (
                 "/compact".into(),
                 "Compact context (summarize old messages)",
             ),
@@ -612,6 +616,26 @@ impl App {
                     ("/memory on".into(), "Enable memory for this session"),
                     ("/memory off".into(), "Disable memory for this session"),
                     ("/memory status".into(), "Show memory feature status"),
+                ],
+            );
+        }
+
+        if prefix.starts_with("/improve ") {
+            return self.rank_suggestions(
+                input,
+                vec![
+                    (
+                        "/improve plan".into(),
+                        "Generate a ranked improve todo list without editing",
+                    ),
+                    (
+                        "/improve status".into(),
+                        "Show current improve batch and inferred status",
+                    ),
+                    (
+                        "/improve stop".into(),
+                        "Stop improvement mode after the next safe point",
+                    ),
                 ],
             );
         }

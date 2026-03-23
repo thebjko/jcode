@@ -3734,6 +3734,105 @@ pub(super) async fn handle_remote_key(
                     return Ok(());
                 }
 
+                if let Some(command) = super::commands::parse_improve_command(trimmed) {
+                    match command {
+                        Err(error) => app.push_display_message(DisplayMessage::error(error)),
+                        Ok(super::commands::ImproveCommand::Status) => {
+                            app.push_display_message(DisplayMessage::system(
+                                super::commands::format_improve_status(app),
+                            ));
+                        }
+                        Ok(super::commands::ImproveCommand::Stop) => {
+                            let session_id = app
+                                .remote_session_id
+                                .clone()
+                                .unwrap_or_else(|| app.session.id.clone());
+                            let todos = crate::todo::load_todos(&session_id).unwrap_or_default();
+                            let has_incomplete = todos.iter().any(|todo| {
+                                todo.status != "completed" && todo.status != "cancelled"
+                            });
+
+                            if app.improve_mode.is_none() && !app.is_processing && !has_incomplete {
+                                app.push_display_message(DisplayMessage::system(
+                                    "No active improve loop to stop. Use `/improve` to start one."
+                                        .to_string(),
+                                ));
+                                return Ok(());
+                            }
+
+                            app.improve_mode = None;
+                            let stop_prompt = super::commands::improve_stop_prompt();
+                            if app.is_processing {
+                                remote.cancel().await?;
+                                app.set_status_notice("Interrupting for /improve stop...");
+                                app.push_display_message(DisplayMessage::system(
+                                    super::commands::improve_stop_notice(true),
+                                ));
+                                app.queued_messages.push(stop_prompt);
+                            } else {
+                                app.push_display_message(DisplayMessage::system(
+                                    super::commands::improve_stop_notice(false),
+                                ));
+                                let _ = super::remote::begin_remote_send(
+                                    app,
+                                    remote,
+                                    stop_prompt,
+                                    vec![],
+                                    true,
+                                    None,
+                                    true,
+                                    0,
+                                )
+                                .await;
+                            }
+                        }
+                        Ok(super::commands::ImproveCommand::Run { plan_only, focus }) => {
+                            app.improve_mode = Some(super::commands::improve_mode_for(plan_only));
+                            let prompt = super::commands::build_improve_prompt(
+                                plan_only,
+                                focus.as_deref(),
+                            );
+                            if app.is_processing {
+                                remote.cancel().await?;
+                                app.set_status_notice(if plan_only {
+                                    "Interrupting for /improve plan..."
+                                } else {
+                                    "Interrupting for /improve..."
+                                });
+                                app.push_display_message(DisplayMessage::system(
+                                    super::commands::improve_launch_notice(
+                                        plan_only,
+                                        focus.as_deref(),
+                                        true,
+                                    ),
+                                ));
+                                app.queued_messages.push(prompt);
+                            } else {
+                                app.push_display_message(DisplayMessage::system(
+                                    super::commands::improve_launch_notice(
+                                        plan_only,
+                                        focus.as_deref(),
+                                        false,
+                                    ),
+                                ));
+
+                                let _ = super::remote::begin_remote_send(
+                                    app,
+                                    remote,
+                                    prompt,
+                                    vec![],
+                                    true,
+                                    None,
+                                    true,
+                                    0,
+                                )
+                                .await;
+                            }
+                        }
+                    }
+                    return Ok(());
+                }
+
                 if trimmed.starts_with('/') {
                     app.input = trimmed.to_string();
                     app.cursor_pos = app.input.len();

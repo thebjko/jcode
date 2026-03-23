@@ -1,4 +1,4 @@
-use super::{App, DisplayMessage, ProcessingStatus};
+use super::{App, DisplayMessage, ImproveMode, ProcessingStatus};
 use crate::bus::{Bus, BusEvent, ManualToolCompleted, ToolEvent, ToolStatus};
 use crate::id;
 use crate::message::{ContentBlock, Message, Role};
@@ -13,6 +13,7 @@ pub(super) fn reset_current_session(app: &mut App) {
     app.pasted_contents.clear();
     app.pending_images.clear();
     app.active_skill = None;
+    app.improve_mode = None;
     let mut session = Session::create(None, None);
     session.model = Some(app.provider.model());
     app.session = session;
@@ -26,6 +27,307 @@ pub(super) struct ManualSubagentSpec {
     pub(super) model: Option<String>,
     pub(super) session_id: Option<String>,
     pub(super) prompt: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum ImproveCommand {
+    Run {
+        plan_only: bool,
+        focus: Option<String>,
+    },
+    Status,
+    Stop,
+}
+
+pub(super) fn improve_usage() -> &'static str {
+    "Usage: `/improve [focus]`, `/improve plan [focus]`, `/improve status`, or `/improve stop`"
+}
+
+pub(super) fn parse_improve_command(trimmed: &str) -> Option<Result<ImproveCommand, String>> {
+    let rest = trimmed.strip_prefix("/improve")?.trim();
+    if rest.is_empty() {
+        return Some(Ok(ImproveCommand::Run {
+            plan_only: false,
+            focus: None,
+        }));
+    }
+
+    if rest == "status" {
+        return Some(Ok(ImproveCommand::Status));
+    }
+
+    if rest == "stop" {
+        return Some(Ok(ImproveCommand::Stop));
+    }
+
+    if rest == "plan" {
+        return Some(Ok(ImproveCommand::Run {
+            plan_only: true,
+            focus: None,
+        }));
+    }
+
+    if let Some(focus) = rest.strip_prefix("plan ") {
+        let focus = focus.trim();
+        return Some(if focus.is_empty() {
+            Err(improve_usage().to_string())
+        } else {
+            Ok(ImproveCommand::Run {
+                plan_only: true,
+                focus: Some(focus.to_string()),
+            })
+        });
+    }
+
+    if rest.starts_with("status ") || rest.starts_with("stop ") {
+        return Some(Err(improve_usage().to_string()));
+    }
+
+    Some(Ok(ImproveCommand::Run {
+        plan_only: false,
+        focus: Some(rest.to_string()),
+    }))
+}
+
+pub(super) fn build_improve_prompt(plan_only: bool, focus: Option<&str>) -> String {
+    let focus_line = focus
+        .map(|focus| {
+            format!(
+                "\nFocus area: {}. Prefer this area when leverage is comparable, but you may choose a different task if it is clearly higher leverage.",
+                focus.trim()
+            )
+        })
+        .unwrap_or_default();
+
+    if plan_only {
+        format!(
+            "You are entering improvement planning mode for this repository.\n\
+Your job is to inspect the project and identify the highest-leverage improvements worth doing next.\n\
+\n\
+First inspect the codebase and current repo state. Then write a concise ranked todo list using `todowrite` with the best 3-7 candidate improvements. Prefer work that is high-impact, low-risk, and easy to validate. Consider refactors, reliability issues, missing tests, UX papercuts, docs gaps, startup/runtime performance, and profiling opportunities.\n\
+\n\
+This is plan-only mode: do not edit files, write patches, or otherwise modify source code or git state. Read/search/analyze freely, and you may run builds/tests/profiling commands if that helps you rank the work, but stop after presenting the todo list and brief rationale.\n\
+\n\
+Avoid broad speculative rewrites, cosmetic churn, and busywork. If the repo already has todos, replace them with a tighter ranked improve plan if appropriate.{}",
+            focus_line,
+        )
+    } else {
+        format!(
+            "You are entering improvement mode for this repository.\n\
+Your job is to identify and implement the highest-leverage safe improvements to this project, then reassess and continue only while further work is clearly worthwhile.\n\
+\n\
+First inspect the codebase and current repo state. Then write a concise ranked todo list using `todowrite` with the best 3-7 improvements to tackle next. Prefer work that is high-impact, low-risk, locally scoped, and easy to validate. Consider refactors, reliability issues, missing tests, UX papercuts, docs gaps, startup/runtime performance, and profiling opportunities.{}\n\
+\n\
+Execute the strongest items, updating the todo list as you go. Validate meaningful changes with builds, tests, or measurements. If you make performance claims, measure before and after when possible.\n\
+\n\
+After completing the batch, reassess. If strong opportunities remain, write a fresh todo list and continue. If remaining work has diminishing returns, stop and explain why the next ideas are not clearly worth the churn.\n\
+\n\
+Avoid broad speculative rewrites, cosmetic churn, and busywork. Do not invent work just to stay busy. If the repo already has todos, refine or replace them with the best current improve batch before continuing.",
+            focus_line,
+        )
+    }
+}
+
+pub(super) fn improve_mode_for(plan_only: bool) -> ImproveMode {
+    if plan_only {
+        ImproveMode::Plan
+    } else {
+        ImproveMode::Run
+    }
+}
+
+pub(super) fn improve_launch_notice(
+    plan_only: bool,
+    focus: Option<&str>,
+    interrupted: bool,
+) -> String {
+    let action = if plan_only {
+        "improvement plan"
+    } else {
+        "improvement loop"
+    };
+    let prefix = if interrupted { "👉 Interrupting and starting" } else { "🚀 Starting" };
+    match focus.map(str::trim).filter(|focus| !focus.is_empty()) {
+        Some(focus) => format!("{} {} focused on **{}**...", prefix, action, focus),
+        None => format!("{} {}...", prefix, action),
+    }
+}
+
+pub(super) fn improve_stop_notice(interrupted: bool) -> String {
+    if interrupted {
+        "🛑 Interrupting and stopping the improve loop at the next safe point...".to_string()
+    } else {
+        "🛑 Stopping the improve loop after the next safe point...".to_string()
+    }
+}
+
+pub(super) fn improve_stop_prompt() -> String {
+    "Stop improvement mode after the current safe point. Do not start a new improve batch. Update the todo list so it accurately reflects what is completed, cancelled, or still pending, and then summarize what remains plus why you stopped.".to_string()
+}
+
+fn start_synthetic_user_turn(app: &mut App, content: String) {
+    app.add_provider_message(Message::user(&content));
+    app.session.add_message(
+        Role::User,
+        vec![ContentBlock::Text {
+            text: content,
+            cache_control: None,
+        }],
+    );
+    let _ = app.session.save();
+
+    app.is_processing = true;
+    app.status = ProcessingStatus::Sending;
+    app.clear_streaming_render_state();
+    app.stream_buffer.clear();
+    app.thought_line_inserted = false;
+    app.thinking_prefix_emitted = false;
+    app.thinking_buffer.clear();
+    app.streaming_tool_calls.clear();
+    app.batch_progress = None;
+    app.streaming_input_tokens = 0;
+    app.streaming_output_tokens = 0;
+    app.streaming_cache_read_tokens = None;
+    app.streaming_cache_creation_tokens = None;
+    app.upstream_provider = None;
+    app.streaming_tps_start = None;
+    app.streaming_tps_elapsed = std::time::Duration::ZERO;
+    app.streaming_total_output_tokens = 0;
+    app.processing_started = Some(Instant::now());
+    app.pending_turn = true;
+}
+
+fn interrupt_and_queue_synthetic_message(
+    app: &mut App,
+    content: String,
+    status_notice: &str,
+    display_notice: String,
+) {
+    app.cancel_requested = true;
+    app.interleave_message = None;
+    app.pending_soft_interrupts.clear();
+    app.set_status_notice(status_notice);
+    app.push_display_message(DisplayMessage::system(display_notice));
+    app.queued_messages.push(content);
+}
+
+pub(super) fn format_improve_status(app: &App) -> String {
+    let session_id = active_session_id(app);
+    let todos = crate::todo::load_todos(&session_id).unwrap_or_default();
+    let completed = todos.iter().filter(|t| t.status == "completed").count();
+    let cancelled = todos.iter().filter(|t| t.status == "cancelled").count();
+    let incomplete: Vec<_> = todos
+        .iter()
+        .filter(|t| t.status != "completed" && t.status != "cancelled")
+        .collect();
+
+    let phase = if app.is_processing {
+        if app.improve_mode.is_some() || !incomplete.is_empty() {
+            "running"
+        } else {
+            "busy (no improve batch detected yet)"
+        }
+    } else if !incomplete.is_empty() {
+        "paused / resumable"
+    } else if completed > 0 || cancelled > 0 {
+        "idle (last improve batch finished)"
+    } else {
+        "idle"
+    };
+
+    let mode = app
+        .improve_mode
+        .map(|mode| mode.status_label())
+        .unwrap_or("not yet started in this client session");
+
+    let mut lines = vec![
+        format!("Improve status: **{}**", phase),
+        format!("Last requested mode: **{}**", mode),
+        format!(
+            "Todos: {} incomplete · {} completed · {} cancelled",
+            incomplete.len(),
+            completed,
+            cancelled
+        ),
+    ];
+
+    if !incomplete.is_empty() {
+        lines.push(String::new());
+        lines.push("Current improve batch:".to_string());
+        for todo in incomplete.iter().take(5) {
+            let icon = if todo.status == "in_progress" { "🔄" } else { "⬜" };
+            lines.push(format!("- {} [{}] {}", icon, todo.priority, todo.content));
+        }
+        if incomplete.len() > 5 {
+            lines.push(format!("- …and {} more", incomplete.len() - 5));
+        }
+    } else {
+        lines.push(String::new());
+        lines.push("No current improve todo batch for this session.".to_string());
+    }
+
+    lines.push(String::new());
+    lines.push("Use `/improve` to start/continue, `/improve plan` to plan only, or `/improve stop` to halt after a safe point.".to_string());
+    lines.join("\n")
+}
+
+fn handle_improve_command_local(app: &mut App, command: ImproveCommand) {
+    match command {
+        ImproveCommand::Status => {
+            app.push_display_message(DisplayMessage::system(format_improve_status(app)));
+        }
+        ImproveCommand::Stop => {
+            let session_id = active_session_id(app);
+            let todos = crate::todo::load_todos(&session_id).unwrap_or_default();
+            let has_incomplete = todos
+                .iter()
+                .any(|todo| todo.status != "completed" && todo.status != "cancelled");
+
+            if app.improve_mode.is_none() && !app.is_processing && !has_incomplete {
+                app.push_display_message(DisplayMessage::system(
+                    "No active improve loop to stop. Use `/improve` to start one.".to_string(),
+                ));
+                return;
+            }
+
+            app.improve_mode = None;
+            let stop_prompt = improve_stop_prompt();
+            if app.is_processing {
+                interrupt_and_queue_synthetic_message(
+                    app,
+                    stop_prompt,
+                    "Interrupting for /improve stop...",
+                    improve_stop_notice(true),
+                );
+            } else {
+                app.push_display_message(DisplayMessage::system(improve_stop_notice(false)));
+                start_synthetic_user_turn(app, stop_prompt);
+            }
+        }
+        ImproveCommand::Run { plan_only, focus } => {
+            app.improve_mode = Some(improve_mode_for(plan_only));
+            let prompt = build_improve_prompt(plan_only, focus.as_deref());
+            if app.is_processing {
+                interrupt_and_queue_synthetic_message(
+                    app,
+                    prompt,
+                    if plan_only {
+                        "Interrupting for /improve plan..."
+                    } else {
+                        "Interrupting for /improve..."
+                    },
+                    improve_launch_notice(plan_only, focus.as_deref(), true),
+                );
+            } else {
+                app.push_display_message(DisplayMessage::system(improve_launch_notice(
+                    plan_only,
+                    focus.as_deref(),
+                    false,
+                )));
+                start_synthetic_user_turn(app, prompt);
+            }
+        }
+    }
 }
 
 pub(super) fn current_subagent_model_summary(app: &App) -> String {
@@ -306,6 +608,14 @@ pub(super) fn handle_help_command(app: &mut App, trimmed: &str) -> bool {
 
 pub(super) fn handle_session_command(app: &mut App, trimmed: &str) -> bool {
     if handle_subagent_model_command(app, trimmed) || handle_subagent_command(app, trimmed) {
+        return true;
+    }
+
+    if let Some(command) = parse_improve_command(trimmed) {
+        match command {
+            Ok(command) => handle_improve_command_local(app, command),
+            Err(error) => app.push_display_message(DisplayMessage::error(error)),
+        }
         return true;
     }
 

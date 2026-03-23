@@ -1356,6 +1356,9 @@ impl App {
                 Injects a reminder listing all pending/in-progress tasks and prompts the model to either\n\
                 finish the work, update the todo list to reflect what is done, or ask for user input if genuinely blocked."
             }
+            "improve" => {
+                "`/improve [focus]`\nStart an autonomous repo-improvement loop. The model inspects the project, writes a ranked todo list, implements the highest-leverage safe improvements, validates them, then keeps going until further work has diminishing returns.\n\n`/improve plan [focus]`\nGenerate a ranked improve todo list only, without editing files.\n\n`/improve status`\nShow the inferred status of the current improve run and todo batch.\n\n`/improve stop`\nAsk the model to stop after the next safe point, update todos, and summarize remaining work."
+            }
             "reload" => "`/reload`\nReload to a newer binary if one is available.",
             "restart" => {
                 "`/restart`\nRestart jcode with the current binary. Session is preserved.\nUseful after config changes, MCP server updates, or env var changes."
