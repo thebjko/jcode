@@ -163,21 +163,21 @@ fn format_memory_updated_age(updated_at: DateTime<Utc>) -> String {
     }
 }
 
-fn memory_age_tint(updated_at: Option<DateTime<Utc>>) -> Color {
+fn memory_age_text_tint(updated_at: Option<DateTime<Utc>>) -> Color {
     let Some(updated_at) = updated_at else {
-        return Color::Rgb(42, 44, 54);
+        return Color::Rgb(140, 144, 152);
     };
     let age = Utc::now().signed_duration_since(updated_at);
     if age.num_hours() < 1 {
-        Color::Rgb(44, 49, 47)
+        Color::Rgb(146, 156, 149)
     } else if age.num_days() < 1 {
-        Color::Rgb(43, 46, 52)
+        Color::Rgb(142, 148, 156)
     } else if age.num_days() < 7 {
-        Color::Rgb(44, 44, 52)
+        Color::Rgb(145, 144, 154)
     } else if age.num_days() < 30 {
-        Color::Rgb(46, 43, 48)
+        Color::Rgb(150, 143, 147)
     } else {
-        Color::Rgb(47, 43, 44)
+        Color::Rgb(154, 144, 144)
     }
 }
 
@@ -193,9 +193,8 @@ fn memory_tile_content_lines(
 
     let mut content_lines: Vec<Line<'static>> = Vec::new();
     for item in items {
-        let item_bg = memory_age_tint(item.updated_at);
-        let text_fill_style = text_style.bg(item_bg);
-        let meta_fill_style = Style::default().fg(Color::Rgb(175, 180, 190)).bg(item_bg);
+        let text_fill_style = text_style.fg(memory_age_text_tint(item.updated_at));
+        let meta_fill_style = Style::default().fg(Color::Rgb(160, 165, 172));
         let text_display_width = unicode_width::UnicodeWidthStr::width(item.content.as_str());
         if text_display_width <= item_width {
             let text = item.content.to_string();
@@ -206,7 +205,7 @@ fn memory_tile_content_lines(
                 Span::styled(text, text_fill_style),
             ];
             if padding > 0 {
-                spans.push(Span::styled(" ".repeat(padding), text_fill_style));
+                spans.push(Span::raw(" ".repeat(padding)));
             }
             spans.push(Span::styled(" │", border_style));
             content_lines.push(Line::from(spans));
@@ -233,7 +232,7 @@ fn memory_tile_content_lines(
                         Span::styled(chunk.clone(), text_fill_style),
                     ];
                     if padding > 0 {
-                        spans.push(Span::styled(" ".repeat(padding), text_fill_style));
+                        spans.push(Span::raw(" ".repeat(padding)));
                     }
                     spans.push(Span::styled(" │", border_style));
                     content_lines.push(Line::from(spans));
@@ -241,11 +240,11 @@ fn memory_tile_content_lines(
                     let padding = inner_width.saturating_sub(indent + chunk_width);
                     let mut spans = vec![
                         Span::styled("│ ", border_style),
-                        Span::styled(" ".repeat(indent), text_fill_style),
+                        Span::raw(" ".repeat(indent)),
                         Span::styled(chunk.clone(), text_fill_style),
                     ];
                     if padding > 0 {
-                        spans.push(Span::styled(" ".repeat(padding), text_fill_style));
+                        spans.push(Span::raw(" ".repeat(padding)));
                     }
                     spans.push(Span::styled(" │", border_style));
                     content_lines.push(Line::from(spans));
@@ -260,19 +259,18 @@ fn memory_tile_content_lines(
             let padding = inner_width.saturating_sub(indent + meta_width);
             content_lines.push(Line::from(vec![
                 Span::styled("│ ", border_style),
-                Span::styled(" ".repeat(indent), text_fill_style),
+                Span::raw(" ".repeat(indent)),
                 Span::styled(meta, meta_fill_style),
-                Span::styled(" ".repeat(padding), text_fill_style),
+                Span::raw(" ".repeat(padding)),
                 Span::styled(" │", border_style),
             ]));
         }
     }
 
     if content_lines.is_empty() {
-        let fill_style = text_style.bg(Color::Rgb(42, 44, 54));
         content_lines.push(Line::from(vec![
             Span::styled("│ ", border_style),
-            Span::styled(" ".repeat(inner_width), fill_style),
+            Span::raw(" ".repeat(inner_width)),
             Span::styled(" │", border_style),
         ]));
     }

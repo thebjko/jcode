@@ -4123,6 +4123,55 @@ mod tests {
     }
 
     #[test]
+    fn test_tool_summary_read_supports_start_line_end_line() {
+        let tool = ToolCall {
+            id: "call_read_range".to_string(),
+            name: "read".to_string(),
+            input: serde_json::json!({
+                "file_path": "src/tool/read.rs",
+                "start_line": 10,
+                "end_line": 20
+            }),
+            intent: None,
+        };
+
+        let summary = tools_ui::get_tool_summary_with_budget(&tool, 50, Some(40));
+        assert!(summary.contains("read.rs:10-20"), "summary={summary:?}");
+    }
+
+    #[test]
+    fn test_render_tool_message_batch_includes_start_end_read_details() {
+        let msg = DisplayMessage {
+            role: "tool".to_string(),
+            content: "--- [1] read ---\nok\n\nCompleted: 1 succeeded, 0 failed".to_string(),
+            tool_calls: vec![],
+            duration_secs: None,
+            title: None,
+            tool_data: Some(ToolCall {
+                id: "call_batch_range".to_string(),
+                name: "batch".to_string(),
+                input: serde_json::json!({
+                    "tool_calls": [
+                        {"tool": "read", "file_path": "src/tool/read.rs", "start_line": 10, "end_line": 20}
+                    ]
+                }),
+                intent: None,
+            }),
+        };
+
+        let lines = render_tool_message(&msg, 120, crate::config::DiffDisplayMode::Off);
+        let rendered: Vec<String> = lines.iter().map(extract_line_text).collect();
+
+        assert!(
+            rendered
+                .iter()
+                .any(|line| line.contains("read src/tool/read.rs:10-20")),
+            "missing start/end read summary in {:?}",
+            rendered
+        );
+    }
+
+    #[test]
     fn test_tool_summary_path_truncation_keeps_filename_tail() {
         let tool = ToolCall {
             id: "call_read_tail".to_string(),
@@ -5137,6 +5186,33 @@ mod tests {
         let rendered: Vec<String> = lines.iter().map(extract_line_text).collect();
 
         assert!(rendered.iter().any(|line| line.contains("updated 2h ago")));
+    }
+
+    #[test]
+    fn test_render_memory_tiles_do_not_use_background_tint() {
+        let tiles = group_into_tiles(vec![(
+            "fact".to_string(),
+            MemoryTileItem {
+                content: "The build is green".to_string(),
+                updated_at: Some(chrono::Utc::now() - chrono::Duration::hours(2)),
+            },
+        )]);
+
+        let lines = render_memory_tiles(
+            &tiles,
+            60,
+            Style::default(),
+            Style::default(),
+            Some(Line::from("🧠 recalled 1 memory")),
+        );
+
+        assert!(
+            lines
+                .iter()
+                .skip(1)
+                .flat_map(|line| line.spans.iter())
+                .all(|span| span.style.bg.is_none())
+        );
     }
 
     #[test]
