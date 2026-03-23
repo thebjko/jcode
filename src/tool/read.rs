@@ -22,9 +22,86 @@ impl ReadTool {
 struct ReadInput {
     file_path: String,
     #[serde(default)]
+    start_line: Option<usize>,
+    #[serde(default)]
+    end_line: Option<usize>,
+    #[serde(default)]
     offset: Option<usize>,
     #[serde(default)]
     limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReadRangeStyle {
+    OffsetLimit,
+    StartEnd,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct NormalizedReadRange {
+    offset: usize,
+    limit: usize,
+    style: ReadRangeStyle,
+}
+
+impl NormalizedReadRange {
+    fn next_offset(self) -> usize {
+        self.offset + self.limit
+    }
+
+    fn next_start_line(self) -> usize {
+        self.next_offset() + 1
+    }
+}
+
+fn normalize_read_range(params: &ReadInput) -> Result<NormalizedReadRange> {
+    let has_start_end = params.start_line.is_some() || params.end_line.is_some();
+    let has_offset_limit = params.offset.is_some() || params.limit.is_some();
+
+    if has_start_end && has_offset_limit {
+        return Err(anyhow::anyhow!(
+            "Use either start_line/end_line (1-based) or offset/limit (0-based), not both."
+        ));
+    }
+
+    if has_start_end {
+        let start_line = params.start_line.unwrap_or(1);
+        if start_line == 0 {
+            return Err(anyhow::anyhow!(
+                "start_line must be 1 or greater (it is 1-based)."
+            ));
+        }
+
+        let limit = if let Some(end_line) = params.end_line {
+            if end_line == 0 {
+                return Err(anyhow::anyhow!(
+                    "end_line must be 1 or greater (it is 1-based)."
+                ));
+            }
+            if end_line < start_line {
+                return Err(anyhow::anyhow!(
+                    "end_line ({}) must be greater than or equal to start_line ({}).",
+                    end_line,
+                    start_line
+                ));
+            }
+            end_line - start_line + 1
+        } else {
+            params.limit.unwrap_or(DEFAULT_LIMIT)
+        };
+
+        return Ok(NormalizedReadRange {
+            offset: start_line - 1,
+            limit,
+            style: ReadRangeStyle::StartEnd,
+        });
+    }
+
+    Ok(NormalizedReadRange {
+        offset: params.offset.unwrap_or(0),
+        limit: params.limit.unwrap_or(DEFAULT_LIMIT),
+        style: ReadRangeStyle::OffsetLimit,
+    })
 }
 
 #[async_trait]
@@ -35,7 +112,8 @@ impl Tool for ReadTool {
 
     fn description(&self) -> &str {
         "Read the contents of a file. Returns lines with line numbers. \
-         Supports reading specific ranges with offset and limit parameters. \
+         Supports reading specific ranges with offset/limit (0-based) or \
+         start_line/end_line (1-based, inclusive). \
          Can read text files, and will indicate if a file is binary. \
          Image files are attached for vision-capable model analysis when supported."
     }
@@ -48,6 +126,14 @@ impl Tool for ReadTool {
                 "file_path": {
                     "type": "string",
                     "description": "The path to the file to read (absolute or relative)"
+                },
+                "start_line": {
+                    "type": "integer",
+                    "description": "1-based line number to start reading from (inclusive)"
+                },
+                "end_line": {
+                    "type": "integer",
+                    "description": "1-based line number to stop reading at (inclusive)"
                 },
                 "offset": {
                     "type": "integer",
@@ -63,6 +149,7 @@ impl Tool for ReadTool {
 
     async fn execute(&self, input: Value, ctx: ToolContext) -> Result<ToolOutput> {
         let params: ReadInput = serde_json::from_value(input)?;
+        let range = normalize_read_range(&params)?;
 
         let path = ctx.resolve_path(Path::new(&params.file_path));
 
@@ -102,18 +189,15 @@ impl Tool for ReadTool {
         // Read file
         let content = tokio::fs::read_to_string(&path).await?;
 
-        let offset = params.offset.unwrap_or(0);
-        let limit = params.limit.unwrap_or(DEFAULT_LIMIT);
-
         // Single-pass: count lines while building output
-        let mut output = String::with_capacity(limit.min(2000) * 80);
+        let mut output = String::with_capacity(range.limit.min(2000) * 80);
         let mut total_lines = 0usize;
-        let end_exclusive = offset + limit;
+        let end_exclusive = range.offset + range.limit;
         {
             use std::fmt::Write;
             for (i, line) in content.lines().enumerate() {
                 total_lines = i + 1;
-                if i < offset {
+                if i < range.offset {
                     continue;
                 }
                 if i >= end_exclusive {
@@ -138,7 +222,7 @@ impl Tool for ReadTool {
             op: FileOp::Read,
             summary: Some(format!(
                 "read lines {}-{} of {}",
-                offset + 1,
+                range.offset + 1,
                 end,
                 total_lines
             )),
@@ -146,10 +230,14 @@ impl Tool for ReadTool {
 
         // Add metadata
         if end < total_lines {
+            let continuation_hint = match range.style {
+                ReadRangeStyle::OffsetLimit => format!("offset={}", range.next_offset()),
+                ReadRangeStyle::StartEnd => format!("start_line={}", range.next_start_line()),
+            };
             output.push_str(&format!(
-                "\n... {} more lines (use offset={} to continue)\n",
+                "\n... {} more lines (use {} to continue)\n",
                 total_lines - end,
-                end
+                continuation_hint
             ));
         }
 
@@ -158,6 +246,151 @@ impl Tool for ReadTool {
         } else {
             Ok(ToolOutput::new(output))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tool::{ToolContext, ToolExecutionMode};
+    use serde_json::json;
+
+    fn make_ctx(working_dir: std::path::PathBuf) -> ToolContext {
+        ToolContext {
+            session_id: "test-session".to_string(),
+            message_id: "test-message".to_string(),
+            tool_call_id: "test-call".to_string(),
+            working_dir: Some(working_dir),
+            stdin_request_tx: None,
+            graceful_shutdown_signal: None,
+            execution_mode: ToolExecutionMode::Direct,
+        }
+    }
+
+    #[test]
+    fn normalize_read_range_supports_start_and_end_lines() {
+        let params: ReadInput = serde_json::from_value(json!({
+            "file_path": "src/lib.rs",
+            "start_line": 10,
+            "end_line": 20
+        }))
+        .expect("deserialize params");
+
+        let range = normalize_read_range(&params).expect("normalize range");
+        assert_eq!(
+            range,
+            NormalizedReadRange {
+                offset: 9,
+                limit: 11,
+                style: ReadRangeStyle::StartEnd,
+            }
+        );
+    }
+
+    #[test]
+    fn normalize_read_range_rejects_mixed_range_styles() {
+        let params: ReadInput = serde_json::from_value(json!({
+            "file_path": "src/lib.rs",
+            "start_line": 10,
+            "limit": 20
+        }))
+        .expect("deserialize params");
+
+        let err = normalize_read_range(&params).expect_err("mixed range styles should fail");
+        assert!(
+            err.to_string().contains("Use either start_line/end_line")
+                || err.to_string().contains("not both"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn normalize_read_range_rejects_invalid_end_before_start() {
+        let params: ReadInput = serde_json::from_value(json!({
+            "file_path": "src/lib.rs",
+            "start_line": 20,
+            "end_line": 10
+        }))
+        .expect("deserialize params");
+
+        let err = normalize_read_range(&params).expect_err("invalid range should fail");
+        assert!(
+            err.to_string()
+                .contains("greater than or equal to start_line"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_tool_supports_start_line_and_end_line() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("sample.txt");
+        std::fs::write(&path, "one\ntwo\nthree\nfour\nfive\n").expect("write sample file");
+
+        let tool = ReadTool::new();
+        let output = tool
+            .execute(
+                json!({
+                    "file_path": "sample.txt",
+                    "start_line": 2,
+                    "end_line": 4
+                }),
+                make_ctx(temp.path().to_path_buf()),
+            )
+            .await
+            .expect("read execution should succeed");
+
+        assert!(
+            output.output.contains("2\ttwo"),
+            "output={:?}",
+            output.output
+        );
+        assert!(
+            output.output.contains("3\tthree"),
+            "output={:?}",
+            output.output
+        );
+        assert!(
+            output.output.contains("4\tfour"),
+            "output={:?}",
+            output.output
+        );
+        assert!(
+            !output.output.contains("1\tone"),
+            "output={:?}",
+            output.output
+        );
+        assert!(
+            !output.output.contains("5\tfive"),
+            "output={:?}",
+            output.output
+        );
+    }
+
+    #[tokio::test]
+    async fn read_tool_continuation_hint_matches_start_line_style() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("sample.txt");
+        std::fs::write(&path, "one\ntwo\nthree\nfour\nfive\n").expect("write sample file");
+
+        let tool = ReadTool::new();
+        let output = tool
+            .execute(
+                json!({
+                    "file_path": "sample.txt",
+                    "start_line": 2,
+                    "end_line": 3
+                }),
+                make_ctx(temp.path().to_path_buf()),
+            )
+            .await
+            .expect("read execution should succeed");
+
+        assert!(
+            output.output.contains("use start_line=4 to continue"),
+            "output={:?}",
+            output.output
+        );
     }
 }
 

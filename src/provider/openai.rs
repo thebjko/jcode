@@ -1698,6 +1698,17 @@ fn handle_openai_output_item(
 ) -> Option<StreamEvent> {
     let item_type = item.get("type")?.as_str()?;
     match item_type {
+        "compaction" => {
+            let encrypted_content = item
+                .get("encrypted_content")
+                .and_then(|v| v.as_str())
+                .map(|value| value.to_string())?;
+            return Some(StreamEvent::Compaction {
+                trigger: "openai_native_auto".to_string(),
+                pre_tokens: None,
+                openai_encrypted_content: Some(encrypted_content),
+            });
+        }
         "function_call" | "custom_tool_call" => {
             let call_id = item
                 .get("call_id")
@@ -5274,6 +5285,38 @@ mod tests {
         assert!(event.is_none(), "duplicate function call should be skipped");
         assert!(pending.is_empty());
         assert!(!completed_tool_items.contains("fc_123"));
+    }
+
+    #[test]
+    fn test_parse_openai_response_output_item_done_emits_native_compaction() {
+        let mut saw_text_delta = false;
+        let mut streaming_tool_calls = HashMap::new();
+        let mut completed_tool_items = HashSet::new();
+        let mut pending = VecDeque::new();
+
+        let compaction_done = r#"{"type":"response.output_item.done","item":{"id":"cmp_123","type":"compaction","encrypted_content":"enc_abc"}}"#;
+        let event = parse_openai_response_event(
+            compaction_done,
+            &mut saw_text_delta,
+            &mut streaming_tool_calls,
+            &mut completed_tool_items,
+            &mut pending,
+        )
+        .expect("expected compaction event");
+
+        match event {
+            StreamEvent::Compaction {
+                trigger,
+                pre_tokens,
+                openai_encrypted_content,
+            } => {
+                assert_eq!(trigger, "openai_native_auto");
+                assert_eq!(pre_tokens, None);
+                assert_eq!(openai_encrypted_content.as_deref(), Some("enc_abc"));
+            }
+            other => panic!("expected Compaction, got {:?}", other),
+        }
+        assert!(pending.is_empty());
     }
 
     #[test]

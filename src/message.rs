@@ -559,6 +559,8 @@ pub enum StreamEvent {
     Compaction {
         trigger: String,
         pre_tokens: Option<u64>,
+        /// Provider-native compaction artifact, if one was emitted.
+        openai_encrypted_content: Option<String>,
     },
     /// Upstream provider info (e.g., which provider OpenRouter routed to)
     UpstreamProvider { provider: String },

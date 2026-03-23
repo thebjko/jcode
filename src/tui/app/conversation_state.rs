@@ -222,26 +222,62 @@ impl App {
         }
     }
 
+    pub(super) fn apply_openai_native_compaction(
+        &mut self,
+        encrypted_content: String,
+        compacted_count: usize,
+    ) -> anyhow::Result<()> {
+        let state = crate::session::StoredCompactionState {
+            summary_text: String::new(),
+            openai_encrypted_content: Some(encrypted_content),
+            covers_up_to_turn: compacted_count,
+            original_turn_count: compacted_count,
+            compacted_count,
+        };
+
+        self.session.compaction = Some(state.clone());
+        let compaction = self.registry.compaction();
+        if let Ok(mut manager) = compaction.try_write() {
+            manager.set_budget(self.context_limit as usize);
+            manager.restore_persisted_state(&state, self.messages.len());
+        }
+
+        self.provider_session_id = None;
+        self.session.provider_session_id = None;
+        self.context_warning_shown = false;
+        self.session.save()?;
+        Ok(())
+    }
+
     pub(super) fn messages_for_provider(&mut self) -> (Vec<Message>, Option<CompactionEvent>) {
-        if self.is_remote || !self.provider.uses_jcode_compaction() {
+        if self.is_remote {
+            return (self.messages.clone(), None);
+        }
+        if !self.provider.uses_jcode_compaction() && self.session.compaction.is_none() {
             return (self.messages.clone(), None);
         }
         let compaction = self.registry.compaction();
         let result = match compaction.try_write() {
             Ok(mut manager) => {
-                let action = manager.ensure_context_fits(&self.messages, self.provider.clone());
-                match action {
-                    crate::compaction::CompactionAction::BackgroundStarted { trigger } => {
-                        self.push_display_message(DisplayMessage::system(
-                            Self::format_compaction_started_message(&trigger),
-                        ));
-                        self.set_status_notice("Compacting context");
+                if self.provider.uses_jcode_compaction() {
+                    let action = manager.ensure_context_fits(&self.messages, self.provider.clone());
+                    match action {
+                        crate::compaction::CompactionAction::BackgroundStarted { trigger } => {
+                            self.push_display_message(DisplayMessage::system(
+                                Self::format_compaction_started_message(&trigger),
+                            ));
+                            self.set_status_notice("Compacting context");
+                        }
+                        crate::compaction::CompactionAction::HardCompacted(_) => {}
+                        crate::compaction::CompactionAction::None => {}
                     }
-                    crate::compaction::CompactionAction::HardCompacted(_) => {}
-                    crate::compaction::CompactionAction::None => {}
                 }
                 let messages = manager.messages_for_api_with(&self.messages);
-                let event = manager.take_compaction_event();
+                let event = if self.provider.uses_jcode_compaction() {
+                    manager.take_compaction_event()
+                } else {
+                    None
+                };
                 if event.is_some() {
                     self.sync_session_compaction_state_from_manager(&manager);
                 }
@@ -299,7 +335,11 @@ impl App {
         }
 
         let transcript = crate::memory_agent::build_transcript_for_extraction(&self.messages);
-        crate::memory_agent::trigger_final_extraction(transcript, self.session.id.clone());
+        crate::memory_agent::trigger_final_extraction_with_dir(
+            transcript,
+            self.session.id.clone(),
+            self.session.working_dir.clone(),
+        );
     }
 
     pub(super) fn memory_prompt_signature(prompt: &str) -> String {

@@ -558,16 +558,36 @@ pub(super) fn get_tool_summary_with_budget(
                 .get("file_path")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
+            let start_line = tool.input.get("start_line").and_then(|v| v.as_u64());
+            let end_line = tool.input.get("end_line").and_then(|v| v.as_u64());
             let offset = tool.input.get("offset").and_then(|v| v.as_u64());
             let limit = tool.input.get("limit").and_then(|v| v.as_u64());
-            match (offset, limit) {
-                (Some(o), Some(l)) => {
+            match (start_line, end_line, offset, limit) {
+                (Some(start), Some(end), _, _) => {
+                    let suffix = format!(":{}-{}", start, end);
+                    max_width
+                        .map(|w| truncate_path_with_suffix(path, suffix.as_str(), w))
+                        .unwrap_or_else(|| format!("{}{}", path, suffix))
+                }
+                (Some(start), None, _, _) => {
+                    let suffix = format!(":{}-", start);
+                    max_width
+                        .map(|w| truncate_path_with_suffix(path, suffix.as_str(), w))
+                        .unwrap_or_else(|| format!("{}{}", path, suffix))
+                }
+                (None, Some(end), _, _) => {
+                    let suffix = format!(":1-{}", end);
+                    max_width
+                        .map(|w| truncate_path_with_suffix(path, suffix.as_str(), w))
+                        .unwrap_or_else(|| format!("{}{}", path, suffix))
+                }
+                (None, None, Some(o), Some(l)) => {
                     let suffix = format!(":{}-{}", o, o + l);
                     max_width
                         .map(|w| truncate_path_with_suffix(path, suffix.as_str(), w))
                         .unwrap_or_else(|| format!("{}{}", path, suffix))
                 }
-                (Some(o), None) => {
+                (None, None, Some(o), None) => {
                     let suffix = format!(":{}", o);
                     max_width
                         .map(|w| truncate_path_with_suffix(path, suffix.as_str(), w))
