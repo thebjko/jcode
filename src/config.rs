@@ -323,7 +323,7 @@ pub struct DisplayConfig {
     pub mouse_capture: bool,
     /// Enable debug socket for external control (default: false)
     pub debug_socket: bool,
-    /// Center all content (default: false)
+    /// Center all content (default: true)
     pub centered: bool,
     /// Show thinking/reasoning content by default (default: false)
     pub show_thinking: bool,
@@ -718,6 +718,11 @@ impl Config {
         if let Ok(v) = std::env::var("JCODE_PIN_IMAGES") {
             if let Some(parsed) = parse_env_bool(&v) {
                 self.display.pin_images = parsed;
+            }
+        }
+        if let Ok(v) = std::env::var("JCODE_DISPLAY_CENTERED") {
+            if let Some(parsed) = parse_env_bool(&v) {
+                self.display.centered = parsed;
             }
         }
         if let Ok(v) = std::env::var("JCODE_DIFF_LINE_WRAP") {
@@ -1140,6 +1145,9 @@ timeout_secs = 90
 # Diff display mode: "off", "inline" (default), or "pinned" (dedicated pane)
 diff_mode = "inline"
 
+# Center all content by default (default: true)
+centered = true
+
 # Pin read images to a side pane (default: true)
 pin_images = true
 
@@ -1327,6 +1335,7 @@ desktop_notifications = true
 
 **Display:**
 - Diff mode: {}
+- Centered: {}
 - Markdown spacing: {}
 - Pin images: {}
 - Diff line wrap: {}
@@ -1411,6 +1420,7 @@ desktop_notifications = true
             self.dictation.key,
             self.dictation.timeout_secs,
             self.display.diff_mode.label(),
+            self.display.centered,
             self.display.markdown_spacing.label(),
             self.display.pin_images,
             self.display.diff_line_wrap,

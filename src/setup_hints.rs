@@ -44,20 +44,10 @@ impl StartupHints {
         None
     }
 
-    fn with_status_notice(status_notice: String) -> Self {
-        Self {
-            auto_send_message: None,
-            status_notice: Some(status_notice),
-            display_message: None,
-        }
-    }
-
-    fn with_auto_send(auto_send_message: String) -> Self {
-        Self {
-            auto_send_message: Some(auto_send_message),
-            status_notice: None,
-            display_message: None,
-        }
+    fn is_empty(&self) -> bool {
+        self.auto_send_message.is_none()
+            && self.status_notice.is_none()
+            && self.display_message.is_none()
     }
 
     fn with_spawn_notice(message: String) -> Self {
@@ -65,6 +55,18 @@ impl StartupHints {
             auto_send_message: None,
             status_notice: Some(message.clone()),
             display_message: Some(("Launch".to_string(), message)),
+        }
+    }
+
+    fn with_status_and_display(
+        status_notice: String,
+        title: impl Into<String>,
+        display_message: String,
+    ) -> Self {
+        Self {
+            auto_send_message: None,
+            status_notice: Some(status_notice),
+            display_message: Some((title.into(), display_message)),
         }
     }
 }
@@ -540,6 +542,34 @@ fn startup_spawn_notice(state: &SetupHintsState) -> Option<String> {
 #[cfg(not(target_os = "macos"))]
 fn startup_spawn_notice(_state: &SetupHintsState) -> Option<String> {
     None
+}
+
+fn startup_hints_for_launch(state: &SetupHintsState) -> Option<StartupHints> {
+    let spawn_notice = startup_spawn_notice(state);
+
+    if state.launch_count <= 3 {
+        let config_path = crate::config::Config::path()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "~/.jcode/config.toml".to_string());
+
+        let mut message = format!(
+            "You can hotswap text alignment with `Alt+C` (left-aligned ↔ centered).\n\nYou can also change it in `{}` with `display.centered = true` or `display.centered = false`.",
+            config_path
+        );
+
+        if let Some(spawn_notice) = spawn_notice {
+            message.push_str("\n\n");
+            message.push_str(&spawn_notice);
+        }
+
+        return Some(StartupHints::with_status_and_display(
+            "Tip: Alt+C toggles left/center alignment.".to_string(),
+            "Welcome",
+            message,
+        ));
+    }
+
+    spawn_notice.map(StartupHints::with_spawn_notice)
 }
 
 /// Create a global Alt+; hotkey using a background PowerShell listener.
@@ -1178,21 +1208,23 @@ pub fn maybe_show_setup_hints() -> Option<StartupHints> {
         let _ = create_desktop_shortcut(&mut state);
     }
 
-    let startup_notice = startup_spawn_notice(&state);
+    let startup_hints = startup_hints_for_launch(&state);
 
     if !cfg!(windows) && !cfg!(target_os = "macos") {
-        return startup_notice.map(StartupHints::with_spawn_notice);
+        return startup_hints;
     }
 
     if state.launch_count % 3 != 0 {
-        return startup_notice.map(StartupHints::with_spawn_notice);
+        return startup_hints;
     }
 
     if cfg!(target_os = "macos") {
         if !state.mac_ghostty_guided && !state.mac_ghostty_dismissed {
-            return nudge_macos_ghostty(&mut state).map(StartupHints::with_auto_send);
+            let mut hints = startup_hints.unwrap_or_default();
+            hints.auto_send_message = nudge_macos_ghostty(&mut state);
+            return if hints.is_empty() { None } else { Some(hints) };
         }
-        return startup_notice.map(StartupHints::with_spawn_notice);
+        return startup_hints;
     }
 
     let terminal = detect_terminal();
@@ -1219,7 +1251,7 @@ pub fn maybe_show_setup_hints() -> Option<StartupHints> {
         prompt_try_it_out(did_install_alacritty);
     }
 
-    startup_notice.map(StartupHints::with_spawn_notice)
+    startup_hints
 }
 
 /// Create a desktop shortcut/launcher for jcode.
@@ -1337,4 +1369,54 @@ Write-Output "OK"
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn first_three_launches_include_alignment_tip() {
+        let state = SetupHintsState {
+            launch_count: 1,
+            ..SetupHintsState::default()
+        };
+
+        let hints = startup_hints_for_launch(&state).expect("expected startup hint");
+        assert_eq!(
+            hints.status_notice.as_deref(),
+            Some("Tip: Alt+C toggles left/center alignment.")
+        );
+
+        let (title, message) = hints.display_message.expect("expected display message");
+        assert_eq!(title, "Welcome");
+        assert!(message.contains("Alt+C"));
+        assert!(message.contains("display.centered = true"));
+        assert!(message.contains("display.centered = false"));
+    }
+
+    #[test]
+    fn launches_after_third_do_not_show_generic_alignment_tip() {
+        let state = SetupHintsState {
+            launch_count: 4,
+            ..SetupHintsState::default()
+        };
+
+        assert!(startup_hints_for_launch(&state).is_none());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn first_three_launches_can_include_hotkey_notice_too() {
+        let state = SetupHintsState {
+            launch_count: 2,
+            hotkey_configured: true,
+            ..SetupHintsState::default()
+        };
+
+        let hints = startup_hints_for_launch(&state).expect("expected startup hint");
+        let (_, message) = hints.display_message.expect("expected display message");
+        assert!(message.contains("Alt+C"));
+        assert!(message.contains("Alt+;"));
+    }
 }
