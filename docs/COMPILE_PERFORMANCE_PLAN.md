@@ -170,6 +170,14 @@ Notes:
 - No-op fully hot-cache reruns can look unrealistically fast; use touched-file scenarios
   when evaluating structural compile-speed changes.
 
+## Dependency Hygiene Wins (2026-03-24)
+
+- `global-hotkey` is now gated behind `target_os = "macos"` instead of being compiled on all
+  platforms.
+- This is a smaller win than a crate split, but it removes an unnecessary dependency subtree from
+  Linux self-dev builds because the hotkey listener implementation is macOS-only.
+- Validation: on Linux, `cargo tree -i global-hotkey` is now empty.
+
 ## Next-Boundary Assessment
 
 The next obvious heavy dependency boundaries are less clearly safe/local than the ones already landed:
