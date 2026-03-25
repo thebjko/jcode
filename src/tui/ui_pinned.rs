@@ -254,9 +254,23 @@ struct PinnedImagePlacement {
     after_text_line: usize,
     hash: u64,
     rows: u16,
+    render_mode: SidePanelImageRenderMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SidePanelImageRenderMode {
+    Fit,
+    ScrollableViewport { zoom_percent: u8 },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SidePanelImageLayout {
+    rows: u16,
+    render_mode: SidePanelImageRenderMode,
 }
 
 const SIDE_PANEL_INLINE_IMAGE_MIN_ROWS: u16 = 4;
+const SIDE_PANEL_INLINE_IMAGE_MIN_ZOOM_PERCENT: u8 = 70;
 const SIDE_PANEL_FOLLOWING_CONTENT_PREVIEW_MIN_ROWS: u16 = 6;
 const SIDE_PANEL_FOLLOWING_CONTENT_PREVIEW_MAX_ROWS: u16 = 10;
 
@@ -706,6 +720,7 @@ pub(super) fn draw_pinned_content_cached(
                             after_text_line: text_lines.len(),
                             hash: *hash,
                             rows: img_rows,
+                            render_mode: SidePanelImageRenderMode::Fit,
                         });
                         for _ in 0..img_rows {
                             text_lines.push(Line::from(""));
@@ -896,18 +911,45 @@ pub(super) fn draw_side_panel_markdown(
                 width: inner.width,
                 height: avail_rows,
             };
-            let img_area = mermaid::get_cached_png(placement.hash)
-                .map(|(_, width, height)| {
-                    fit_side_panel_image_area(img_area, width, height, centered)
-                })
-                .unwrap_or(img_area);
-            mermaid::render_image_widget_fit(
-                placement.hash,
-                img_area,
-                frame.buffer_mut(),
-                false,
-                false,
-            );
+            match placement.render_mode {
+                SidePanelImageRenderMode::Fit => {
+                    let img_area = mermaid::get_cached_png(placement.hash)
+                        .map(|(_, width, height)| {
+                            fit_side_panel_image_area(img_area, width, height, centered)
+                        })
+                        .unwrap_or(img_area);
+                    mermaid::render_image_widget_fit(
+                        placement.hash,
+                        img_area,
+                        frame.buffer_mut(),
+                        false,
+                        false,
+                    );
+                }
+                SidePanelImageRenderMode::ScrollableViewport { zoom_percent } => {
+                    let scroll_y = visible_start.saturating_sub(image_start) as i32;
+                    let scroll_x = mermaid::get_cached_png(placement.hash)
+                        .map(|(_, width, _)| {
+                            side_panel_viewport_scroll_x(
+                                width,
+                                img_area.width,
+                                zoom_percent,
+                                centered,
+                                mermaid::get_font_size(),
+                            )
+                        })
+                        .unwrap_or(0);
+                    mermaid::render_image_widget_viewport(
+                        placement.hash,
+                        img_area,
+                        frame.buffer_mut(),
+                        scroll_x,
+                        scroll_y,
+                        zoom_percent,
+                        false,
+                    );
+                }
+            }
         }
     }
 }
@@ -964,7 +1006,7 @@ fn render_side_panel_markdown_cached(
                 let has_following_content = rendered_markdown.iter().skip(idx + 1).any(|future| {
                     mermaid::parse_image_placeholder(future).is_none() && future.width() > 0
                 });
-                let img_rows = estimate_side_panel_image_rows(
+                let image_layout = estimate_side_panel_image_layout(
                     hash,
                     inner,
                     text_lines.len(),
@@ -973,9 +1015,10 @@ fn render_side_panel_markdown_cached(
                 image_placements.push(PinnedImagePlacement {
                     after_text_line: text_lines.len(),
                     hash,
-                    rows: img_rows,
+                    rows: image_layout.rows,
+                    render_mode: image_layout.render_mode,
                 });
-                for _ in 0..img_rows {
+                for _ in 0..image_layout.rows {
                     text_lines.push(Line::from(""));
                 }
                 continue;
@@ -1030,35 +1073,103 @@ fn is_rendered_table_line(line: &Line<'_>) -> bool {
     text.contains(" │ ") || text.contains("─┼─")
 }
 
-fn estimate_side_panel_image_rows(
+fn estimate_side_panel_image_layout(
     hash: u64,
     inner: Rect,
     lines_before_image: usize,
     has_following_content: bool,
-) -> u16 {
+) -> SidePanelImageLayout {
     let Some((_, width, height)) = mermaid::get_cached_png(hash) else {
-        return clamp_side_panel_image_rows(
-            inner.height.min(12).max(SIDE_PANEL_INLINE_IMAGE_MIN_ROWS),
-            inner.height,
-            lines_before_image,
-            has_following_content,
-        );
+        return SidePanelImageLayout {
+            rows: clamp_side_panel_image_rows(
+                inner.height.min(12).max(SIDE_PANEL_INLINE_IMAGE_MIN_ROWS),
+                inner.height,
+                lines_before_image,
+                has_following_content,
+            ),
+            render_mode: SidePanelImageRenderMode::Fit,
+        };
     };
 
-    let needed = estimate_side_panel_image_rows_with_font(
+    estimate_side_panel_image_layout_with_font(
         width,
         height,
         inner.width,
-        mermaid::get_font_size(),
-    );
-    clamp_side_panel_image_rows(
-        needed
-            .max(SIDE_PANEL_INLINE_IMAGE_MIN_ROWS)
-            .min(inner.height.max(SIDE_PANEL_INLINE_IMAGE_MIN_ROWS)),
         inner.height,
         lines_before_image,
         has_following_content,
+        mermaid::get_font_size(),
     )
+}
+
+fn estimate_side_panel_image_layout_with_font(
+    width: u32,
+    height: u32,
+    available_width: u16,
+    inner_height: u16,
+    lines_before_image: usize,
+    has_following_content: bool,
+    font_size: Option<(u16, u16)>,
+) -> SidePanelImageLayout {
+    if width == 0 || height == 0 || available_width == 0 {
+        return SidePanelImageLayout {
+            rows: clamp_side_panel_image_rows(
+                SIDE_PANEL_INLINE_IMAGE_MIN_ROWS,
+                inner_height,
+                lines_before_image,
+                has_following_content,
+            ),
+            render_mode: SidePanelImageRenderMode::Fit,
+        };
+    }
+
+    let (cell_w, cell_h) = font_size.unwrap_or((8, 16));
+    let cell_w = cell_w.max(1) as u32;
+    let cell_h = cell_h.max(1) as u32;
+    let image_w_cells = super::diagram_pane::div_ceil_u32(width.max(1), cell_w).max(1);
+    let image_h_cells = super::diagram_pane::div_ceil_u32(height.max(1), cell_h).max(1);
+    let available_width = available_width.max(1) as u32;
+
+    let fit_zoom = if image_w_cells > available_width {
+        ((available_width.saturating_mul(100)) / image_w_cells)
+            .clamp(1, 100) as u8
+    } else {
+        100
+    };
+
+    if fit_zoom < SIDE_PANEL_INLINE_IMAGE_MIN_ZOOM_PERCENT {
+        let zoom_percent = SIDE_PANEL_INLINE_IMAGE_MIN_ZOOM_PERCENT;
+        return SidePanelImageLayout {
+            rows: scaled_image_rows(image_h_cells, zoom_percent)
+                .max(SIDE_PANEL_INLINE_IMAGE_MIN_ROWS),
+            render_mode: SidePanelImageRenderMode::ScrollableViewport { zoom_percent },
+        };
+    }
+
+    let needed = scaled_image_rows(image_h_cells, fit_zoom);
+    SidePanelImageLayout {
+        rows: clamp_side_panel_image_rows(
+            needed
+            .max(SIDE_PANEL_INLINE_IMAGE_MIN_ROWS)
+                .min(inner_height.max(SIDE_PANEL_INLINE_IMAGE_MIN_ROWS)),
+            inner_height,
+            lines_before_image,
+            has_following_content,
+        ),
+        render_mode: SidePanelImageRenderMode::Fit,
+    }
+}
+
+fn scaled_image_rows(image_h_cells: u32, zoom_percent: u8) -> u16 {
+    if image_h_cells == 0 || zoom_percent == 0 {
+        return 0;
+    }
+
+    super::diagram_pane::div_ceil_u32(
+        image_h_cells.saturating_mul(zoom_percent as u32),
+        100,
+    )
+    .min(u16::MAX as u32) as u16
 }
 
 fn estimate_side_panel_image_rows_with_font(
@@ -1090,6 +1201,37 @@ fn estimate_side_panel_image_rows_with_font(
     .max(1);
 
     fitted_h_cells.min(u16::MAX as u32) as u16
+}
+
+fn side_panel_viewport_scroll_x(
+    img_w_px: u32,
+    area_width: u16,
+    zoom_percent: u8,
+    centered: bool,
+    font_size: Option<(u16, u16)>,
+) -> i32 {
+    if !centered || img_w_px == 0 || area_width == 0 || zoom_percent == 0 {
+        return 0;
+    }
+
+    let (font_w, _) = font_size.unwrap_or((8, 16));
+    let font_w = font_w.max(1) as u32;
+    let zoom = zoom_percent as u32;
+    let view_w_px = (area_width as u32)
+        .saturating_mul(font_w)
+        .saturating_mul(100)
+        / zoom;
+    let max_scroll_x_px = img_w_px.saturating_sub(view_w_px);
+    if max_scroll_x_px == 0 {
+        return 0;
+    }
+
+    let cell_w_px = font_w.saturating_mul(100) / zoom;
+    if cell_w_px == 0 {
+        return 0;
+    }
+
+    ((max_scroll_x_px / 2) / cell_w_px).min(i32::MAX as u32) as i32
 }
 
 fn fit_side_panel_image_area(area: Rect, img_w_px: u32, img_h_px: u32, centered: bool) -> Rect {
@@ -1267,6 +1409,43 @@ mod tests {
     fn estimate_side_panel_image_rows_uses_actual_inner_width() {
         let rows = estimate_side_panel_image_rows_with_font(999, 1454, 36, Some((8, 16)));
         assert_eq!(rows, 27);
+    }
+
+    #[test]
+    fn side_panel_mermaid_switches_to_scrollable_viewport_when_fit_would_be_too_small() {
+        let layout = estimate_side_panel_image_layout_with_font(
+            4000,
+            2000,
+            24,
+            20,
+            0,
+            false,
+            Some((8, 16)),
+        );
+
+        assert_eq!(
+            layout.render_mode,
+            SidePanelImageRenderMode::ScrollableViewport {
+                zoom_percent: SIDE_PANEL_INLINE_IMAGE_MIN_ZOOM_PERCENT,
+            }
+        );
+        assert!(layout.rows > 20, "expected tall scrollable diagram rows");
+    }
+
+    #[test]
+    fn side_panel_mermaid_keeps_fit_mode_when_zoom_stays_readable() {
+        let layout = estimate_side_panel_image_layout_with_font(
+            300,
+            480,
+            36,
+            30,
+            0,
+            true,
+            Some((8, 16)),
+        );
+
+        assert_eq!(layout.render_mode, SidePanelImageRenderMode::Fit);
+        assert_eq!(layout.rows, 20);
     }
 
     #[test]
