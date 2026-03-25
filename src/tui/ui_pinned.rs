@@ -247,6 +247,7 @@ struct PinnedRenderedCache {
     line_wrap: bool,
     lines: Vec<Line<'static>>,
     image_placements: Vec<PinnedImagePlacement>,
+    has_scrollable_images: bool,
 }
 
 #[derive(Clone)]
@@ -261,6 +262,12 @@ struct PinnedImagePlacement {
 enum SidePanelImageRenderMode {
     Fit,
     ScrollableViewport { zoom_percent: u8 },
+}
+
+impl SidePanelImageRenderMode {
+    fn is_scrollable(self) -> bool {
+        matches!(self, Self::ScrollableViewport { .. })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -742,6 +749,7 @@ pub(super) fn draw_pinned_content_cached(
             line_wrap,
             lines: text_lines,
             image_placements,
+            has_scrollable_images: false,
         });
     }
 
@@ -839,6 +847,19 @@ pub(super) fn draw_side_panel_markdown(
         .unwrap_or(1);
     let page_count = snapshot.pages.len();
 
+    let border_color = if focused { tool_color() } else { dim_color() };
+    let inner = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(border_color))
+        .inner(area);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+
+    let has_protocol = mermaid::protocol_type().is_some();
+    let rendered = render_side_panel_markdown_cached(page, inner, has_protocol, centered);
+
     let mut title_parts = vec![Span::styled(" side ", Style::default().fg(tool_color()))];
     title_parts.push(Span::styled(
         page.title.clone(),
@@ -850,22 +871,22 @@ pub(super) fn draw_side_panel_markdown(
         format!(" {}/{} ", page_index, page_count),
         Style::default().fg(dim_color()),
     ));
+    if rendered.has_scrollable_images {
+        title_parts.push(Span::styled(
+            " readable ",
+            Style::default()
+                .fg(accent_color())
+                .add_modifier(ratatui::style::Modifier::BOLD),
+        ));
+        title_parts.push(Span::styled(" scroll ", Style::default().fg(dim_color())));
+    }
 
-    let border_color = if focused { tool_color() } else { dim_color() };
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(border_color))
         .title(Line::from(title_parts));
-
-    let inner = block.inner(area);
     frame.render_widget(block, area);
-    if inner.width == 0 || inner.height == 0 {
-        return;
-    }
-
-    let has_protocol = mermaid::protocol_type().is_some();
-    let rendered = render_side_panel_markdown_cached(page, inner, has_protocol, centered);
 
     super::set_pinned_pane_total_lines(rendered.lines.len());
     let max_scroll = rendered.lines.len().saturating_sub(inner.height as usize);
@@ -1034,11 +1055,16 @@ fn render_side_panel_markdown_cached(
         )));
     }
 
+    let has_scrollable_images = image_placements
+        .iter()
+        .any(|placement| placement.render_mode.is_scrollable());
+
     let rendered = PinnedRenderedCache {
         inner_width: inner.width,
         line_wrap: false,
         lines: text_lines,
         image_placements,
+        has_scrollable_images,
     };
 
     let mut cache = match side_panel_render_cache().lock() {
@@ -1131,8 +1157,7 @@ fn estimate_side_panel_image_layout_with_font(
     let available_width = available_width.max(1) as u32;
 
     let fit_zoom = if image_w_cells > available_width {
-        ((available_width.saturating_mul(100)) / image_w_cells)
-            .clamp(1, 100) as u8
+        ((available_width.saturating_mul(100)) / image_w_cells).clamp(1, 100) as u8
     } else {
         100
     };
@@ -1150,7 +1175,7 @@ fn estimate_side_panel_image_layout_with_font(
     SidePanelImageLayout {
         rows: clamp_side_panel_image_rows(
             needed
-            .max(SIDE_PANEL_INLINE_IMAGE_MIN_ROWS)
+                .max(SIDE_PANEL_INLINE_IMAGE_MIN_ROWS)
                 .min(inner_height.max(SIDE_PANEL_INLINE_IMAGE_MIN_ROWS)),
             inner_height,
             lines_before_image,
@@ -1165,11 +1190,8 @@ fn scaled_image_rows(image_h_cells: u32, zoom_percent: u8) -> u16 {
         return 0;
     }
 
-    super::diagram_pane::div_ceil_u32(
-        image_h_cells.saturating_mul(zoom_percent as u32),
-        100,
-    )
-    .min(u16::MAX as u32) as u16
+    super::diagram_pane::div_ceil_u32(image_h_cells.saturating_mul(zoom_percent as u32), 100)
+        .min(u16::MAX as u32) as u16
 }
 
 fn estimate_side_panel_image_rows_with_font(
@@ -1413,15 +1435,8 @@ mod tests {
 
     #[test]
     fn side_panel_mermaid_switches_to_scrollable_viewport_when_fit_would_be_too_small() {
-        let layout = estimate_side_panel_image_layout_with_font(
-            4000,
-            2000,
-            24,
-            20,
-            0,
-            false,
-            Some((8, 16)),
-        );
+        let layout =
+            estimate_side_panel_image_layout_with_font(4000, 2000, 24, 20, 0, false, Some((8, 16)));
 
         assert_eq!(
             layout.render_mode,
@@ -1430,22 +1445,17 @@ mod tests {
             }
         );
         assert!(layout.rows > 20, "expected tall scrollable diagram rows");
+        assert!(layout.render_mode.is_scrollable());
     }
 
     #[test]
     fn side_panel_mermaid_keeps_fit_mode_when_zoom_stays_readable() {
-        let layout = estimate_side_panel_image_layout_with_font(
-            300,
-            480,
-            36,
-            30,
-            0,
-            true,
-            Some((8, 16)),
-        );
+        let layout =
+            estimate_side_panel_image_layout_with_font(300, 480, 36, 30, 0, true, Some((8, 16)));
 
         assert_eq!(layout.render_mode, SidePanelImageRenderMode::Fit);
         assert_eq!(layout.rows, 20);
+        assert!(!layout.render_mode.is_scrollable());
     }
 
     #[test]
