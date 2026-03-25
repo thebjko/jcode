@@ -11,8 +11,9 @@ use crate::storage;
 #[allow(unused_imports)]
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::fmt;
-use std::io::{self, IsTerminal, Write};
+use std::io::{self, IsTerminal};
+#[cfg(any(windows, target_os = "macos"))]
+use std::io::Write;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -44,6 +45,7 @@ impl StartupHints {
         None
     }
 
+    #[cfg(target_os = "macos")]
     fn is_empty(&self) -> bool {
         self.auto_send_message.is_none()
             && self.status_notice.is_none()
@@ -89,6 +91,7 @@ impl SetupHintsState {
     }
 }
 
+#[cfg(target_os = "macos")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MacTerminalKind {
     Ghostty,
@@ -101,6 +104,7 @@ enum MacTerminalKind {
     Unknown,
 }
 
+#[cfg(target_os = "macos")]
 impl MacTerminalKind {
     fn label(self) -> &'static str {
         match self {
@@ -142,12 +146,14 @@ impl MacTerminalKind {
     }
 }
 
+#[cfg(target_os = "macos")]
 impl fmt::Display for MacTerminalKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.label())
     }
 }
 
+#[cfg(target_os = "macos")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct MacTerminalPreference {
     terminal: String,
@@ -158,21 +164,11 @@ fn mac_terminal_pref_path() -> Result<PathBuf> {
     Ok(storage::jcode_dir()?.join("preferred_terminal.json"))
 }
 
-#[cfg(not(target_os = "macos"))]
-fn mac_terminal_pref_path() -> Result<PathBuf> {
-    anyhow::bail!("Preferred terminal config is only supported on macOS")
-}
-
 #[cfg(target_os = "macos")]
 fn load_preferred_macos_terminal() -> Option<MacTerminalKind> {
     let path = mac_terminal_pref_path().ok()?;
     let pref: MacTerminalPreference = storage::read_json(&path).ok()?;
     MacTerminalKind::from_cli_value(&pref.terminal)
-}
-
-#[cfg(not(target_os = "macos"))]
-fn load_preferred_macos_terminal() -> Option<MacTerminalKind> {
-    None
 }
 
 #[cfg(target_os = "macos")]
@@ -186,19 +182,9 @@ fn save_preferred_macos_terminal(terminal: MacTerminalKind) -> Result<()> {
     )
 }
 
-#[cfg(not(target_os = "macos"))]
-fn save_preferred_macos_terminal(_terminal: MacTerminalKind) -> Result<()> {
-    anyhow::bail!("Preferred terminal config is only supported on macOS")
-}
-
 #[cfg(target_os = "macos")]
 fn effective_macos_terminal() -> MacTerminalKind {
     load_preferred_macos_terminal().unwrap_or_else(detect_macos_terminal)
-}
-
-#[cfg(not(target_os = "macos"))]
-fn effective_macos_terminal() -> MacTerminalKind {
-    MacTerminalKind::Unknown
 }
 
 #[cfg(target_os = "macos")]
@@ -233,11 +219,6 @@ fn detect_macos_terminal() -> MacTerminalKind {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
-fn detect_macos_terminal() -> MacTerminalKind {
-    MacTerminalKind::Unknown
-}
-
 #[cfg(target_os = "macos")]
 fn is_ghostty_installed() -> bool {
     if std::path::Path::new("/Applications/Ghostty.app").exists() {
@@ -259,11 +240,6 @@ fn is_ghostty_installed() -> bool {
         .unwrap_or(false)
 }
 
-#[cfg(not(target_os = "macos"))]
-fn is_ghostty_installed() -> bool {
-    false
-}
-
 /// Detect which terminal the user is currently running in (Windows).
 #[cfg(windows)]
 fn detect_terminal() -> &'static str {
@@ -276,11 +252,6 @@ fn detect_terminal() -> &'static str {
     } else {
         "unknown"
     }
-}
-
-#[cfg(not(windows))]
-fn detect_terminal() -> &'static str {
-    "non-windows"
 }
 
 /// Check if Alacritty is installed.
@@ -357,32 +328,9 @@ fn find_alacritty_path() -> Option<String> {
     None
 }
 
-#[cfg(not(windows))]
-fn find_alacritty_path() -> Option<String> {
-    let output = std::process::Command::new("which")
-        .arg("alacritty")
-        .output()
-        .ok()?;
-    if output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        if let Some(line) = stdout.lines().next() {
-            let trimmed = line.trim();
-            if !trimmed.is_empty() {
-                return Some(trimmed.to_string());
-            }
-        }
-    }
-    None
-}
-
 #[cfg(target_os = "macos")]
 fn mac_hotkey_support_dir() -> Result<PathBuf> {
     Ok(storage::jcode_dir()?.join("hotkey"))
-}
-
-#[cfg(not(target_os = "macos"))]
-fn mac_hotkey_support_dir() -> Result<PathBuf> {
-    anyhow::bail!("Hotkey support dir is only available on macOS")
 }
 
 #[cfg(target_os = "macos")]
@@ -392,11 +340,6 @@ fn mac_hotkey_launch_agent_path() -> Result<PathBuf> {
         .join("Library")
         .join("LaunchAgents")
         .join("com.jcode.hotkey.plist"))
-}
-
-#[cfg(not(target_os = "macos"))]
-fn mac_hotkey_launch_agent_path() -> Result<PathBuf> {
-    anyhow::bail!("LaunchAgent path is only available on macOS")
 }
 
 #[cfg(target_os = "macos")]
@@ -519,13 +462,6 @@ fn install_macos_hotkey_listener(
     }
 
     Ok(terminal)
-}
-
-#[cfg(not(target_os = "macos"))]
-fn install_macos_hotkey_listener(
-    _preferred_terminal: Option<MacTerminalKind>,
-) -> Result<MacTerminalKind> {
-    anyhow::bail!("macOS hotkey listener is only supported on macOS")
 }
 
 #[cfg(target_os = "macos")]
@@ -730,11 +666,6 @@ Write-Output "OK"
     Ok(())
 }
 
-#[cfg(not(windows))]
-fn create_hotkey_shortcut(_use_alacritty: bool) -> Result<()> {
-    anyhow::bail!("Hotkey setup is only supported on Windows")
-}
-
 /// Install Alacritty via winget.
 #[cfg(windows)]
 fn install_alacritty() -> Result<()> {
@@ -758,11 +689,6 @@ fn install_alacritty() -> Result<()> {
     }
 }
 
-#[cfg(not(windows))]
-fn install_alacritty() -> Result<()> {
-    anyhow::bail!("Alacritty install via winget is only supported on Windows")
-}
-
 /// Read a single-character choice from the user.
 fn read_choice() -> String {
     let mut input = String::new();
@@ -771,6 +697,7 @@ fn read_choice() -> String {
 }
 
 /// Show the hotkey setup nudge. Returns true if something was set up.
+#[cfg(windows)]
 fn nudge_hotkey(state: &mut SetupHintsState) -> bool {
     let terminal = detect_terminal();
     let using_alacritty = terminal == "alacritty" || is_alacritty_installed();
@@ -841,6 +768,7 @@ fn nudge_hotkey(state: &mut SetupHintsState) -> bool {
 }
 
 /// Show the Alacritty install nudge. Returns true if Alacritty was installed.
+#[cfg(windows)]
 fn nudge_alacritty(state: &mut SetupHintsState) -> bool {
     let terminal = detect_terminal();
 
@@ -928,6 +856,7 @@ fn nudge_alacritty(state: &mut SetupHintsState) -> bool {
 }
 
 /// Prompt the user to try out their new hotkey.
+#[cfg(windows)]
 fn prompt_try_it_out(installed_alacritty: bool) {
     eprintln!("\x1b[32m┌─────────────────────────────────────────────────────────────┐\x1b[0m");
     eprintln!(
@@ -956,6 +885,7 @@ fn prompt_try_it_out(installed_alacritty: bool) {
     std::thread::sleep(std::time::Duration::from_secs(3));
 }
 
+#[cfg(target_os = "macos")]
 fn macos_guided_ghostty_message(current_terminal: MacTerminalKind) -> String {
     format!(
         "I want to upgrade my macOS terminal setup for jcode. Please guide me step-by-step, wait for confirmation between steps, and keep each step concise.\n\nCurrent terminal: {}\nGoal: install Ghostty and use it for jcode.\n\nPlease help me with:\n1) Detecting if Homebrew is installed (and installing it if missing)\n2) Installing Ghostty\n3) Launching Ghostty and setting it as my preferred terminal for jcode\n4) Optional: adding a macOS keyboard shortcut/launcher flow for jcode\n5) Verifying jcode runs in Ghostty and that inline images/graphics work\n\nAssume I am not an expert; provide exact commands and where to click in macOS settings when needed.",
@@ -963,6 +893,7 @@ fn macos_guided_ghostty_message(current_terminal: MacTerminalKind) -> String {
     )
 }
 
+#[cfg(target_os = "macos")]
 fn nudge_macos_ghostty(state: &mut SetupHintsState) -> Option<String> {
     let terminal = detect_macos_terminal();
     let using_ghostty = terminal == MacTerminalKind::Ghostty;
@@ -1066,7 +997,8 @@ pub fn run_setup_hotkey(_listen_macos_hotkey: bool) -> Result<()> {
         }
     }
 
-    if !cfg!(windows) {
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
         eprintln!("Global hotkey setup is currently only supported on Windows.");
         eprintln!();
         eprintln!("On Linux/macOS, add a keybinding in your desktop environment:");
@@ -1077,86 +1009,89 @@ pub fn run_setup_hotkey(_listen_macos_hotkey: bool) -> Result<()> {
         return Ok(());
     }
 
-    let mut state = SetupHintsState::load();
-    let terminal = detect_terminal();
-    let already_using_alacritty = terminal == "alacritty";
+    #[cfg(windows)]
+    {
+        let mut state = SetupHintsState::load();
+        let terminal = detect_terminal();
+        let already_using_alacritty = terminal == "alacritty";
 
-    eprintln!("\x1b[1mjcode setup-hotkey\x1b[0m");
-    eprintln!();
+        eprintln!("\x1b[1mjcode setup-hotkey\x1b[0m");
+        eprintln!();
 
-    eprintln!(
-        "  Detected terminal: {}",
-        match terminal {
-            "windows-terminal" => "Windows Terminal",
-            "wezterm" => "WezTerm",
-            "alacritty" => "Alacritty",
-            _ => "Unknown",
-        }
-    );
-
-    if is_alacritty_installed() && !already_using_alacritty {
-        eprintln!("  Alacritty: \x1b[32minstalled\x1b[0m");
-    } else if already_using_alacritty {
-        eprintln!("  Alacritty: \x1b[32mactive\x1b[0m");
-    } else {
-        eprintln!("  Alacritty: \x1b[90mnot installed\x1b[0m");
-    }
-    eprintln!();
-
-    let mut installed_alacritty = false;
-    if !already_using_alacritty && !is_alacritty_installed() {
         eprintln!(
-            "  Alacritty is the fastest terminal emulator (GPU-accelerated, lowest latency)."
+            "  Detected terminal: {}",
+            match terminal {
+                "windows-terminal" => "Windows Terminal",
+                "wezterm" => "WezTerm",
+                "alacritty" => "Alacritty",
+                _ => "Unknown",
+            }
         );
-        eprint!("  Install Alacritty? \x1b[32m[y]\x1b[0m/\x1b[90m[n]\x1b[0m: ");
-        let _ = io::stderr().flush();
-        let choice = read_choice();
-        if choice == "y" || choice == "yes" {
-            if !is_winget_available() {
-                eprintln!("\n  \x1b[33m⚠\x1b[0m  winget not found. Install Alacritty manually:");
-                eprintln!("     https://alacritty.org/\n");
-            } else {
-                match install_alacritty() {
-                    Ok(()) => {
-                        state.alacritty_configured = true;
-                        installed_alacritty = true;
-                        eprintln!("  \x1b[32m✓\x1b[0m Alacritty installed!\n");
-                    }
-                    Err(e) => {
-                        eprintln!("  \x1b[31m✗\x1b[0m Install failed: {}\n", e);
+
+        if is_alacritty_installed() && !already_using_alacritty {
+            eprintln!("  Alacritty: \x1b[32minstalled\x1b[0m");
+        } else if already_using_alacritty {
+            eprintln!("  Alacritty: \x1b[32mactive\x1b[0m");
+        } else {
+            eprintln!("  Alacritty: \x1b[90mnot installed\x1b[0m");
+        }
+        eprintln!();
+
+        let mut installed_alacritty = false;
+        if !already_using_alacritty && !is_alacritty_installed() {
+            eprintln!(
+                "  Alacritty is the fastest terminal emulator (GPU-accelerated, lowest latency)."
+            );
+            eprint!("  Install Alacritty? \x1b[32m[y]\x1b[0m/\x1b[90m[n]\x1b[0m: ");
+            let _ = io::stderr().flush();
+            let choice = read_choice();
+            if choice == "y" || choice == "yes" {
+                if !is_winget_available() {
+                    eprintln!("\n  \x1b[33m⚠\x1b[0m  winget not found. Install Alacritty manually:");
+                    eprintln!("     https://alacritty.org/\n");
+                } else {
+                    match install_alacritty() {
+                        Ok(()) => {
+                            state.alacritty_configured = true;
+                            installed_alacritty = true;
+                            eprintln!("  \x1b[32m✓\x1b[0m Alacritty installed!\n");
+                        }
+                        Err(e) => {
+                            eprintln!("  \x1b[31m✗\x1b[0m Install failed: {}\n", e);
+                        }
                     }
                 }
             }
-        }
-        eprintln!();
-    }
-
-    let use_alacritty = already_using_alacritty || is_alacritty_installed();
-    let terminal_name = if use_alacritty {
-        "Alacritty"
-    } else {
-        "Windows Terminal"
-    };
-
-    eprintln!(
-        "  Setting up \x1b[1mAlt+;\x1b[0m → {} + jcode...",
-        terminal_name
-    );
-
-    match create_hotkey_shortcut(use_alacritty) {
-        Ok(()) => {
-            state.hotkey_configured = true;
-            let _ = state.save();
-            eprintln!("  \x1b[32m✓\x1b[0m Created hotkey (\x1b[1mAlt+;\x1b[0m)");
             eprintln!();
-            prompt_try_it_out(installed_alacritty);
         }
-        Err(e) => {
-            eprintln!("  \x1b[31m✗\x1b[0m Failed: {}", e);
-        }
-    }
 
-    Ok(())
+        let use_alacritty = already_using_alacritty || is_alacritty_installed();
+        let terminal_name = if use_alacritty {
+            "Alacritty"
+        } else {
+            "Windows Terminal"
+        };
+
+        eprintln!(
+            "  Setting up \x1b[1mAlt+;\x1b[0m → {} + jcode...",
+            terminal_name
+        );
+
+        match create_hotkey_shortcut(use_alacritty) {
+            Ok(()) => {
+                state.hotkey_configured = true;
+                let _ = state.save();
+                eprintln!("  \x1b[32m✓\x1b[0m Created hotkey (\x1b[1mAlt+;\x1b[0m)");
+                eprintln!();
+                prompt_try_it_out(installed_alacritty);
+            }
+            Err(e) => {
+                eprintln!("  \x1b[31m✗\x1b[0m Failed: {}", e);
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -1182,11 +1117,6 @@ fn run_macos_hotkey_listener() -> Result<()> {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
-fn run_macos_hotkey_listener() -> Result<()> {
-    anyhow::bail!("macOS hotkey listener is only supported on macOS")
-}
-
 /// Main entry point: check if we should show setup hints.
 ///
 /// Called early in startup, before the TUI is initialized.
@@ -1210,48 +1140,58 @@ pub fn maybe_show_setup_hints() -> Option<StartupHints> {
 
     let startup_hints = startup_hints_for_launch(&state);
 
-    if !cfg!(windows) && !cfg!(target_os = "macos") {
-        return startup_hints;
-    }
+    #[cfg(target_os = "macos")]
+    {
+        if state.launch_count % 3 != 0 {
+            return startup_hints;
+        }
 
-    if state.launch_count % 3 != 0 {
-        return startup_hints;
-    }
-
-    if cfg!(target_os = "macos") {
         if !state.mac_ghostty_guided && !state.mac_ghostty_dismissed {
             let mut hints = startup_hints.unwrap_or_default();
             hints.auto_send_message = nudge_macos_ghostty(&mut state);
             return if hints.is_empty() { None } else { Some(hints) };
         }
+
         return startup_hints;
     }
 
-    let terminal = detect_terminal();
-    let already_using_alacritty = terminal == "alacritty";
+    #[cfg(windows)]
+    {
+        if state.launch_count % 3 != 0 {
+            return startup_hints;
+        }
 
-    if already_using_alacritty {
-        state.alacritty_configured = true;
-        state.alacritty_dismissed = true;
-        let _ = state.save();
+        let terminal = detect_terminal();
+        let already_using_alacritty = terminal == "alacritty";
+
+        if already_using_alacritty {
+            state.alacritty_configured = true;
+            state.alacritty_dismissed = true;
+            let _ = state.save();
+        }
+
+        let mut did_setup_hotkey = false;
+        let mut did_install_alacritty = false;
+
+        if !state.hotkey_configured && !state.hotkey_dismissed {
+            did_setup_hotkey = nudge_hotkey(&mut state);
+        }
+
+        if !state.alacritty_configured && !state.alacritty_dismissed && !already_using_alacritty {
+            did_install_alacritty = nudge_alacritty(&mut state);
+        }
+
+        if did_setup_hotkey || (did_install_alacritty && state.hotkey_configured) {
+            prompt_try_it_out(did_install_alacritty);
+        }
+
+        return startup_hints;
     }
 
-    let mut did_setup_hotkey = false;
-    let mut did_install_alacritty = false;
-
-    if !state.hotkey_configured && !state.hotkey_dismissed {
-        did_setup_hotkey = nudge_hotkey(&mut state);
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        startup_hints
     }
-
-    if !state.alacritty_configured && !state.alacritty_dismissed && !already_using_alacritty {
-        did_install_alacritty = nudge_alacritty(&mut state);
-    }
-
-    if did_setup_hotkey || (did_install_alacritty && state.hotkey_configured) {
-        prompt_try_it_out(did_install_alacritty);
-    }
-
-    startup_hints
 }
 
 /// Create a desktop shortcut/launcher for jcode.
