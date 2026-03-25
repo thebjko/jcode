@@ -1,6 +1,15 @@
 use super::*;
 use serde::{Deserialize, Serialize};
 
+fn percentile_ms(samples_ms: &[f64], percentile: f64) -> f64 {
+    if samples_ms.is_empty() {
+        return 0.0;
+    }
+    let percentile = percentile.clamp(0.0, 1.0);
+    let rank = ((samples_ms.len() - 1) as f64 * percentile).round() as usize;
+    samples_ms[rank.min(samples_ms.len() - 1)]
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct DebugSnapshot {
     state: serde_json::Value,
@@ -97,6 +106,31 @@ pub(super) struct ScrollSuiteConfig {
     require_no_anomalies: Option<bool>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub(super) struct SidePanelLatencyConfig {
+    width: Option<u16>,
+    height: Option<u16>,
+    iterations: Option<usize>,
+    warmup_iterations: Option<usize>,
+    padding: Option<usize>,
+    diagrams: Option<usize>,
+    include_samples: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct SidePanelLatencySample {
+    iteration: usize,
+    direction: &'static str,
+    scroll_only: bool,
+    latency_ms: f64,
+    render_ms: Option<f32>,
+    scroll_before: usize,
+    scroll_after: usize,
+    frame_id_before: Option<u64>,
+    frame_id_after: Option<u64>,
+    scroll_changed: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct DebugEvent {
     at_ms: u64,
@@ -136,8 +170,14 @@ impl DebugTrace {
 pub(super) struct ScrollTestState {
     display_messages: Vec<DisplayMessage>,
     display_messages_version: u64,
+    side_panel: crate::side_panel::SidePanelSnapshot,
     scroll_offset: usize,
     auto_scroll_paused: bool,
+    diff_mode: crate::config::DiffDisplayMode,
+    diff_pane_scroll: usize,
+    diff_pane_scroll_x: i32,
+    diff_pane_focus: bool,
+    diff_pane_auto_scroll: bool,
     is_processing: bool,
     streaming_text: String,
     queued_messages: Vec<String>,
@@ -167,8 +207,14 @@ impl ScrollTestState {
         Self {
             display_messages: app.display_messages.clone(),
             display_messages_version: app.display_messages_version,
+            side_panel: app.side_panel.clone(),
             scroll_offset: app.scroll_offset,
             auto_scroll_paused: app.auto_scroll_paused,
+            diff_mode: app.diff_mode,
+            diff_pane_scroll: app.diff_pane_scroll,
+            diff_pane_scroll_x: app.diff_pane_scroll_x,
+            diff_pane_focus: app.diff_pane_focus,
+            diff_pane_auto_scroll: app.diff_pane_auto_scroll,
             is_processing: app.is_processing,
             streaming_text: app.streaming_text.clone(),
             queued_messages: app.queued_messages.clone(),
@@ -197,8 +243,14 @@ impl ScrollTestState {
     fn restore(self, app: &mut App) {
         app.display_messages = self.display_messages;
         app.display_messages_version = self.display_messages_version;
+        app.side_panel = self.side_panel;
         app.scroll_offset = self.scroll_offset;
         app.auto_scroll_paused = self.auto_scroll_paused;
+        app.diff_mode = self.diff_mode;
+        app.diff_pane_scroll = self.diff_pane_scroll;
+        app.diff_pane_scroll_x = self.diff_pane_scroll_x;
+        app.diff_pane_focus = self.diff_pane_focus;
+        app.diff_pane_auto_scroll = self.diff_pane_auto_scroll;
         app.is_processing = self.is_processing;
         app.streaming_text = self.streaming_text;
         app.queued_messages = self.queued_messages;
@@ -279,6 +331,257 @@ impl App {
         }
 
         out
+    }
+
+    fn build_side_panel_latency_snapshot(
+        diagrams: usize,
+        padding: usize,
+    ) -> crate::side_panel::SidePanelSnapshot {
+        let content = Self::build_scroll_test_content(diagrams, padding, None);
+        crate::side_panel::SidePanelSnapshot {
+            focused_page_id: Some("latency_bench".to_string()),
+            pages: vec![crate::side_panel::SidePanelPage {
+                id: "latency_bench".to_string(),
+                title: "Latency Bench".to_string(),
+                file_path: "latency_bench.md".to_string(),
+                format: crate::side_panel::SidePanelPageFormat::Markdown,
+                source: crate::side_panel::SidePanelPageSource::Managed,
+                content,
+                updated_at_ms: 1,
+            }],
+        }
+    }
+
+    fn run_side_panel_latency_bench(&mut self, raw: Option<&str>) -> String {
+        let cfg: SidePanelLatencyConfig = if let Some(raw) = raw {
+            if raw.trim().is_empty() {
+                SidePanelLatencyConfig {
+                    width: None,
+                    height: None,
+                    iterations: None,
+                    warmup_iterations: None,
+                    padding: None,
+                    diagrams: None,
+                    include_samples: None,
+                }
+            } else {
+                match serde_json::from_str(raw) {
+                    Ok(cfg) => cfg,
+                    Err(e) => return format!("side-panel-latency parse error: {}", e),
+                }
+            }
+        } else {
+            SidePanelLatencyConfig {
+                width: None,
+                height: None,
+                iterations: None,
+                warmup_iterations: None,
+                padding: None,
+                diagrams: None,
+                include_samples: None,
+            }
+        };
+
+        let width = cfg.width.unwrap_or(100).max(40);
+        let height = cfg.height.unwrap_or(40).max(20);
+        let iterations = cfg.iterations.unwrap_or(40).clamp(4, 400);
+        let warmup_iterations = cfg.warmup_iterations.unwrap_or(6).min(50);
+        let padding = cfg.padding.unwrap_or(24).max(8);
+        let diagrams = cfg.diagrams.unwrap_or(2).clamp(1, 3);
+        let include_samples = cfg.include_samples.unwrap_or(true);
+
+        let saved_state = ScrollTestState::capture(self);
+        let saved_diagram_override = crate::tui::markdown::get_diagram_mode_override();
+        let saved_active_diagrams = crate::tui::mermaid::snapshot_active_diagrams();
+        let was_visual_debug = crate::tui::visual_debug::is_enabled();
+        crate::tui::visual_debug::enable();
+
+        self.display_messages = vec![
+            DisplayMessage {
+                role: "user".to_string(),
+                content: "Headless side-panel latency benchmark".to_string(),
+                tool_calls: vec![],
+                duration_secs: None,
+                title: None,
+                tool_data: None,
+            },
+            DisplayMessage {
+                role: "assistant".to_string(),
+                content: "Benchmarking side-panel input latency.".to_string(),
+                tool_calls: vec![],
+                duration_secs: None,
+                title: None,
+                tool_data: None,
+            },
+        ];
+        self.bump_display_messages_version();
+        self.side_panel = Self::build_side_panel_latency_snapshot(diagrams, padding);
+        self.diff_mode = crate::config::DiffDisplayMode::Off;
+        self.diff_pane_scroll = 0;
+        self.diff_pane_scroll_x = 0;
+        self.diff_pane_focus = false;
+        self.diff_pane_auto_scroll = false;
+        self.follow_chat_bottom();
+        self.is_processing = false;
+        self.clear_streaming_render_state();
+        self.queued_messages.clear();
+        self.interleave_message = None;
+        self.pending_soft_interrupts.clear();
+        self.status = ProcessingStatus::Idle;
+        self.processing_started = None;
+        self.status_notice = None;
+        crate::tui::markdown::set_diagram_mode_override(Some(self.diagram_mode));
+
+        use crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let result = (|| -> Result<serde_json::Value, String> {
+            let backend = TestBackend::new(width, height);
+            let mut terminal = Terminal::new(backend)
+                .map_err(|e| format!("side-panel-latency terminal error: {}", e))?;
+
+            terminal
+                .draw(|f| crate::tui::ui::draw(f, self))
+                .map_err(|e| format!("side-panel-latency baseline draw error: {}", e))?;
+
+            let diff_area = crate::tui::ui::last_layout_snapshot()
+                .and_then(|layout| layout.diff_pane_area)
+                .ok_or_else(|| "side-panel-latency: diff pane area missing".to_string())?;
+            let total_lines = crate::tui::ui::pinned_pane_total_lines();
+            let max_scroll = total_lines.saturating_sub(diff_area.height as usize);
+            if max_scroll == 0 {
+                return Err("side-panel-latency: side panel did not become scrollable".to_string());
+            }
+
+            self.diff_pane_scroll = max_scroll / 2;
+            terminal
+                .draw(|f| crate::tui::ui::draw(f, self))
+                .map_err(|e| format!("side-panel-latency mid draw error: {}", e))?;
+
+            let center_x = diff_area.x + diff_area.width / 2;
+            let center_y = diff_area.y + diff_area.height / 2;
+            let total_runs = warmup_iterations + iterations;
+            let mut samples: Vec<SidePanelLatencySample> = Vec::with_capacity(iterations);
+            let mut latency_values: Vec<f64> = Vec::with_capacity(iterations);
+            let mut render_values: Vec<f64> = Vec::with_capacity(iterations);
+            let mut scroll_only_count = 0usize;
+            let mut unchanged_scroll_count = 0usize;
+
+            for idx in 0..total_runs {
+                let direction = if idx % 2 == 0 { "down" } else { "up" };
+                let kind = if idx % 2 == 0 {
+                    MouseEventKind::ScrollDown
+                } else {
+                    MouseEventKind::ScrollUp
+                };
+                let before_frame = crate::tui::visual_debug::latest_frame();
+                let before_frame_id = before_frame.as_ref().map(|frame| frame.frame_id);
+                let scroll_before = if self.diff_pane_scroll == usize::MAX {
+                    crate::tui::ui::last_diff_pane_effective_scroll()
+                } else {
+                    self.diff_pane_scroll
+                };
+                let started = Instant::now();
+                let scroll_only = self.handle_mouse_event(MouseEvent {
+                    kind,
+                    column: center_x,
+                    row: center_y,
+                    modifiers: KeyModifiers::empty(),
+                });
+                if scroll_only {
+                    scroll_only_count += 1;
+                    std::thread::sleep(crate::tui::redraw_interval(self));
+                }
+                terminal
+                    .draw(|f| crate::tui::ui::draw(f, self))
+                    .map_err(|e| format!("side-panel-latency draw error: {}", e))?;
+                let latency_ms = started.elapsed().as_secs_f64() * 1000.0;
+                let after_frame = crate::tui::visual_debug::latest_frame();
+                let after_frame_id = after_frame.as_ref().map(|frame| frame.frame_id);
+                let scroll_after = crate::tui::ui::last_diff_pane_effective_scroll();
+                let scroll_changed = scroll_after != scroll_before;
+                if !scroll_changed {
+                    unchanged_scroll_count += 1;
+                }
+                let render_ms = after_frame
+                    .as_ref()
+                    .and_then(|frame| frame.render_timing.as_ref().map(|timing| timing.total_ms));
+
+                if idx >= warmup_iterations {
+                    latency_values.push(latency_ms);
+                    if let Some(render_ms) = render_ms {
+                        render_values.push(render_ms as f64);
+                    }
+                    samples.push(SidePanelLatencySample {
+                        iteration: idx - warmup_iterations,
+                        direction,
+                        scroll_only,
+                        latency_ms,
+                        render_ms,
+                        scroll_before,
+                        scroll_after,
+                        frame_id_before: before_frame_id,
+                        frame_id_after: after_frame_id,
+                        scroll_changed,
+                    });
+                }
+            }
+
+            let mut sorted_latencies = latency_values.clone();
+            sorted_latencies.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let mut sorted_render = render_values.clone();
+            sorted_render.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+            Ok(serde_json::json!({
+                "ok": scroll_only_count == 0 && unchanged_scroll_count == 0,
+                "config": {
+                    "width": width,
+                    "height": height,
+                    "iterations": iterations,
+                    "warmup_iterations": warmup_iterations,
+                    "padding": padding,
+                    "diagrams": diagrams,
+                },
+                "summary": {
+                    "samples": latency_values.len(),
+                    "scroll_only_count": scroll_only_count,
+                    "unchanged_scroll_count": unchanged_scroll_count,
+                    "max_scroll": max_scroll,
+                    "latency_ms": {
+                        "p50": percentile_ms(&sorted_latencies, 0.50),
+                        "p95": percentile_ms(&sorted_latencies, 0.95),
+                        "p99": percentile_ms(&sorted_latencies, 0.99),
+                        "max": sorted_latencies.last().copied().unwrap_or(0.0),
+                        "avg": if latency_values.is_empty() { 0.0 } else { latency_values.iter().sum::<f64>() / latency_values.len() as f64 },
+                    },
+                    "render_ms": {
+                        "p50": percentile_ms(&sorted_render, 0.50),
+                        "p95": percentile_ms(&sorted_render, 0.95),
+                        "p99": percentile_ms(&sorted_render, 0.99),
+                        "max": sorted_render.last().copied().unwrap_or(0.0),
+                        "avg": if render_values.is_empty() { 0.0 } else { render_values.iter().sum::<f64>() / render_values.len() as f64 },
+                    }
+                },
+                "samples": if include_samples { serde_json::to_value(&samples).unwrap_or(serde_json::Value::Null) } else { serde_json::Value::Null },
+                "notes": [
+                    "This is a headless end-to-end app benchmark: injected side-panel mouse scroll event -> event classification -> redraw scheduling -> offscreen frame update.",
+                    "It does not include terminal emulator/compositor/image protocol wall-clock paint latency outside jcode."
+                ]
+            }))
+        })();
+
+        saved_state.restore(self);
+        crate::tui::markdown::set_diagram_mode_override(saved_diagram_override);
+        crate::tui::mermaid::restore_active_diagrams(saved_active_diagrams);
+        if !was_visual_debug {
+            crate::tui::visual_debug::disable();
+        }
+
+        match result {
+            Ok(value) => serde_json::to_string_pretty(&value).unwrap_or_else(|_| "{}".to_string()),
+            Err(e) => e,
+        }
     }
 
     fn capture_scroll_test_step(
@@ -1175,6 +1478,9 @@ impl App {
         } else if cmd == "scroll-suite" || cmd.starts_with("scroll-suite:") {
             let raw = cmd.strip_prefix("scroll-suite:");
             self.run_scroll_suite(raw)
+        } else if cmd == "side-panel-latency" || cmd.starts_with("side-panel-latency:") {
+            let raw = cmd.strip_prefix("side-panel-latency:");
+            self.run_side_panel_latency_bench(raw)
         } else if cmd == "quit" {
             self.should_quit = true;
             "OK: quitting".to_string()
@@ -1349,6 +1655,7 @@ impl App {
                  - scroll:<up|down|top|bottom> - control scroll\n\
                  - scroll-test[:<json>] - run offscreen scroll+diagram test\n\
                  - scroll-suite[:<json>] - run scroll+diagram test suite\n\
+                 - side-panel-latency[:<json>] - benchmark headless side-panel input->frame latency\n\
                  - keys:<keyspec> - inject key events (e.g. keys:ctrl+r)\n\
                  - input - get current input buffer\n\
                  - set_input:<text> - set input buffer\n\

@@ -122,6 +122,7 @@ CLIENT COMMANDS (client: prefix):
   client:scroll:<dir>      - Scroll (up/down/top/bottom)
   client:scroll-test[:<j>] - Run offscreen scroll+diagram test
   client:scroll-suite[:<j>] - Run scroll+diagram test suite
+  client:side-panel-latency[:<j>] - Benchmark headless side-panel input->frame latency
   client:wait              - Check if processing
   client:history           - Get display messages
   client:help              - Client command help
@@ -135,6 +136,7 @@ TESTER COMMANDS (tester: prefix):
   tester:<id>:state        - Get tester state
   tester:<id>:scroll-test  - Run offscreen scroll+diagram test
   tester:<id>:scroll-suite - Run scroll+diagram test suite
+  tester:<id>:side-panel-latency - Benchmark headless side-panel input->frame latency
   tester:<id>:stop         - Stop tester
 
 Examples:

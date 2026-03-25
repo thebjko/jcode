@@ -11,6 +11,15 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+fn percentile_ms(samples_ms: &[f64], percentile: f64) -> f64 {
+    if samples_ms.is_empty() {
+        return 0.0;
+    }
+    let percentile = percentile.clamp(0.0, 1.0);
+    let rank = ((samples_ms.len() - 1) as f64 * percentile).round() as usize;
+    samples_ms[rank.min(samples_ms.len() - 1)]
+}
+
 #[derive(Parser, Debug)]
 #[command(name = "tui_bench")]
 #[command(about = "Autonomous TUI render benchmark")]
@@ -661,6 +670,7 @@ fn main() -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     let start = Instant::now();
+    let mut frame_times_ms: Vec<f64> = Vec::with_capacity(args.frames);
     for frame in 0..args.frames {
         if args.scroll_cycle > 0 {
             state.scroll_offset = frame % args.scroll_cycle;
@@ -677,7 +687,9 @@ fn main() -> Result<()> {
             state.is_processing = true;
             state.status = ProcessingStatus::Streaming;
         }
+        let frame_start = Instant::now();
         terminal.draw(|f| jcode::tui::render_frame(f, &state))?;
+        frame_times_ms.push(frame_start.elapsed().as_secs_f64() * 1000.0);
     }
     let elapsed = start.elapsed();
 
@@ -688,6 +700,12 @@ fn main() -> Result<()> {
     } else {
         0.0
     };
+    let mut sorted = frame_times_ms;
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let p50_ms = percentile_ms(&sorted, 0.50);
+    let p95_ms = percentile_ms(&sorted, 0.95);
+    let p99_ms = percentile_ms(&sorted, 0.99);
+    let max_ms = sorted.last().copied().unwrap_or(0.0);
 
     println!("mode: {:?}", args.mode);
     if matches!(args.mode, BenchMode::SidePanel) {
@@ -697,6 +715,10 @@ fn main() -> Result<()> {
     println!("frames: {}", args.frames);
     println!("total_ms: {:.2}", total_ms);
     println!("avg_ms: {:.2}", avg_ms);
+    println!("p50_ms: {:.2}", p50_ms);
+    println!("p95_ms: {:.2}", p95_ms);
+    println!("p99_ms: {:.2}", p99_ms);
+    println!("max_ms: {:.2}", max_ms);
     println!("fps: {:.1}", fps);
 
     Ok(())

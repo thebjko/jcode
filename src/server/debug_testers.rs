@@ -178,6 +178,10 @@ async fn execute_tester_subcommand(
             Some(raw) => format!("scroll-suite:{}", raw),
             None => "scroll-suite".to_string(),
         },
+        "side-panel-latency" => match arg {
+            Some(raw) => format!("side-panel-latency:{}", raw),
+            None => "side-panel-latency".to_string(),
+        },
         "stop" => {
             if let Some(pid) = tester.get("pid").and_then(|v| v.as_u64()) {
                 let _ = std::process::Command::new("kill")

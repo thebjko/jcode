@@ -5259,6 +5259,36 @@ fn test_debug_command_message_respects_queue_mode() {
 }
 
 #[test]
+fn test_debug_command_side_panel_latency_bench_reports_immediate_redraw() {
+    let mut app = create_test_app();
+    let result = app.handle_debug_command(
+        r#"side-panel-latency:{"iterations":8,"warmup_iterations":2,"include_samples":false}"#,
+    );
+    let value: serde_json::Value =
+        serde_json::from_str(&result).expect("side-panel latency bench should return JSON");
+
+    assert_eq!(value.get("ok").and_then(|v| v.as_bool()), Some(true));
+    assert_eq!(
+        value["summary"]["scroll_only_count"].as_u64(),
+        Some(0),
+        "side-panel latency bench should observe immediate redraw events"
+    );
+    assert_eq!(
+        value["summary"]["unchanged_scroll_count"].as_u64(),
+        Some(0),
+        "each injected event should change effective side-pane scroll"
+    );
+    assert!(
+        value["summary"]["latency_ms"]["p95"]
+            .as_f64()
+            .unwrap_or_default()
+            < 16.0,
+        "headless side-panel p95 latency should stay within a 60fps frame budget: {}",
+        result
+    );
+}
+
+#[test]
 fn test_remote_transcript_send_uses_remote_submission_path() {
     let mut app = create_test_app();
     app.is_remote = true;

@@ -528,22 +528,38 @@ impl App {
                 }
                 Some(false)
             }
-            MouseEventKind::ScrollUp => point
-                .map(|point| self.scroll_copy_selection_pane(point.pane, true))
-                .or_else(|| {
-                    self.copy_selection_dragging
-                        .then(|| self.current_copy_selection_pane())
-                        .flatten()
-                        .map(|pane| self.scroll_copy_selection_pane(pane, true))
-                }),
-            MouseEventKind::ScrollDown => point
-                .map(|point| self.scroll_copy_selection_pane(point.pane, false))
-                .or_else(|| {
-                    self.copy_selection_dragging
-                        .then(|| self.current_copy_selection_pane())
-                        .flatten()
-                        .map(|pane| self.scroll_copy_selection_pane(pane, false))
-                }),
+            MouseEventKind::ScrollUp => {
+                if !(self.copy_selection_mode
+                    || self.copy_selection_dragging
+                    || self.copy_selection_pending_anchor.is_some())
+                {
+                    return None;
+                }
+                point
+                    .map(|point| self.scroll_copy_selection_pane(point.pane, true))
+                    .or_else(|| {
+                        self.copy_selection_dragging
+                            .then(|| self.current_copy_selection_pane())
+                            .flatten()
+                            .map(|pane| self.scroll_copy_selection_pane(pane, true))
+                    })
+            }
+            MouseEventKind::ScrollDown => {
+                if !(self.copy_selection_mode
+                    || self.copy_selection_dragging
+                    || self.copy_selection_pending_anchor.is_some())
+                {
+                    return None;
+                }
+                point
+                    .map(|point| self.scroll_copy_selection_pane(point.pane, false))
+                    .or_else(|| {
+                        self.copy_selection_dragging
+                            .then(|| self.current_copy_selection_pane())
+                            .flatten()
+                            .map(|pane| self.scroll_copy_selection_pane(pane, false))
+                    })
+            }
             _ => None,
         }
     }
