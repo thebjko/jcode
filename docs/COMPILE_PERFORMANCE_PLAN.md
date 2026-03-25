@@ -71,6 +71,11 @@ even if they cannot reach the same fast path.
 - Prefer touched-file timings (for example `scripts/bench_compile.sh check --touch src/server.rs`) over no-op hot-cache reruns when judging ROI.
 - Track timing deltas after each structural phase.
 - Fix build/link blockers before treating any timing data as authoritative.
+- 2026-03-25: upgraded `scripts/bench_compile.sh` to support repeated runs, summary stats,
+  JSON output, and extra cargo-arg passthrough so compile-speed work can use consistent
+  touched-file measurements instead of one-off ad hoc timings.
+- 2026-03-25: upgraded `scripts/dev_cargo.sh` with `--print-setup` plus clearer cache/linker
+  diagnostics so developers can confirm whether `sccache` / fast-linker paths are actually active.
 
 ### Phase 3 — Workspace boundary design
 
@@ -255,6 +260,7 @@ Use:
 ```bash
 scripts/dev_cargo.sh check --quiet
 scripts/dev_cargo.sh build --release -p jcode --bin jcode --quiet
+scripts/dev_cargo.sh --print-setup
 ```
 
 The wrapper:
@@ -262,6 +268,7 @@ The wrapper:
 - uses `sccache` automatically when available
 - prefers `lld` locally on Linux x86_64
 - avoids hard-forcing a linker mode that may be broken on a given machine
+- can print the currently selected cache/linker setup with `--print-setup`
 
 Override linker mode explicitly when needed:
 
@@ -270,6 +277,22 @@ JCODE_FAST_LINKER=lld scripts/dev_cargo.sh build --release -p jcode --bin jcode
 JCODE_FAST_LINKER=mold scripts/dev_cargo.sh build --release -p jcode --bin jcode
 JCODE_FAST_LINKER=system scripts/dev_cargo.sh build --release -p jcode --bin jcode
 ```
+
+For compile timing, prefer repeatable touched-file measurements over no-op hot-cache reruns:
+
+```bash
+scripts/bench_compile.sh check --runs 3 --touch src/server.rs
+scripts/bench_compile.sh check --runs 3 --touch src/tool/read.rs
+scripts/bench_compile.sh release-jcode --runs 3
+scripts/bench_compile.sh build -- --package jcode --bin test_api
+```
+
+`bench_compile.sh` now supports:
+
+- `--runs <n>` for repeated timings with min/median/avg/max summaries
+- `--touch <path>` to simulate a local edit before each timed run
+- `--json` for scriptable output
+- `-- <extra cargo args>` to narrow the measured target/package/bin/features
 
 ## Stop Conditions
 
