@@ -11,7 +11,6 @@
 
 use anyhow::Result;
 use chrono::Utc;
-use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -653,100 +652,6 @@ impl MemoryAgent {
         }
 
         Ok(relevant)
-    }
-
-    /// Search past sessions for more context
-    async fn search_sessions(&self, query: &str) -> Result<Vec<SessionSearchResult>> {
-        let sessions_dir = crate::storage::jcode_dir()?.join("sessions");
-        if !sessions_dir.is_dir() {
-            return Ok(Vec::new());
-        }
-
-        let query_lower = query.to_lowercase();
-        let limit = 5;
-
-        let mut results = Vec::new();
-        let mut files: Vec<(std::path::PathBuf, std::time::SystemTime)> = Vec::new();
-
-        for entry in std::fs::read_dir(&sessions_dir)?.flatten() {
-            let path = entry.path();
-            if path.extension().map(|e| e == "json").unwrap_or(false) {
-                let mtime = entry
-                    .metadata()
-                    .and_then(|m| m.modified())
-                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-                files.push((path, mtime));
-            }
-        }
-        files.sort_by(|a, b| b.1.cmp(&a.1));
-        files.truncate(50);
-
-        for (path, _) in &files {
-            if results.len() >= limit {
-                break;
-            }
-            let raw = match std::fs::read(path) {
-                Ok(d) => d,
-                Err(_) => continue,
-            };
-            let raw_lower = String::from_utf8_lossy(&raw).to_lowercase();
-            if !raw_lower.contains(&query_lower) {
-                continue;
-            }
-
-            let session: crate::session::Session = match serde_json::from_slice(&raw) {
-                Ok(s) => s,
-                Err(_) => continue,
-            };
-
-            for msg in &session.messages {
-                for block in &msg.content {
-                    let text = match block {
-                        crate::message::ContentBlock::Text { text, .. } => text,
-                        crate::message::ContentBlock::ToolResult { content, .. } => content,
-                        _ => continue,
-                    };
-                    let text_lower = text.to_lowercase();
-                    if let Some(pos) = text_lower.find(&query_lower) {
-                        let start = pos.saturating_sub(80);
-                        let end = (pos + query_lower.len() + 80).min(text.len());
-                        let snippet = text[start..end].to_string();
-                        results.push(SessionSearchResult {
-                            session_id: session.id.clone(),
-                            snippet,
-                            relevance: 1.0,
-                        });
-                        if results.len() >= limit {
-                            break;
-                        }
-                    }
-                }
-                if results.len() >= limit {
-                    break;
-                }
-            }
-        }
-
-        Ok(results)
-    }
-
-    /// Read the source that caused an embedding hit
-    async fn read_source(&self, memory_id: &str) -> Result<Option<SourceContext>> {
-        // Get the memory entry
-        let all = MemoryManager::new().list_all()?;
-        let entry = all.iter().find(|e| e.id == memory_id);
-
-        if let Some(entry) = entry {
-            // Return the source session/context if available
-            Ok(Some(SourceContext {
-                memory_id: memory_id.to_string(),
-                content: entry.content.clone(),
-                source_session: entry.source.clone(),
-                category: entry.category.to_string(),
-            }))
-        } else {
-            Ok(None)
-        }
     }
 
     /// Extract memories from a context string
@@ -1574,23 +1479,6 @@ fn decay_memory_confidence(manager: &MemoryManager, memory_id: &str, amount: f32
     }
 
     Err(anyhow::anyhow!("Memory not found: {}", memory_id))
-}
-
-/// Result from session search
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionSearchResult {
-    pub session_id: String,
-    pub snippet: String,
-    pub relevance: f32,
-}
-
-/// Context about a memory's source
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SourceContext {
-    pub memory_id: String,
-    pub content: String,
-    pub source_session: Option<String>,
-    pub category: String,
 }
 
 /// Initialize and start the global memory agent

@@ -1,8 +1,5 @@
-use super::info_widget::{
-    AuthMethod, InfoWidgetData, MAX_MEMORY_EVENTS, UsageProvider, context_entries,
-};
+use super::info_widget::{AuthMethod, InfoWidgetData, MAX_MEMORY_EVENTS, UsageProvider};
 
-pub(crate) const MAX_CONTEXT_LINES: usize = 5;
 pub(crate) const MAX_TODO_LINES: usize = 12;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -192,15 +189,6 @@ fn compact_overview_height(data: &InfoWidgetData) -> u16 {
         + compact_background_height(data)
         + compact_usage_height(data)
         + compact_git_height(data)
-}
-
-fn expanded_context_height(data: &InfoWidgetData) -> u16 {
-    if let Some(info) = &data.context_info {
-        if info.total_chars > 0 {
-            return 3 + context_entries(info).len().min(MAX_CONTEXT_LINES) as u16;
-        }
-    }
-    0
 }
 
 fn expanded_todos_height(data: &InfoWidgetData) -> u16 {

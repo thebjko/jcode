@@ -5,9 +5,7 @@
 //! In left-aligned mode, widgets only appear on the right margin.
 
 use super::color_support::rgb;
-use super::info_widget_overview::{
-    InfoPageKind, MAX_CONTEXT_LINES, MAX_TODO_LINES, compute_page_layout,
-};
+use super::info_widget_overview::{InfoPageKind, MAX_TODO_LINES, compute_page_layout};
 use crate::ambient::AmbientStatus;
 use crate::memory_graph::EdgeKind;
 use crate::prompt::ContextInfo;
@@ -1406,15 +1404,19 @@ fn render_overview_widget(frame: &mut Frame, inner: Rect, data: &InfoWidgetData)
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
+#[cfg(test)]
 const MEMORY_TEXT_SUBGRAPH_MAX_NODES: usize = 8;
+#[cfg(test)]
 const MEMORY_TEXT_SUBGRAPH_MAX_EDGES: usize = 10;
 
+#[cfg(test)]
 #[derive(Debug, Clone)]
 struct MemorySubgraph {
     nodes: Vec<GraphNode>,
     edges: Vec<GraphEdge>,
 }
 
+#[cfg(test)]
 fn select_contextual_subgraph(
     info: &MemoryInfo,
     max_nodes: usize,
@@ -1538,6 +1540,7 @@ fn select_contextual_subgraph(
     })
 }
 
+#[cfg(test)]
 fn pick_subgraph_center(info: &MemoryInfo) -> Option<usize> {
     let mut best_idx: Option<usize> = None;
     let mut best_score: f32 = -1.0;
@@ -1559,6 +1562,7 @@ fn pick_subgraph_center(info: &MemoryInfo) -> Option<usize> {
     best_idx
 }
 
+#[cfg(test)]
 fn edge_kind_priority(kind: &str) -> u8 {
     match kind {
         "contradicts" => 6,
@@ -1981,6 +1985,7 @@ fn memory_step_detail(
     }
 }
 
+#[cfg(test)]
 fn render_memory_topology_lines(info: &MemoryInfo, inner: Rect) -> Vec<Line<'static>> {
     if info.graph_nodes.is_empty() || inner.width < 8 || inner.height == 0 {
         return Vec::new();
@@ -2045,6 +2050,7 @@ fn render_memory_topology_lines(info: &MemoryInfo, inner: Rect) -> Vec<Line<'sta
     lines
 }
 
+#[cfg(test)]
 fn memory_edge_label(kind: &str) -> &'static str {
     match kind {
         "has_tag" => "tag",
@@ -2465,17 +2471,6 @@ fn format_tokens(tokens: u64) -> String {
         format!("{:.1}K", tokens as f64 / 1_000.0)
     } else {
         format!("{}", tokens)
-    }
-}
-
-/// Format cost for display
-fn format_cost(cost: f32) -> String {
-    if cost >= 10.0 {
-        format!("{:.2}", cost)
-    } else if cost >= 1.0 {
-        format!("{:.3}", cost)
-    } else {
-        format!("{:.4}", cost)
     }
 }
 
@@ -3659,23 +3654,6 @@ fn render_todos_compact(data: &InfoWidgetData, _inner: Rect) -> Vec<Line<'static
     ]
 }
 
-fn render_queue_compact(data: &InfoWidgetData, _inner: Rect) -> Vec<Line<'static>> {
-    let Some(queue_mode) = data.queue_mode else {
-        return Vec::new();
-    };
-
-    let (mode_text, mode_color) = if queue_mode {
-        ("Wait", rgb(255, 200, 100))
-    } else {
-        ("ASAP", rgb(120, 200, 120))
-    };
-
-    vec![Line::from(vec![
-        Span::styled("Queue: ", Style::default().fg(rgb(140, 140, 150))),
-        Span::styled(mode_text, Style::default().fg(mode_color)),
-    ])]
-}
-
 fn render_memory_compact(info: &MemoryInfo) -> Vec<Line<'static>> {
     let mut spans = vec![
         Span::styled("🧠 ", Style::default().fg(rgb(200, 150, 255))),
@@ -4112,204 +4090,6 @@ fn format_event_for_expanded(
     }
 }
 
-fn render_swarm_compact(info: &SwarmInfo) -> Vec<Line<'static>> {
-    let mut spans: Vec<Span> = Vec::new();
-
-    // Show active member or subagent status first (most important)
-    let active_member = info
-        .members
-        .iter()
-        .find(|m| matches!(m.status.as_str(), "running" | "blocked" | "failed"));
-    if let Some(member) = active_member {
-        let (color, icon) = swarm_status_style(&member.status);
-        spans.push(Span::styled(
-            format!("{} ", icon),
-            Style::default().fg(color),
-        ));
-        let detail = member.detail.as_deref().unwrap_or(member.status.as_str());
-        let label = format!("{} {}", swarm_member_label(member), detail);
-        spans.push(Span::styled(
-            truncate_smart(&label, 20),
-            Style::default().fg(rgb(180, 180, 190)),
-        ));
-    } else if let Some(status) = &info.subagent_status {
-        spans.push(Span::styled("▶ ", Style::default().fg(rgb(255, 200, 100))));
-        spans.push(Span::styled(
-            truncate_smart(status, 20),
-            Style::default().fg(rgb(180, 180, 190)),
-        ));
-    } else {
-        // Show swarm icon (bee for "swarm")
-        spans.push(Span::styled("🐝 ", Style::default().fg(rgb(255, 200, 100))));
-    }
-
-    // Session count if > 1
-    if info.session_count > 1 {
-        if !spans.is_empty() {
-            spans.push(Span::styled(" · ", Style::default().fg(rgb(100, 100, 110))));
-        }
-        spans.push(Span::styled(
-            format!("{}s", info.session_count),
-            Style::default().fg(rgb(140, 140, 150)),
-        ));
-    }
-
-    // Client count if present
-    if let Some(clients) = info.client_count {
-        if !spans.is_empty() {
-            spans.push(Span::styled(" · ", Style::default().fg(rgb(100, 100, 110))));
-        }
-        spans.push(Span::styled(
-            format!("{}c", clients),
-            Style::default().fg(rgb(140, 140, 150)),
-        ));
-    }
-
-    if spans.is_empty() {
-        return Vec::new();
-    }
-
-    vec![Line::from(spans)]
-}
-
-fn render_swarm_expanded(info: &SwarmInfo, inner: Rect) -> Vec<Line<'static>> {
-    let mut lines: Vec<Line> = Vec::new();
-
-    // Title
-    lines.push(Line::from(vec![Span::styled(
-        "Swarm",
-        Style::default().fg(rgb(180, 180, 190)).bold(),
-    )]));
-
-    // Stats line
-    let mut stats_parts: Vec<Span> = Vec::new();
-    if info.session_count > 0 {
-        stats_parts.push(Span::styled(
-            format!(
-                "{} session{}",
-                info.session_count,
-                if info.session_count == 1 { "" } else { "s" }
-            ),
-            Style::default().fg(rgb(160, 160, 170)),
-        ));
-    }
-    if let Some(clients) = info.client_count {
-        if !stats_parts.is_empty() {
-            stats_parts.push(Span::styled(" · ", Style::default().fg(rgb(100, 100, 110))));
-        }
-        stats_parts.push(Span::styled(
-            format!("{} client{}", clients, if clients == 1 { "" } else { "s" }),
-            Style::default().fg(rgb(160, 160, 170)),
-        ));
-    }
-    if !stats_parts.is_empty() {
-        lines.push(Line::from(stats_parts));
-    }
-
-    // Active subagent status (only when we don't have member status lines)
-    if info.members.is_empty() {
-        if let Some(status) = &info.subagent_status {
-            lines.push(Line::from(vec![
-                Span::styled("▶ ", Style::default().fg(rgb(255, 200, 100))),
-                Span::styled(
-                    truncate_smart(status, inner.width.saturating_sub(4) as usize),
-                    Style::default().fg(rgb(200, 200, 210)),
-                ),
-            ]));
-        }
-    }
-
-    let max_name_len = inner.width.saturating_sub(8) as usize;
-    if !info.members.is_empty() {
-        let remaining_height = inner.height.saturating_sub(lines.len() as u16) as usize;
-        let need_graph = remaining_height >= info.members.len() + 3;
-
-        if need_graph {
-            // Graph view: coordinator on top, connector, agents below
-            let coordinator = info
-                .members
-                .iter()
-                .find(|m| m.role.as_deref() == Some("coordinator"));
-            let agents: Vec<_> = info
-                .members
-                .iter()
-                .filter(|m| m.role.as_deref() != Some("coordinator"))
-                .collect();
-
-            if let Some(coord) = coordinator {
-                let coord_label = swarm_member_label(coord);
-                let (color, icon) = swarm_status_style(&coord.status);
-                lines.push(Line::from(vec![
-                    Span::styled("★ ", Style::default().fg(rgb(255, 200, 100))),
-                    Span::styled(format!("{} ", icon), Style::default().fg(color)),
-                    Span::styled(
-                        truncate_smart(&coord_label, max_name_len),
-                        Style::default().fg(rgb(200, 200, 210)),
-                    ),
-                ]));
-
-                // Connector line
-                if !agents.is_empty() {
-                    let connector_width = inner.width.saturating_sub(4).min(20) as usize;
-                    let connector = format!(
-                        "  {}",
-                        "├".to_string() + &"─".repeat(connector_width.saturating_sub(2)) + "┤"
-                    );
-                    lines.push(Line::from(vec![Span::styled(
-                        connector,
-                        Style::default().fg(rgb(80, 80, 90)),
-                    )]));
-                }
-            }
-
-            for agent in agents.iter().take(4) {
-                lines.push(swarm_member_line(agent, max_name_len));
-            }
-            if agents.len() > 4 {
-                let remaining = agents.len() - 4;
-                lines.push(Line::from(vec![Span::styled(
-                    format!("  +{} more", remaining),
-                    Style::default().fg(rgb(100, 100, 110)),
-                )]));
-            }
-        } else {
-            // Flat list when not enough height for graph
-            for member in info.members.iter().take(4) {
-                lines.push(swarm_member_line(member, max_name_len));
-            }
-            if info.members.len() > 4 {
-                let remaining = info.members.len() - 4;
-                lines.push(Line::from(vec![Span::styled(
-                    format!("  +{} more", remaining),
-                    Style::default().fg(rgb(100, 100, 110)),
-                )]));
-            }
-        }
-    } else {
-        // Session names (up to 4)
-        for name in info.session_names.iter().take(4) {
-            lines.push(Line::from(vec![
-                Span::styled("  · ", Style::default().fg(rgb(100, 100, 110))),
-                Span::styled(
-                    truncate_smart(name, max_name_len),
-                    Style::default().fg(rgb(140, 140, 150)),
-                ),
-            ]));
-        }
-
-        // Show count of remaining sessions
-        if info.session_names.len() > 4 {
-            let remaining = info.session_names.len() - 4;
-            lines.push(Line::from(vec![Span::styled(
-                format!("  +{} more", remaining),
-                Style::default().fg(rgb(100, 100, 110)),
-            )]));
-        }
-    }
-
-    lines
-}
-
 fn render_background_compact(info: &BackgroundInfo) -> Vec<Line<'static>> {
     let mut spans: Vec<Span> = Vec::new();
 
@@ -4685,65 +4465,6 @@ fn shorten_model_name(model: &str) -> String {
     }
 }
 
-fn render_context_expanded(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static>> {
-    let Some(info) = &data.context_info else {
-        return Vec::new();
-    };
-    if info.total_chars == 0 && data.observed_context_tokens.is_none() {
-        return Vec::new();
-    }
-
-    let mut lines: Vec<Line> = Vec::new();
-    let header = if data.is_compacting {
-        "Context 📦 compacting..."
-    } else {
-        "Context"
-    };
-    lines.push(Line::from(vec![Span::styled(
-        header,
-        Style::default().fg(rgb(180, 180, 190)).bold(),
-    )]));
-
-    let used_tokens = data
-        .observed_context_tokens
-        .map(|t| t as usize)
-        .unwrap_or_else(|| info.estimated_tokens());
-    let limit_tokens = data.context_limit.unwrap_or(DEFAULT_CONTEXT_LIMIT).max(1);
-    let used_str = format_token_k(used_tokens);
-    let limit_str = format_token_k(limit_tokens);
-    let pct = ((used_tokens as f64 / limit_tokens as f64) * 100.0)
-        .round()
-        .min(100.0) as usize;
-    lines.push(Line::from(vec![
-        Span::styled("Usage ", Style::default().fg(rgb(160, 160, 170))),
-        Span::styled(
-            format!("{}/{} ({}%)", used_str, limit_str, pct),
-            Style::default().fg(rgb(140, 140, 150)),
-        ),
-    ]));
-    lines.push(render_usage_bar(used_tokens, limit_tokens, inner.width));
-
-    let max_items = MAX_CONTEXT_LINES;
-    let max_len = inner.width.saturating_sub(2) as usize;
-    let total_tokens = used_tokens.max(1);
-    for (icon, label, tokens) in context_entries(info).into_iter().take(max_items) {
-        let pct = ((tokens as f64 / total_tokens as f64) * 100.0)
-            .round()
-            .min(100.0) as usize;
-        let mut content = format!("{} {} {} {}%", icon, label, format_token_k(tokens), pct);
-        if content.chars().count() > max_len && max_len > 3 {
-            let truncated = truncate_chars(&content, max_len.saturating_sub(3));
-            content = format!("{}...", truncated);
-        }
-        lines.push(Line::from(Span::styled(
-            content,
-            Style::default().fg(rgb(140, 140, 150)),
-        )));
-    }
-
-    lines
-}
-
 fn render_context_compact(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static>> {
     let Some(info) = &data.context_info else {
         return Vec::new();
@@ -4777,6 +4498,7 @@ fn render_context_compact(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'stati
     )]
 }
 
+#[cfg(test)]
 fn render_usage_bar(used_tokens: usize, limit_tokens: usize, width: u16) -> Line<'static> {
     let bar_width = width.saturating_sub(2).min(24).max(8) as usize;
     let mut used_cells = ((used_tokens as f64 / limit_tokens as f64) * bar_width as f64)
@@ -4834,70 +4556,11 @@ fn render_usage_bar(used_tokens: usize, limit_tokens: usize, width: u16) -> Line
     Line::from(spans)
 }
 
+#[cfg(test)]
 fn format_token_k(tokens: usize) -> String {
     if tokens >= 1000 {
         format!("{}k", tokens / 1000)
     } else {
         format!("{}", tokens)
     }
-}
-
-fn render_pagination_dots(count: usize, current: usize, width: u16) -> Line<'static> {
-    if count == 0 {
-        return Line::from("");
-    }
-    let mut dots = String::new();
-    for i in 0..count {
-        dots.push(if i == current { '•' } else { '·' });
-        if i + 1 < count {
-            dots.push(' ');
-        }
-    }
-    let pad = width
-        .saturating_sub(dots.chars().count() as u16)
-        .saturating_div(2);
-    Line::from(vec![
-        Span::raw(" ".repeat(pad as usize)),
-        Span::styled(dots, Style::default().fg(rgb(140, 140, 150))),
-    ])
-}
-
-pub(crate) fn context_entries(info: &ContextInfo) -> Vec<(&'static str, &'static str, usize)> {
-    let docs_chars = info.project_agents_md_chars
-        + info.project_claude_md_chars
-        + info.global_agents_md_chars
-        + info.global_claude_md_chars;
-    let skills_chars = info.skills_chars + info.selfdev_chars;
-    let memory_chars = info.memory_chars;
-    let msgs_chars = info.user_messages_chars + info.assistant_messages_chars;
-    let tool_io_chars = info.tool_calls_chars + info.tool_results_chars;
-
-    let mut entries: Vec<(&'static str, &'static str, usize)> = Vec::new();
-    if info.system_prompt_chars > 0 {
-        entries.push(("⚙", "sys", info.system_prompt_chars / 4));
-    }
-    if info.env_context_chars > 0 {
-        entries.push(("🌍", "env", info.env_context_chars / 4));
-    }
-    if docs_chars > 0 {
-        entries.push(("📄", "docs", docs_chars / 4));
-    }
-    if skills_chars > 0 {
-        entries.push(("🛠", "skills", skills_chars / 4));
-    }
-    if memory_chars > 0 {
-        entries.push(("🧠", "mem", memory_chars / 4));
-    }
-    if info.tool_defs_chars > 0 {
-        entries.push(("🔨", "tools", info.tool_defs_chars / 4));
-    }
-    if msgs_chars > 0 {
-        entries.push(("💬", "msgs", msgs_chars / 4));
-    }
-    if tool_io_chars > 0 {
-        entries.push(("⚡", "tool io", tool_io_chars / 4));
-    }
-
-    entries.sort_by(|a, b| b.2.cmp(&a.2));
-    entries
 }
