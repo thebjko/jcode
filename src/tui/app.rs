@@ -90,6 +90,25 @@ pub enum ProcessingStatus {
     RunningTool(String),
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum RemoteStartupPhase {
+    StartingServer,
+    Connecting,
+    LoadingSession,
+    Reconnecting { attempt: u32 },
+}
+
+impl RemoteStartupPhase {
+    pub(crate) fn header_label(&self) -> String {
+        match self {
+            Self::StartingServer => "starting server…".to_string(),
+            Self::Connecting => "connecting to server…".to_string(),
+            Self::LoadingSession => "loading session…".to_string(),
+            Self::Reconnecting { attempt } => format!("reconnecting ({attempt})…"),
+        }
+    }
+}
+
 /// A message in the conversation for display
 #[derive(Clone)]
 pub struct DisplayMessage {
@@ -319,6 +338,10 @@ pub struct App {
     rebuild_requested: Option<String>,
     // Update: if set, check for and download update from GitHub releases then exec
     update_requested: Option<String>,
+    // Interactive background client update is currently running
+    background_update_in_progress: bool,
+    // Reload the updated client once the current turn is idle
+    pending_background_update_reload: Option<String>,
     // Restart: if set, exec into current binary with this session ID (no build)
     restart_requested: Option<String>,
     // Pasted content storage (displayed as placeholders, expanded on submit)
@@ -339,6 +362,7 @@ pub struct App {
     // Remote provider info (set when running in remote mode)
     remote_provider_name: Option<String>,
     remote_provider_model: Option<String>,
+    remote_startup_phase: Option<RemoteStartupPhase>,
     remote_reasoning_effort: Option<String>,
     remote_service_tier: Option<String>,
     remote_transport: Option<String>,
@@ -445,6 +469,9 @@ pub struct App {
     diff_pane_focus: bool,
     diff_pane_auto_scroll: bool,
     side_panel: crate::side_panel::SidePanelSnapshot,
+    last_side_panel_refresh: Option<Instant>,
+    // Most recently focused side panel page, used to restore visibility when toggled off.
+    last_side_panel_focus_id: Option<String>,
     // Pin read images to side pane
     pin_images: bool,
     // Interactive model/provider picker

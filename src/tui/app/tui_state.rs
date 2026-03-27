@@ -32,7 +32,7 @@ struct WidgetRouteInfo {
 }
 
 impl App {
-    fn remote_header_provider_model(&self) -> Option<String> {
+    fn effective_remote_provider_model(&self) -> Option<String> {
         self.remote_provider_model
             .clone()
             .or_else(|| self.session.model.clone())
@@ -42,11 +42,18 @@ impl App {
             })
     }
 
+    fn remote_header_provider_model(&self) -> Option<String> {
+        self.remote_startup_phase
+            .as_ref()
+            .map(crate::tui::app::RemoteStartupPhase::header_label)
+            .or_else(|| self.effective_remote_provider_model())
+    }
+
     fn remote_header_provider_name(&self) -> Option<String> {
         self.remote_provider_name
             .clone()
             .or_else(|| {
-                self.remote_header_provider_model().and_then(|model| {
+                self.effective_remote_provider_model().and_then(|model| {
                     crate::provider::provider_for_model_with_hint(&model, None).map(str::to_string)
                 })
             })
@@ -289,7 +296,7 @@ impl crate::tui::TuiState for App {
     fn provider_model(&self) -> String {
         if self.is_remote {
             self.remote_header_provider_model()
-                .unwrap_or_else(|| "connecting…".to_string())
+                .unwrap_or_else(|| "connecting to server…".to_string())
         } else {
             self.remote_provider_model
                 .clone()

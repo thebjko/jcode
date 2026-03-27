@@ -226,6 +226,8 @@ pub(super) async fn handle_tick(app: &mut App, remote: &mut RemoteConnection) {
         app.streaming_text.push_str(&chunk);
     }
 
+    app.refresh_side_panel_linked_content_if_due();
+
     let _ = check_debug_command(app, remote).await;
 
     if let Some(reset_time) = app.rate_limit_reset {
@@ -536,6 +538,9 @@ pub(super) async fn handle_bus_event(
         Ok(BusEvent::UpdateStatus(status)) => {
             app.handle_update_status(status);
         }
+        Ok(BusEvent::SessionUpdateStatus(status)) => {
+            app.handle_session_update_status(status);
+        }
         Ok(BusEvent::DictationCompleted { text, mode }) => {
             match remote.send_transcript(text, mode).await {
                 Ok(()) => app.mark_dictation_delivered(),
@@ -608,9 +613,13 @@ pub(super) async fn connect_with_retry(
             state.reconnect_attempts += 1;
             state.disconnect_start.get_or_insert_with(Instant::now);
 
-            let msg_content = if is_initial_server_start {
+            let msg_content = if is_initial_server_start || state.initial_server_start {
+                app.set_remote_startup_phase(super::RemoteStartupPhase::StartingServer);
                 "⏳ Starting server...".to_string()
             } else {
+                app.set_remote_startup_phase(super::RemoteStartupPhase::Reconnecting {
+                    attempt: state.reconnect_attempts,
+                });
                 let fallback_reason = e.root_cause().to_string();
                 reconnect_status_message(
                     app,
@@ -890,8 +899,12 @@ pub(super) async fn handle_post_connect<B: ratatui::backend::Backend>(
             "Same-session reload fast path: skipping blocking History wait and reusing local display state",
         );
         remote.mark_history_loaded();
+        app.clear_remote_startup_phase();
     } else if !remote.has_loaded_history() {
+        app.set_remote_startup_phase(super::RemoteStartupPhase::LoadingSession);
         app.set_status_notice("Loading session...");
+    } else {
+        app.clear_remote_startup_phase();
     }
 
     if remote.has_loaded_history() && !app.is_processing && app.has_queued_followups() {
@@ -1128,6 +1141,11 @@ pub(super) async fn process_remote_followups(app: &mut App, remote: &mut RemoteC
     }
 
     if !remote.has_loaded_history() {
+        return;
+    }
+
+    if app.pending_background_update_reload.is_some() && !app.is_processing {
+        app.maybe_finish_background_update_reload();
         return;
     }
 
@@ -2058,6 +2076,7 @@ pub(super) fn handle_server_event(
                 app.update_context_limit_for_model(&model);
                 app.remote_provider_model = Some(model);
             }
+            app.clear_remote_startup_phase();
             app.session.subagent_model = subagent_model;
             if upstream_provider.is_some() {
                 app.upstream_provider = upstream_provider;
@@ -2219,6 +2238,7 @@ pub(super) fn handle_server_event(
             } else {
                 app.update_context_limit_for_model(&model);
                 app.remote_provider_model = Some(model.clone());
+                app.clear_remote_startup_phase();
                 if let Some(ref pname) = provider_name {
                     app.remote_provider_name = Some(pname.clone());
                 }
@@ -2846,7 +2866,7 @@ async fn handle_remote_key_internal(
     }
 
     if modifiers.contains(KeyModifiers::ALT) && matches!(code, KeyCode::Char('m')) {
-        app.toggle_diagram_pane();
+        app.toggle_side_panel();
         return Ok(());
     }
     if modifiers.contains(KeyModifiers::ALT) && matches!(code, KeyCode::Char('t')) {
@@ -3325,15 +3345,11 @@ async fn handle_remote_key_internal(
                 }
 
                 if trimmed == "/update" {
-                    app.push_display_message(DisplayMessage::system(
-                        "Checking for updates...".to_string(),
-                    ));
                     let session_id = app
                         .remote_session_id
                         .clone()
                         .unwrap_or_else(|| crate::id::new_id("ses"));
-                    app.update_requested = Some(session_id);
-                    app.should_quit = true;
+                    app.start_background_client_update(session_id);
                     return Ok(());
                 }
 

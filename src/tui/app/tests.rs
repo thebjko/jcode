@@ -1,5 +1,5 @@
 use super::*;
-use crate::bus::{BusEvent, InputShellCompleted};
+use crate::bus::{BusEvent, InputShellCompleted, SessionUpdateStatus};
 use crate::tui::TuiState;
 use ratatui::layout::Rect;
 use std::sync::{Arc as StdArc, Mutex as StdMutex};
@@ -53,6 +53,21 @@ fn create_test_app() -> App {
     app.queue_mode = false;
     app.diff_mode = crate::config::DiffDisplayMode::Inline;
     app
+}
+
+fn test_side_panel_snapshot(page_id: &str, title: &str) -> crate::side_panel::SidePanelSnapshot {
+    crate::side_panel::SidePanelSnapshot {
+        focused_page_id: Some(page_id.to_string()),
+        pages: vec![crate::side_panel::SidePanelPage {
+            id: page_id.to_string(),
+            title: title.to_string(),
+            file_path: format!("/tmp/{page_id}.md"),
+            format: crate::side_panel::SidePanelPageFormat::Markdown,
+            source: crate::side_panel::SidePanelPageSource::Managed,
+            content: format!("# {title}"),
+            updated_at_ms: 1,
+        }],
+    }
 }
 
 fn ensure_test_jcode_home_if_unset() {
@@ -3762,6 +3777,45 @@ fn test_reload_requests_exit_when_newer_binary() {
 }
 
 #[test]
+fn test_background_update_ready_reloads_immediately_when_idle() {
+    let mut app = create_test_app();
+    let session_id = app.session.id.clone();
+
+    app.handle_session_update_status(SessionUpdateStatus::ReadyToReload {
+        session_id: session_id.clone(),
+        version: "v1.2.3".to_string(),
+    });
+
+    assert_eq!(app.reload_requested.as_deref(), Some(session_id.as_str()));
+    assert!(app.should_quit);
+}
+
+#[test]
+fn test_background_update_ready_waits_for_turn_to_finish() {
+    let mut app = create_test_app();
+    let session_id = app.session.id.clone();
+    app.is_processing = true;
+
+    app.handle_session_update_status(SessionUpdateStatus::ReadyToReload {
+        session_id: session_id.clone(),
+        version: "v1.2.3".to_string(),
+    });
+
+    assert!(app.reload_requested.is_none());
+    assert_eq!(
+        app.pending_background_update_reload.as_deref(),
+        Some(session_id.as_str())
+    );
+    assert!(!app.should_quit);
+
+    app.is_processing = false;
+    crate::tui::app::local::handle_tick(&mut app);
+
+    assert_eq!(app.reload_requested.as_deref(), Some(session_id.as_str()));
+    assert!(app.should_quit);
+}
+
+#[test]
 fn test_selfdev_command_spawns_session_in_test_mode() {
     let _guard = crate::storage::lock_test_env();
     let temp_home = tempfile::TempDir::new().expect("temp home");
@@ -5333,7 +5387,7 @@ fn test_info_widget_data_includes_connection_type() {
 }
 
 #[test]
-fn test_remote_tui_state_uses_cached_session_model_before_history() {
+fn test_remote_tui_state_uses_connecting_phase_before_history_even_with_cached_model() {
     let _guard = crate::storage::lock_test_env();
     let temp_home = tempfile::TempDir::new().expect("create temp home");
     let prev_home = std::env::var_os("JCODE_HOME");
@@ -5350,7 +5404,10 @@ fn test_remote_tui_state_uses_cached_session_model_before_history() {
 
     let app = App::new_for_remote(Some(session_id.to_string()));
 
-    assert_eq!(crate::tui::TuiState::provider_model(&app), "gpt-5.4");
+    assert_eq!(
+        crate::tui::TuiState::provider_model(&app),
+        "connecting to server…"
+    );
     assert_eq!(crate::tui::TuiState::provider_name(&app), "openai");
     assert_eq!(
         crate::tui::TuiState::session_display_name(&app).as_deref(),
@@ -5365,11 +5422,76 @@ fn test_remote_tui_state_uses_cached_session_model_before_history() {
 }
 
 #[test]
-fn test_remote_tui_state_shows_connecting_placeholder_without_cached_model() {
+fn test_remote_tui_state_falls_back_to_cached_model_after_startup_phase_clears() {
+    let _guard = crate::storage::lock_test_env();
+    let temp_home = tempfile::TempDir::new().expect("create temp home");
+    let prev_home = std::env::var_os("JCODE_HOME");
+    crate::env::set_var("JCODE_HOME", temp_home.path());
+
+    let session_id = "session_otter_124";
+    let mut session = crate::session::Session::create_with_id(
+        session_id.to_string(),
+        None,
+        Some("remote cached model".to_string()),
+    );
+    session.model = Some("gpt-5.4".to_string());
+    session.save().expect("save remote session");
+
+    let mut app = App::new_for_remote(Some(session_id.to_string()));
+    app.clear_remote_startup_phase();
+
+    assert_eq!(crate::tui::TuiState::provider_model(&app), "gpt-5.4");
+    assert_eq!(crate::tui::TuiState::provider_name(&app), "openai");
+
+    if let Some(prev_home) = prev_home {
+        crate::env::set_var("JCODE_HOME", prev_home);
+    } else {
+        crate::env::remove_var("JCODE_HOME");
+    }
+}
+
+#[test]
+fn test_remote_tui_state_shows_connecting_phase_without_cached_model() {
     let app = App::new_for_remote(None);
 
-    assert_eq!(crate::tui::TuiState::provider_model(&app), "connecting…");
+    assert_eq!(
+        crate::tui::TuiState::provider_model(&app),
+        "connecting to server…"
+    );
     assert_eq!(crate::tui::TuiState::provider_name(&app), "remote");
+}
+
+#[test]
+fn test_remote_tui_state_shows_starting_server_phase_in_header() {
+    let mut app = App::new_for_remote(None);
+    app.set_server_spawning();
+
+    assert_eq!(
+        crate::tui::TuiState::provider_model(&app),
+        "starting server…"
+    );
+}
+
+#[test]
+fn test_remote_tui_state_shows_loading_session_phase_in_header() {
+    let mut app = App::new_for_remote(None);
+    app.set_remote_startup_phase(crate::tui::app::RemoteStartupPhase::LoadingSession);
+
+    assert_eq!(
+        crate::tui::TuiState::provider_model(&app),
+        "loading session…"
+    );
+}
+
+#[test]
+fn test_remote_tui_state_shows_reconnecting_phase_in_header() {
+    let mut app = App::new_for_remote(None);
+    app.set_remote_startup_phase(crate::tui::app::RemoteStartupPhase::Reconnecting { attempt: 3 });
+
+    assert_eq!(
+        crate::tui::TuiState::provider_model(&app),
+        "reconnecting (3)…"
+    );
 }
 
 #[test]
@@ -5858,6 +5980,56 @@ fn test_local_alt_s_toggles_typing_scroll_lock() {
         app.status_notice(),
         Some("Typing scroll lock: OFF — typing follows chat bottom".to_string())
     );
+}
+
+#[test]
+fn test_local_alt_m_toggles_side_panel_visibility() {
+    let mut app = create_test_app();
+    app.side_panel = test_side_panel_snapshot("plan", "Plan");
+    app.last_side_panel_focus_id = Some("plan".to_string());
+
+    app.handle_key(KeyCode::Char('m'), KeyModifiers::ALT)
+        .unwrap();
+    assert_eq!(app.side_panel.focused_page_id, None);
+    assert_eq!(app.status_notice(), Some("Side panel: OFF".to_string()));
+
+    app.handle_key(KeyCode::Char('m'), KeyModifiers::ALT)
+        .unwrap();
+    assert_eq!(app.side_panel.focused_page_id.as_deref(), Some("plan"));
+    assert_eq!(app.status_notice(), Some("Side panel: Plan".to_string()));
+}
+
+#[test]
+fn test_local_alt_m_falls_back_to_diagram_pane_when_side_panel_is_empty() {
+    let mut app = create_test_app();
+    app.side_panel = crate::side_panel::SidePanelSnapshot::default();
+    app.diagram_pane_enabled = true;
+
+    app.handle_key(KeyCode::Char('m'), KeyModifiers::ALT)
+        .unwrap();
+
+    assert!(!app.diagram_pane_enabled);
+    assert_eq!(app.status_notice(), Some("Diagram pane: OFF".to_string()));
+}
+
+#[test]
+fn test_remote_alt_m_toggles_side_panel_visibility() {
+    let mut app = create_test_app();
+    app.side_panel = test_side_panel_snapshot("plan", "Plan");
+    app.last_side_panel_focus_id = Some("plan".to_string());
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let mut remote = crate::tui::backend::RemoteConnection::dummy();
+
+    rt.block_on(app.handle_remote_key(KeyCode::Char('m'), KeyModifiers::ALT, &mut remote))
+        .unwrap();
+    assert_eq!(app.side_panel.focused_page_id, None);
+    assert_eq!(app.status_notice(), Some("Side panel: OFF".to_string()));
+
+    rt.block_on(app.handle_remote_key(KeyCode::Char('m'), KeyModifiers::ALT, &mut remote))
+        .unwrap();
+    assert_eq!(app.side_panel.focused_page_id.as_deref(), Some("plan"));
+    assert_eq!(app.status_notice(), Some("Side panel: Plan".to_string()));
 }
 
 #[test]

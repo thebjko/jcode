@@ -319,6 +319,14 @@ impl App {
         self.status_notice = Some((text.into(), Instant::now()));
     }
 
+    pub(crate) fn set_remote_startup_phase(&mut self, phase: super::RemoteStartupPhase) {
+        self.remote_startup_phase = Some(phase);
+    }
+
+    pub(crate) fn clear_remote_startup_phase(&mut self) {
+        self.remote_startup_phase = None;
+    }
+
     pub(super) fn set_memory_feature_enabled(&mut self, enabled: bool) {
         self.memory_enabled = enabled;
         if !enabled {

@@ -179,6 +179,8 @@ impl App {
             reload_requested: None,
             rebuild_requested: None,
             update_requested: None,
+            background_update_in_progress: false,
+            pending_background_update_reload: None,
             restart_requested: None,
             pasted_contents: Vec::new(),
             pending_images: Vec::new(),
@@ -192,6 +194,7 @@ impl App {
             debug_tx: None,
             remote_provider_name: None,
             remote_provider_model: None,
+            remote_startup_phase: None,
             remote_reasoning_effort: None,
             remote_service_tier: None,
             remote_transport: None,
@@ -253,6 +256,8 @@ impl App {
             diff_pane_focus: false,
             diff_pane_auto_scroll: true,
             side_panel: crate::side_panel::SidePanelSnapshot::default(),
+            last_side_panel_refresh: None,
+            last_side_panel_focus_id: None,
             pin_images: display.pin_images,
             picker_state: None,
             pending_model_switch: None,
@@ -414,6 +419,8 @@ impl App {
             reload_requested: None,
             rebuild_requested: None,
             update_requested: None,
+            background_update_in_progress: false,
+            pending_background_update_reload: None,
             restart_requested: None,
             pasted_contents: Vec::new(),
             pending_images: Vec::new(),
@@ -427,6 +434,7 @@ impl App {
             debug_tx: None,
             remote_provider_name: None,
             remote_provider_model: None,
+            remote_startup_phase: None,
             remote_reasoning_effort: None,
             remote_service_tier: None,
             remote_transport: None,
@@ -488,6 +496,8 @@ impl App {
             diff_pane_focus: false,
             diff_pane_auto_scroll: true,
             side_panel: crate::side_panel::SidePanelSnapshot::default(),
+            last_side_panel_refresh: None,
+            last_side_panel_focus_id: None,
             pin_images: display.pin_images,
             picker_state: None,
             pending_model_switch: None,
@@ -572,6 +582,7 @@ impl App {
             .unwrap_or_else(|| Session::create(None, None));
         let mut app = Self::new_minimal_with_session(provider, registry, session);
         app.is_remote = true;
+        app.remote_startup_phase = Some(super::RemoteStartupPhase::Connecting);
 
         // Load session to get canary status (for "client self-dev" badge)
         if let Some(ref session_id) = resume_session {
@@ -588,6 +599,7 @@ impl App {
     /// instead of failing fatally, allowing the TUI to show while the server starts.
     pub fn set_server_spawning(&mut self) {
         self.server_spawning = true;
+        self.remote_startup_phase = Some(super::RemoteStartupPhase::StartingServer);
     }
 
     /// Create an App instance for replay mode (playing back a saved session)
@@ -1092,15 +1104,7 @@ pub(super) fn handle_dev_command(app: &mut App, trimmed: &str) -> bool {
     }
 
     if trimmed == "/update" {
-        app.push_display_message(DisplayMessage::system(
-            "Checking for updates...".to_string(),
-        ));
-        app.session.provider_session_id = app.provider_session_id.clone();
-        app.session
-            .set_status(crate::session::SessionStatus::Reloaded);
-        let _ = app.session.save();
-        app.update_requested = Some(app.session.id.clone());
-        app.should_quit = true;
+        app.start_background_client_update(app.session.id.clone());
         return true;
     }
 

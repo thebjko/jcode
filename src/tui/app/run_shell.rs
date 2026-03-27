@@ -73,11 +73,13 @@ impl App {
 
         'outer: loop {
             if self.display_messages.is_empty() {
-                self.set_status_notice(if self.server_spawning {
-                    "Starting server..."
+                if self.server_spawning {
+                    self.set_remote_startup_phase(super::RemoteStartupPhase::StartingServer);
+                    self.set_status_notice("Starting server...");
                 } else {
-                    "Connecting to server..."
-                });
+                    self.set_remote_startup_phase(super::RemoteStartupPhase::Connecting);
+                    self.set_status_notice("Connecting to server...");
+                }
             }
             terminal.draw(|frame| crate::tui::ui::draw(frame, &self))?;
 
