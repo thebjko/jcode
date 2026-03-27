@@ -251,6 +251,21 @@ fn test_help_topic_shows_command_details() {
 }
 
 #[test]
+fn test_help_topic_shows_btw_command_details() {
+    let mut app = create_test_app();
+    app.input = "/help btw".to_string();
+    app.submit_input();
+
+    let msg = app
+        .display_messages()
+        .last()
+        .expect("missing help response");
+    assert_eq!(msg.role, "system");
+    assert!(msg.content.contains("`/btw <question>`"));
+    assert!(msg.content.contains("side panel"));
+}
+
+#[test]
 fn test_save_command_bookmarks_session_with_memory_enabled() {
     let _guard = crate::storage::lock_test_env();
     let temp = tempfile::tempdir().expect("tempdir");
@@ -315,6 +330,54 @@ fn test_goals_command_opens_overview_in_side_panel() {
         .last()
         .expect("missing goals message");
     assert!(msg.content.contains("Opened goals overview"));
+
+    if let Some(prev_home) = prev_home {
+        crate::env::set_var("JCODE_HOME", prev_home);
+    } else {
+        crate::env::remove_var("JCODE_HOME");
+    }
+}
+
+#[test]
+fn test_btw_command_requires_question() {
+    let mut app = create_test_app();
+    app.input = "/btw".to_string();
+    app.submit_input();
+
+    let msg = app.display_messages().last().expect("missing btw error");
+    assert_eq!(msg.role, "error");
+    assert!(msg.content.contains("Usage: `/btw <question>`"));
+}
+
+#[test]
+fn test_btw_command_prepares_side_panel_and_hidden_turn() {
+    let _guard = crate::storage::lock_test_env();
+    let temp = tempfile::tempdir().expect("tempdir");
+    let prev_home = std::env::var_os("JCODE_HOME");
+    crate::env::set_var("JCODE_HOME", temp.path());
+
+    let mut app = create_test_app();
+    app.input = "/btw what did we decide about config?".to_string();
+    app.submit_input();
+
+    assert_eq!(app.side_panel.focused_page_id.as_deref(), Some("btw"));
+    let page = app.side_panel.focused_page().expect("missing btw page");
+    assert_eq!(page.title, "`/btw`");
+    assert!(page.content.contains("## Question"));
+    assert!(page.content.contains("what did we decide about config?"));
+    assert!(page.content.contains("Thinking…"));
+    assert_eq!(app.hidden_queued_system_messages.len(), 1);
+    assert!(
+        app.hidden_queued_system_messages[0].contains("Question: what did we decide about config?")
+    );
+    assert!(app.pending_queued_dispatch);
+
+    let msg = app
+        .display_messages()
+        .last()
+        .expect("missing btw status message");
+    assert_eq!(msg.role, "system");
+    assert!(msg.content.contains("Running `/btw`"));
 
     if let Some(prev_home) = prev_home {
         crate::env::set_var("JCODE_HOME", prev_home);
@@ -1956,6 +2019,39 @@ fn test_tool_side_panel_uses_shared_right_pane_keyboard_focus() {
 }
 
 #[test]
+fn test_side_panel_uses_left_splitter_instead_of_rounded_box() {
+    let _lock = scroll_render_test_lock();
+
+    let mut app = create_test_app();
+    app.diff_mode = crate::config::DiffDisplayMode::Inline;
+    app.side_panel = crate::side_panel::SidePanelSnapshot {
+        focused_page_id: Some("plan".to_string()),
+        pages: vec![crate::side_panel::SidePanelPage {
+            id: "plan".to_string(),
+            title: "Plan".to_string(),
+            file_path: "".to_string(),
+            format: crate::side_panel::SidePanelPageFormat::Markdown,
+            source: crate::side_panel::SidePanelPageSource::Managed,
+            content: "alpha\nbeta\ngamma".to_string(),
+            updated_at_ms: 1,
+        }],
+    };
+
+    let backend = ratatui::backend::TestBackend::new(80, 12);
+    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create test terminal");
+    let text = render_and_snap(&app, &mut terminal);
+
+    let diff_area = crate::tui::ui::last_layout_snapshot()
+        .and_then(|layout| layout.diff_pane_area)
+        .expect("expected side panel area after render");
+    let buf = terminal.backend().buffer();
+
+    assert_eq!(buf[(diff_area.x, diff_area.y)].symbol(), "│");
+    assert_eq!(buf[(diff_area.x, diff_area.y + 1)].symbol(), "│");
+    assert!(text.contains("side Plan 1/1"), "rendered text: {text}");
+}
+
+#[test]
 fn test_tool_side_panel_focus_supports_horizontal_pan_keys() {
     let mut app = create_test_app();
     app.diff_mode = crate::config::DiffDisplayMode::Inline;
@@ -2588,6 +2684,104 @@ fn test_subagent_model_command_sets_and_resets_session_preference() {
 }
 
 #[test]
+fn test_autoreview_command_toggles_session_preference() {
+    let mut app = create_test_app();
+
+    assert!(super::commands::handle_session_command(
+        &mut app,
+        "/autoreview on"
+    ));
+    assert_eq!(app.session.autoreview_enabled, Some(true));
+    assert!(app.autoreview_enabled);
+
+    assert!(super::commands::handle_session_command(
+        &mut app,
+        "/autoreview off"
+    ));
+    assert_eq!(app.session.autoreview_enabled, Some(false));
+    assert!(!app.autoreview_enabled);
+}
+
+#[test]
+fn test_review_prefers_openai_oauth_gpt_5_4_when_available() {
+    with_temp_jcode_home(|| {
+        let auth_path = crate::storage::jcode_dir()
+            .expect("jcode dir")
+            .join("openai-auth.json");
+        std::fs::write(
+            &auth_path,
+            serde_json::json!({
+                "openai_accounts": [
+                    {
+                        "label": "openai-1",
+                        "access_token": "at_test",
+                        "refresh_token": "rt_test",
+                        "account_id": "acct_test"
+                    }
+                ],
+                "active_openai_account": "openai-1"
+            })
+            .to_string(),
+        )
+        .expect("write auth file");
+
+        assert_eq!(
+            super::commands::preferred_one_shot_review_override(),
+            Some(("gpt-5.4".to_string(), "openai".to_string()))
+        );
+    });
+}
+
+#[test]
+fn test_pending_split_launch_shows_processing_status_in_ui() {
+    let mut app = create_test_app();
+    app.is_remote = true;
+    app.pending_split_started_at = Some(Instant::now());
+
+    assert!(app.is_processing());
+    assert!(crate::tui::TuiState::is_processing(&app));
+    assert!(matches!(
+        crate::tui::TuiState::status(&app),
+        ProcessingStatus::Sending
+    ));
+    assert!(crate::tui::TuiState::elapsed(&app).is_some());
+}
+
+#[test]
+fn test_expired_pending_split_launch_no_longer_shows_processing_status() {
+    let mut app = create_test_app();
+    app.is_remote = true;
+    app.pending_split_started_at = Some(Instant::now() - Duration::from_millis(400));
+
+    assert!(!app.is_processing());
+    assert!(!crate::tui::TuiState::is_processing(&app));
+    assert!(matches!(
+        crate::tui::TuiState::status(&app),
+        ProcessingStatus::Idle
+    ));
+    assert!(crate::tui::TuiState::elapsed(&app).is_none());
+}
+
+#[test]
+fn test_startup_message_restore_uses_hidden_system_queue() {
+    with_temp_jcode_home(|| {
+        let session_id = "startup-hidden-queue-test";
+        super::App::save_startup_message_for_session(
+            session_id,
+            "internal startup prompt".to_string(),
+        );
+
+        let restored = super::App::restore_input_for_reload(session_id)
+            .expect("startup message should restore");
+        assert!(restored.queued_messages.is_empty());
+        assert_eq!(
+            restored.hidden_queued_system_messages,
+            vec!["internal startup prompt".to_string()]
+        );
+    });
+}
+
+#[test]
 fn test_subagent_command_suggestions_include_manual_launch_and_model_policy() {
     let app = create_test_app();
 
@@ -2600,6 +2794,9 @@ fn test_subagent_command_suggestions_include_manual_launch_and_model_policy() {
             .iter()
             .any(|(cmd, _)| cmd == "/subagent-model inherit")
     );
+
+    let review = app.get_suggestions_for("/review");
+    assert!(review.iter().any(|(cmd, _)| cmd == "/review"));
 }
 
 fn configure_test_remote_models_with_copilot(app: &mut App) {
@@ -4165,6 +4362,7 @@ fn test_handle_server_event_history_clears_connection_type_on_session_change_whe
             provider_name: Some("claude".to_string()),
             provider_model: Some("claude-sonnet-4-20250514".to_string()),
             subagent_model: None,
+            autoreview_enabled: None,
             available_models: vec![],
             available_model_routes: vec![],
             mcp_servers: vec![],
@@ -4211,6 +4409,7 @@ fn test_handle_server_event_history_preserves_connection_type_for_same_session_w
             provider_name: Some("claude".to_string()),
             provider_model: Some("claude-sonnet-4-20250514".to_string()),
             subagent_model: None,
+            autoreview_enabled: None,
             available_models: vec![],
             available_model_routes: vec![],
             mcp_servers: vec![],
@@ -4875,6 +5074,7 @@ fn test_handle_server_event_history_with_interruption_queues_continuation() {
             provider_name: Some("claude".to_string()),
             provider_model: Some("claude-sonnet-4-20250514".to_string()),
             subagent_model: None,
+            autoreview_enabled: None,
             available_models: vec![],
             available_model_routes: vec![],
             mcp_servers: vec![],
@@ -4938,6 +5138,7 @@ fn test_handle_server_event_history_without_interruption_does_not_queue() {
             provider_name: Some("claude".to_string()),
             provider_model: Some("claude-sonnet-4-20250514".to_string()),
             subagent_model: None,
+            autoreview_enabled: None,
             available_models: vec![],
             available_model_routes: vec![],
             mcp_servers: vec![],
@@ -5098,6 +5299,7 @@ fn test_handle_server_event_history_restores_side_panel_snapshot() {
             provider_name: Some("claude".to_string()),
             provider_model: Some("claude-sonnet-4-20250514".to_string()),
             subagent_model: None,
+            autoreview_enabled: None,
             available_models: vec![],
             available_model_routes: vec![],
             mcp_servers: vec![],
@@ -5274,6 +5476,7 @@ fn test_duplicate_history_for_same_session_is_ignored_after_fast_path_restore() 
             provider_name: Some("claude".to_string()),
             provider_model: Some("claude-sonnet-4-20250514".to_string()),
             subagent_model: None,
+            autoreview_enabled: None,
             available_models: vec![],
             available_model_routes: vec![],
             mcp_servers: vec![],
@@ -5575,6 +5778,19 @@ fn test_remote_tui_state_shows_loading_session_phase_in_header() {
 }
 
 #[test]
+fn test_remote_tui_state_shows_startup_elapsed_in_header() {
+    let mut app = App::new_for_remote(None);
+    app.set_remote_startup_phase(crate::tui::app::RemoteStartupPhase::Connecting);
+    app.remote_startup_phase_started =
+        Some(std::time::Instant::now() - std::time::Duration::from_secs(5));
+
+    assert_eq!(
+        crate::tui::TuiState::provider_model(&app),
+        "connecting to server… 5s"
+    );
+}
+
+#[test]
 fn test_remote_tui_state_shows_reconnecting_phase_in_header() {
     let mut app = App::new_for_remote(None);
     app.set_remote_startup_phase(crate::tui::app::RemoteStartupPhase::Reconnecting { attempt: 3 });
@@ -5811,6 +6027,50 @@ fn test_remote_transcript_send_uses_remote_submission_path() {
     );
 }
 
+#[test]
+fn test_remote_review_shows_processing_until_split_response() {
+    let mut app = create_test_app();
+    app.is_remote = true;
+    app.input = "/review".to_string();
+    app.cursor_pos = app.input.len();
+
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let _guard = rt.enter();
+    let mut remote = crate::tui::backend::RemoteConnection::dummy();
+
+    rt.block_on(app.handle_remote_key(KeyCode::Enter, KeyModifiers::empty(), &mut remote))
+        .expect("/review should launch split request");
+
+    assert!(
+        app.is_processing,
+        "review launch should show client processing state"
+    );
+    assert!(matches!(app.status, ProcessingStatus::Sending));
+    assert!(app.current_message_id.is_none());
+    assert_eq!(app.status_notice(), Some("Review launching".to_string()));
+    assert!(app.pending_split_startup_message.is_some());
+    assert_eq!(app.pending_split_label.as_deref(), Some("Review"));
+    assert!(!app.pending_split_request);
+
+    app.handle_server_event(
+        crate::protocol::ServerEvent::SplitResponse {
+            id: 1,
+            new_session_id: "session_review_child".to_string(),
+            new_session_name: "review_child".to_string(),
+        },
+        &mut remote,
+    );
+
+    assert!(
+        !app.is_processing,
+        "split response should clear transient launch state"
+    );
+    assert!(matches!(app.status, ProcessingStatus::Idle));
+    assert!(app.processing_started.is_none());
+    assert!(app.pending_split_startup_message.is_none());
+    assert!(app.pending_split_label.is_none());
+}
+
 // ====================================================================
 // Scroll testing with rendering verification
 // ====================================================================
@@ -5973,6 +6233,72 @@ fn render_and_snap(
         .draw(|f| crate::tui::ui::draw(f, app))
         .expect("draw failed");
     buffer_to_text(terminal)
+}
+
+#[test]
+fn test_chat_native_scrollbar_hidden_when_content_fits() {
+    let _lock = scroll_render_test_lock();
+
+    let mut app = create_test_app();
+    app.chat_native_scrollbar = true;
+    app.display_messages = vec![DisplayMessage {
+        role: "assistant".to_string(),
+        content: "short response".to_string(),
+        tool_calls: vec![],
+        duration_secs: None,
+        title: None,
+        tool_data: None,
+    }];
+    app.bump_display_messages_version();
+    app.session.short_name = Some("test".to_string());
+    app.is_processing = false;
+    app.status = ProcessingStatus::Idle;
+
+    let backend = ratatui::backend::TestBackend::new(60, 24);
+    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create test terminal");
+    let text = render_and_snap(&app, &mut terminal);
+
+    assert_eq!(crate::tui::ui::last_max_scroll(), 0);
+    for glyph in ["╷", "╵", "╎", "•"] {
+        assert!(
+            !text.contains(glyph),
+            "did not expect scrollbar glyph {glyph:?} when content fits:\n{text}"
+        );
+    }
+}
+
+#[test]
+fn test_chat_native_scrollbar_hides_scroll_counters() {
+    let _lock = scroll_render_test_lock();
+
+    let (mut app, mut terminal) = create_scroll_test_app(50, 12, 0, 24);
+    app.chat_native_scrollbar = true;
+    app.auto_scroll_paused = true;
+
+    let _ = render_and_snap(&app, &mut terminal);
+    let max_scroll = crate::tui::ui::last_max_scroll();
+    assert!(
+        max_scroll > 2,
+        "expected scrollable content, got max_scroll={max_scroll}"
+    );
+
+    app.scroll_offset = max_scroll / 2;
+    let text = render_and_snap(&app, &mut terminal);
+    let scroll = app.scroll_offset.min(crate::tui::ui::last_max_scroll());
+    let remaining = crate::tui::ui::last_max_scroll().saturating_sub(scroll);
+
+    assert!(
+        text.contains('╷') || text.contains('•'),
+        "expected native scrollbar thumb to render:\n{text}"
+    );
+    assert!(
+        !text.contains(&format!("↑{scroll}")),
+        "top scroll counter should be hidden when native scrollbar is visible:\n{text}"
+    );
+    assert!(
+        !text.contains(&format!("↓{remaining}")),
+        "bottom scroll counter should be hidden when native scrollbar is visible:\n{text}"
+    );
 }
 
 #[test]

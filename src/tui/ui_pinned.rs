@@ -1,5 +1,34 @@
 use super::*;
 use crate::tui::mermaid;
+use serde::Serialize;
+use std::collections::{HashMap, VecDeque};
+
+const SIDE_PANEL_HEADER_HEIGHT: u16 = 1;
+
+fn side_panel_border_style(focused: bool) -> Style {
+    let border_color = if focused { tool_color() } else { dim_color() };
+    Style::default().fg(border_color)
+}
+
+fn side_panel_inner(area: Rect) -> Rect {
+    ratatui::widgets::Block::default()
+        .borders(ratatui::widgets::Borders::LEFT)
+        .inner(area)
+}
+
+fn side_panel_content_area(area: Rect) -> Option<Rect> {
+    let inner = side_panel_inner(area);
+    if inner.width == 0 || inner.height <= SIDE_PANEL_HEADER_HEIGHT {
+        return None;
+    }
+
+    Some(Rect {
+        x: inner.x,
+        y: inner.y + SIDE_PANEL_HEADER_HEIGHT,
+        width: inner.width,
+        height: inner.height - SIDE_PANEL_HEADER_HEIGHT,
+    })
+}
 
 fn selection_bg_for(base_bg: Option<Color>) -> Color {
     let fallback = rgb(32, 38, 48);
@@ -226,6 +255,21 @@ struct PinnedCacheState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct SidePanelMarkdownKey {
+    page_id: String,
+    content_revision: u64,
+    inner_width: u16,
+    has_protocol: bool,
+    centered: bool,
+}
+
+#[derive(Default)]
+struct SidePanelMarkdownCacheState {
+    entries: HashMap<SidePanelMarkdownKey, RenderedSidePanelMarkdown>,
+    order: VecDeque<SidePanelMarkdownKey>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct SidePanelRenderKey {
     page_id: String,
     content_revision: u64,
@@ -237,8 +281,30 @@ struct SidePanelRenderKey {
 
 #[derive(Default)]
 struct SidePanelRenderCacheState {
-    key: Option<SidePanelRenderKey>,
-    rendered: Option<PinnedRenderedCache>,
+    entries: HashMap<SidePanelRenderKey, PinnedRenderedCache>,
+    order: VecDeque<SidePanelRenderKey>,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct SidePanelDebugStats {
+    pub markdown_cache_hits: u64,
+    pub markdown_cache_misses: u64,
+    pub render_cache_hits: u64,
+    pub render_cache_misses: u64,
+    pub markdown_cache_entries: usize,
+    pub render_cache_entries: usize,
+}
+
+#[derive(Default)]
+struct SidePanelDebugState {
+    stats: SidePanelDebugStats,
+}
+
+#[derive(Clone)]
+struct RenderedSidePanelMarkdown {
+    rendered_markdown: Vec<Line<'static>>,
+    placeholder_hashes: Vec<Option<u64>>,
+    has_following_content_after: Vec<bool>,
 }
 
 #[derive(Clone)]
@@ -281,6 +347,18 @@ struct SidePanelImageLayout {
     render_mode: SidePanelImageRenderMode,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FitImageRenderPlan {
+    Full {
+        area: Rect,
+    },
+    ClippedViewport {
+        area: Rect,
+        scroll_y: i32,
+        zoom_percent: u8,
+    },
+}
+
 const SIDE_PANEL_INLINE_IMAGE_MIN_ROWS: u16 = 4;
 const SIDE_PANEL_INLINE_IMAGE_MIN_ZOOM_PERCENT: u8 = 70;
 
@@ -319,14 +397,94 @@ const SIDE_PANEL_FOLLOWING_CONTENT_PREVIEW_MIN_ROWS: u16 = 6;
 const SIDE_PANEL_FOLLOWING_CONTENT_PREVIEW_MAX_ROWS: u16 = 10;
 
 static PINNED_CACHE: OnceLock<Mutex<PinnedCacheState>> = OnceLock::new();
+static SIDE_PANEL_MARKDOWN_CACHE: OnceLock<Mutex<SidePanelMarkdownCacheState>> = OnceLock::new();
 static SIDE_PANEL_RENDER_CACHE: OnceLock<Mutex<SidePanelRenderCacheState>> = OnceLock::new();
+static SIDE_PANEL_DEBUG: OnceLock<Mutex<SidePanelDebugState>> = OnceLock::new();
+
+const SIDE_PANEL_MARKDOWN_CACHE_LIMIT: usize = 12;
+const SIDE_PANEL_RENDER_CACHE_LIMIT: usize = 12;
 
 fn pinned_cache() -> &'static Mutex<PinnedCacheState> {
     PINNED_CACHE.get_or_init(|| Mutex::new(PinnedCacheState::default()))
 }
 
+fn side_panel_markdown_cache() -> &'static Mutex<SidePanelMarkdownCacheState> {
+    SIDE_PANEL_MARKDOWN_CACHE.get_or_init(|| Mutex::new(SidePanelMarkdownCacheState::default()))
+}
+
 fn side_panel_render_cache() -> &'static Mutex<SidePanelRenderCacheState> {
     SIDE_PANEL_RENDER_CACHE.get_or_init(|| Mutex::new(SidePanelRenderCacheState::default()))
+}
+
+fn side_panel_debug() -> &'static Mutex<SidePanelDebugState> {
+    SIDE_PANEL_DEBUG.get_or_init(|| Mutex::new(SidePanelDebugState::default()))
+}
+
+fn lru_touch<K: PartialEq>(order: &mut VecDeque<K>, key: &K) {
+    if let Some(pos) = order.iter().position(|existing| existing == key) {
+        order.remove(pos);
+    }
+}
+
+fn lru_get<K, V>(entries: &HashMap<K, V>, order: &mut VecDeque<K>, key: &K) -> Option<V>
+where
+    K: Clone + Eq + std::hash::Hash,
+    V: Clone,
+{
+    let value = entries.get(key).cloned();
+    if value.is_some() {
+        lru_touch(order, key);
+        order.push_back(key.clone());
+    }
+    value
+}
+
+fn lru_insert<K, V>(
+    entries: &mut HashMap<K, V>,
+    order: &mut VecDeque<K>,
+    key: K,
+    value: V,
+    limit: usize,
+) where
+    K: Clone + Eq + std::hash::Hash,
+{
+    lru_touch(order, &key);
+    entries.insert(key.clone(), value);
+    order.push_back(key);
+    while order.len() > limit {
+        if let Some(oldest) = order.pop_front() {
+            entries.remove(&oldest);
+        }
+    }
+}
+
+pub(crate) fn side_panel_debug_stats() -> SidePanelDebugStats {
+    let mut stats = side_panel_debug()
+        .lock()
+        .map(|state| state.stats.clone())
+        .unwrap_or_default();
+    if let Ok(cache) = side_panel_markdown_cache().lock() {
+        stats.markdown_cache_entries = cache.entries.len();
+    }
+    if let Ok(cache) = side_panel_render_cache().lock() {
+        stats.render_cache_entries = cache.entries.len();
+    }
+    stats
+}
+
+pub(crate) fn reset_side_panel_debug_stats() {
+    if let Ok(mut debug) = side_panel_debug().lock() {
+        debug.stats = SidePanelDebugStats::default();
+    }
+}
+
+pub(crate) fn clear_side_panel_render_caches() {
+    if let Ok(mut cache) = side_panel_markdown_cache().lock() {
+        *cache = SidePanelMarkdownCacheState::default();
+    }
+    if let Ok(mut cache) = side_panel_render_cache().lock() {
+        *cache = SidePanelRenderCacheState::default();
+    }
 }
 
 fn hash_content(content: &str) -> u64 {
@@ -337,50 +495,56 @@ fn hash_content(content: &str) -> u64 {
     hasher.finish()
 }
 
-fn linked_file_revision(file_path: &str) -> Option<u64> {
-    use std::hash::{Hash as _, Hasher as _};
-
-    let metadata = std::fs::metadata(file_path).ok()?;
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    file_path.hash(&mut hasher);
-    metadata.len().hash(&mut hasher);
-    metadata.permissions().readonly().hash(&mut hasher);
-    metadata
-        .modified()
-        .ok()
-        .and_then(|ts| ts.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|dur| (dur.as_secs(), dur.subsec_nanos()))
-        .hash(&mut hasher);
-    Some(hasher.finish())
-}
-
 fn side_panel_content_revision(page: &crate::side_panel::SidePanelPage) -> u64 {
-    match page.source {
-        crate::side_panel::SidePanelPageSource::Managed => {
-            if page.updated_at_ms != 0 {
-                page.updated_at_ms
-            } else {
-                hash_content(&page.content)
-            }
-        }
-        crate::side_panel::SidePanelPageSource::LinkedFile => linked_file_revision(&page.file_path)
-            .unwrap_or_else(|| {
-                if page.updated_at_ms != 0 {
-                    page.updated_at_ms
-                } else {
-                    hash_content(&page.content)
-                }
-            }),
+    if page.updated_at_ms != 0 {
+        page.updated_at_ms
+    } else {
+        hash_content(&page.content)
     }
 }
 
-fn live_side_panel_content(page: &crate::side_panel::SidePanelPage) -> String {
-    match page.source {
-        crate::side_panel::SidePanelPageSource::Managed => page.content.clone(),
-        crate::side_panel::SidePanelPageSource::LinkedFile => {
-            std::fs::read_to_string(&page.file_path).unwrap_or_else(|_| page.content.clone())
-        }
+fn estimate_side_panel_pane_area(
+    terminal_width: u16,
+    terminal_height: u16,
+    ratio_percent: u8,
+) -> Option<Rect> {
+    const MIN_DIFF_WIDTH: u16 = 30;
+    const MIN_CHAT_WIDTH: u16 = 20;
+
+    let max_diff = terminal_width.saturating_sub(MIN_CHAT_WIDTH);
+    if max_diff < MIN_DIFF_WIDTH || terminal_height < 3 {
+        return None;
     }
+
+    let diff_width = (((terminal_width as u32 * ratio_percent.clamp(25, 100) as u32) / 100) as u16)
+        .max(MIN_DIFF_WIDTH)
+        .min(max_diff);
+    Some(Rect::new(0, 0, diff_width, terminal_height))
+}
+
+pub(crate) fn prewarm_focused_side_panel(
+    snapshot: &crate::side_panel::SidePanelSnapshot,
+    terminal_width: u16,
+    terminal_height: u16,
+    ratio_percent: u8,
+    has_protocol: bool,
+    centered: bool,
+) -> bool {
+    let Some(page) = snapshot.focused_page() else {
+        return false;
+    };
+    let Some(area) = estimate_side_panel_pane_area(terminal_width, terminal_height, ratio_percent)
+    else {
+        return false;
+    };
+    let Some(inner) = side_panel_content_area(area) else {
+        return false;
+    };
+    if inner.width == 0 || inner.height == 0 {
+        return false;
+    }
+    let _ = render_side_panel_markdown_cached(page, inner, has_protocol, centered);
+    true
 }
 
 pub(super) fn collect_pinned_content_cached(
@@ -901,13 +1065,52 @@ pub(super) fn draw_pinned_content_cached(
                 width: inner.width,
                 height: avail_rows,
             };
-            mermaid::render_image_widget_fit(
-                placement.hash,
-                img_area,
-                frame.buffer_mut(),
-                false,
-                false,
-            );
+            if let Some((_, width, height)) = mermaid::get_cached_png(placement.hash) {
+                if let Some(plan) = plan_fit_image_render(
+                    inner,
+                    clamped_scroll,
+                    image_start,
+                    placement.rows,
+                    width,
+                    height,
+                    false,
+                ) {
+                    match plan {
+                        FitImageRenderPlan::Full { area } => {
+                            mermaid::render_image_widget_fit(
+                                placement.hash,
+                                area,
+                                frame.buffer_mut(),
+                                false,
+                                false,
+                            );
+                        }
+                        FitImageRenderPlan::ClippedViewport {
+                            area,
+                            scroll_y,
+                            zoom_percent,
+                        } => {
+                            mermaid::render_image_widget_viewport(
+                                placement.hash,
+                                area,
+                                frame.buffer_mut(),
+                                0,
+                                scroll_y,
+                                zoom_percent,
+                                false,
+                            );
+                        }
+                    }
+                }
+            } else {
+                mermaid::render_image_widget_fit(
+                    placement.hash,
+                    img_area,
+                    frame.buffer_mut(),
+                    false,
+                    false,
+                );
+            }
         }
     }
 }
@@ -921,7 +1124,7 @@ pub(super) fn draw_side_panel_markdown(
     focused: bool,
     centered: bool,
 ) {
-    use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
+    use ratatui::widgets::{Block, Borders, Paragraph};
 
     if area.width < 10 || area.height < 3 {
         return;
@@ -939,18 +1142,14 @@ pub(super) fn draw_side_panel_markdown(
         .unwrap_or(1);
     let page_count = snapshot.pages.len();
 
-    let border_color = if focused { tool_color() } else { dim_color() };
-    let inner = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(border_color))
-        .inner(area);
-    if inner.width == 0 || inner.height == 0 {
+    let border_style = side_panel_border_style(focused);
+    let inner = side_panel_inner(area);
+    let Some(content_shell_area) = side_panel_content_area(area) else {
         return;
-    }
-
+    };
     let has_protocol = mermaid::protocol_type().is_some();
-    let rendered = render_side_panel_markdown_cached(page, inner, has_protocol, centered);
+    let rendered_full_width =
+        render_side_panel_markdown_cached(page, content_shell_area, has_protocol, centered);
 
     let mut title_parts = vec![Span::styled(" side ", Style::default().fg(tool_color()))];
     title_parts.push(Span::styled(
@@ -963,7 +1162,7 @@ pub(super) fn draw_side_panel_markdown(
         format!(" {}/{} ", page_index, page_count),
         Style::default().fg(dim_color()),
     ));
-    if rendered.has_scrollable_images {
+    if rendered_full_width.has_scrollable_images {
         title_parts.push(Span::styled(
             " readable ",
             Style::default()
@@ -977,14 +1176,39 @@ pub(super) fn draw_side_panel_markdown(
     }
 
     let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(border_color))
-        .title(Line::from(title_parts));
+        .borders(Borders::LEFT)
+        .border_style(border_style);
     frame.render_widget(block, area);
+    frame.render_widget(
+        Paragraph::new(Line::from(title_parts)),
+        Rect {
+            x: inner.x,
+            y: inner.y,
+            width: inner.width,
+            height: SIDE_PANEL_HEADER_HEIGHT,
+        },
+    );
+    let show_native_scrollbar = super::native_scrollbar_visible(
+        app.side_panel_native_scrollbar() && content_shell_area.width > 1,
+        rendered_full_width.lines.len(),
+        content_shell_area.height as usize,
+    );
+    let (content_inner, scrollbar_area) =
+        super::split_native_scrollbar_area(content_shell_area, show_native_scrollbar);
+    if content_inner.width == 0 || content_inner.height == 0 {
+        return;
+    }
+    let rendered = if show_native_scrollbar {
+        render_side_panel_markdown_cached(page, content_inner, has_protocol, centered)
+    } else {
+        rendered_full_width
+    };
 
     super::set_pinned_pane_total_lines(rendered.lines.len());
-    let max_scroll = rendered.lines.len().saturating_sub(inner.height as usize);
+    let max_scroll = rendered
+        .lines
+        .len()
+        .saturating_sub(content_inner.height as usize);
     let clamped_scroll = scroll.min(max_scroll);
     super::set_last_diff_pane_effective_scroll(clamped_scroll);
 
@@ -992,7 +1216,7 @@ pub(super) fn draw_side_panel_markdown(
         .lines
         .iter()
         .skip(clamped_scroll)
-        .take(inner.height as usize)
+        .take(content_inner.height as usize)
         .cloned()
         .collect();
     let visible_end = clamped_scroll + visible_lines.len();
@@ -1007,18 +1231,29 @@ pub(super) fn draw_side_panel_markdown(
         rendered.wrapped_line_map.clone(),
         clamped_scroll,
         visible_end,
-        inner,
+        content_inner,
         visible_left_margins,
     );
     apply_side_selection_highlight(app, &mut visible_lines, clamped_scroll);
-    frame.render_widget(Paragraph::new(visible_lines), inner);
+    frame.render_widget(Paragraph::new(visible_lines), content_inner);
+
+    if let Some(scrollbar_area) = scrollbar_area {
+        super::render_native_scrollbar(
+            frame,
+            scrollbar_area,
+            clamped_scroll,
+            rendered.lines.len(),
+            content_inner.height as usize,
+            focused,
+        );
+    }
 
     if has_protocol {
         for placement in &rendered.image_placements {
             let image_start = placement.after_text_line;
             let image_end = image_start.saturating_add(placement.rows as usize);
             let viewport_start = clamped_scroll;
-            let viewport_end = clamped_scroll.saturating_add(inner.height as usize);
+            let viewport_end = clamped_scroll.saturating_add(content_inner.height as usize);
             if image_end <= viewport_start || image_start >= viewport_end {
                 continue;
             }
@@ -1031,25 +1266,59 @@ pub(super) fn draw_side_panel_markdown(
                 continue;
             }
             let img_area = Rect {
-                x: inner.x,
-                y: inner.y + y_in_inner,
-                width: inner.width,
+                x: content_inner.x,
+                y: content_inner.y + y_in_inner,
+                width: content_inner.width,
                 height: avail_rows,
             };
             match placement.render_mode {
                 SidePanelImageRenderMode::Fit => {
-                    let img_area = mermaid::get_cached_png(placement.hash)
-                        .map(|(_, width, height)| {
-                            fit_side_panel_image_area(img_area, width, height, centered)
-                        })
-                        .unwrap_or(img_area);
-                    mermaid::render_image_widget_fit(
-                        placement.hash,
-                        img_area,
-                        frame.buffer_mut(),
-                        false,
-                        false,
-                    );
+                    if let Some((_, width, height)) = mermaid::get_cached_png(placement.hash) {
+                        if let Some(plan) = plan_fit_image_render(
+                            content_inner,
+                            clamped_scroll,
+                            image_start,
+                            placement.rows,
+                            width,
+                            height,
+                            centered,
+                        ) {
+                            match plan {
+                                FitImageRenderPlan::Full { area } => {
+                                    mermaid::render_image_widget_fit(
+                                        placement.hash,
+                                        area,
+                                        frame.buffer_mut(),
+                                        false,
+                                        false,
+                                    );
+                                }
+                                FitImageRenderPlan::ClippedViewport {
+                                    area,
+                                    scroll_y,
+                                    zoom_percent,
+                                } => {
+                                    mermaid::render_image_widget_viewport(
+                                        placement.hash,
+                                        area,
+                                        frame.buffer_mut(),
+                                        0,
+                                        scroll_y,
+                                        zoom_percent,
+                                        false,
+                                    );
+                                }
+                            }
+                        }
+                    } else {
+                        mermaid::render_image_widget_fit(
+                            placement.hash,
+                            img_area,
+                            frame.buffer_mut(),
+                            false,
+                            false,
+                        );
+                    }
                 }
                 SidePanelImageRenderMode::ScrollableViewport { zoom_percent } => {
                     let scroll_y = visible_start.saturating_sub(image_start) as i32;
@@ -1098,29 +1367,30 @@ fn render_side_panel_markdown_cached(
     };
 
     {
-        let cache = match side_panel_render_cache().lock() {
+        let mut cache = match side_panel_render_cache().lock() {
             Ok(cache) => cache,
             Err(poisoned) => poisoned.into_inner(),
         };
-        if cache.key.as_ref() == Some(&key) {
-            if let Some(rendered) = &cache.rendered {
-                return rendered.clone();
+        if let Some(rendered) = cache.entries.get(&key).cloned() {
+            lru_touch(&mut cache.order, &key);
+            cache.order.push_back(key.clone());
+            if let Ok(mut debug) = side_panel_debug().lock() {
+                debug.stats.render_cache_hits += 1;
             }
+            return rendered;
         }
     }
+    if let Ok(mut debug) = side_panel_debug().lock() {
+        debug.stats.render_cache_misses += 1;
+    }
 
-    let content = live_side_panel_content(page);
-
-    let saved_override = markdown::get_diagram_mode_override();
-    let saved_centered = markdown::center_code_blocks();
-    markdown::set_diagram_mode_override(Some(crate::config::DiagramDisplayMode::None));
-    markdown::set_center_code_blocks(centered);
-    let rendered_markdown = wrap_side_panel_markdown_lines(
-        markdown::render_markdown_with_width(&content, Some(inner.width as usize)),
-        inner.width as usize,
+    let rendered_markdown = render_side_panel_markdown_lines_cached(
+        page,
+        content_revision,
+        inner.width,
+        has_protocol,
+        centered,
     );
-    markdown::set_center_code_blocks(saved_centered);
-    markdown::set_diagram_mode_override(saved_override);
 
     let align = if centered {
         Alignment::Center
@@ -1129,30 +1399,14 @@ fn render_side_panel_markdown_cached(
     };
     let mut text_lines: Vec<Line<'static>> = Vec::new();
     let mut image_placements: Vec<PinnedImagePlacement> = Vec::new();
-    let placeholder_hashes: Vec<Option<u64>> = if has_protocol {
-        rendered_markdown
-            .iter()
-            .map(mermaid::parse_image_placeholder)
-            .collect()
-    } else {
-        vec![None; rendered_markdown.len()]
-    };
-    let mut has_following_content_after = vec![false; rendered_markdown.len()];
-    let mut seen_non_image_content = false;
-    for idx in (0..rendered_markdown.len()).rev() {
-        has_following_content_after[idx] = seen_non_image_content;
-        if placeholder_hashes[idx].is_none() && rendered_markdown[idx].width() > 0 {
-            seen_non_image_content = true;
-        }
-    }
 
-    for (idx, line) in rendered_markdown.iter().enumerate() {
-        if let Some(hash) = placeholder_hashes[idx] {
+    for (idx, line) in rendered_markdown.rendered_markdown.iter().enumerate() {
+        if let Some(hash) = rendered_markdown.placeholder_hashes[idx] {
             let image_layout = estimate_side_panel_image_layout(
                 hash,
                 inner,
                 text_lines.len(),
-                has_following_content_after[idx],
+                rendered_markdown.has_following_content_after[idx],
             );
             image_placements.push(PinnedImagePlacement {
                 after_text_line: text_lines.len(),
@@ -1204,8 +1458,94 @@ fn render_side_panel_markdown_cached(
         Ok(cache) => cache,
         Err(poisoned) => poisoned.into_inner(),
     };
-    cache.key = Some(key);
-    cache.rendered = Some(rendered.clone());
+    lru_touch(&mut cache.order, &key);
+    cache.entries.insert(key.clone(), rendered.clone());
+    cache.order.push_back(key);
+    while cache.order.len() > SIDE_PANEL_RENDER_CACHE_LIMIT {
+        if let Some(oldest) = cache.order.pop_front() {
+            cache.entries.remove(&oldest);
+        }
+    }
+
+    rendered
+}
+
+fn render_side_panel_markdown_lines_cached(
+    page: &crate::side_panel::SidePanelPage,
+    content_revision: u64,
+    inner_width: u16,
+    has_protocol: bool,
+    centered: bool,
+) -> RenderedSidePanelMarkdown {
+    let key = SidePanelMarkdownKey {
+        page_id: page.id.clone(),
+        content_revision,
+        inner_width,
+        has_protocol,
+        centered,
+    };
+
+    {
+        let mut cache = match side_panel_markdown_cache().lock() {
+            Ok(cache) => cache,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if let Some(rendered) = cache.entries.get(&key).cloned() {
+            lru_touch(&mut cache.order, &key);
+            cache.order.push_back(key.clone());
+            if let Ok(mut debug) = side_panel_debug().lock() {
+                debug.stats.markdown_cache_hits += 1;
+            }
+            return rendered;
+        }
+    }
+    if let Ok(mut debug) = side_panel_debug().lock() {
+        debug.stats.markdown_cache_misses += 1;
+    }
+
+    let saved_override = markdown::get_diagram_mode_override();
+    let saved_centered = markdown::center_code_blocks();
+    markdown::set_diagram_mode_override(Some(crate::config::DiagramDisplayMode::None));
+    markdown::set_center_code_blocks(centered);
+    let lines = wrap_side_panel_markdown_lines(
+        markdown::render_markdown_with_width(&page.content, Some(inner_width as usize)),
+        inner_width as usize,
+    );
+    markdown::set_center_code_blocks(saved_centered);
+    markdown::set_diagram_mode_override(saved_override);
+
+    let placeholder_hashes: Vec<Option<u64>> = if has_protocol {
+        lines.iter().map(mermaid::parse_image_placeholder).collect()
+    } else {
+        vec![None; lines.len()]
+    };
+    let mut has_following_content_after = vec![false; lines.len()];
+    let mut seen_non_image_content = false;
+    for idx in (0..lines.len()).rev() {
+        has_following_content_after[idx] = seen_non_image_content;
+        if placeholder_hashes[idx].is_none() && lines[idx].width() > 0 {
+            seen_non_image_content = true;
+        }
+    }
+
+    let rendered = RenderedSidePanelMarkdown {
+        rendered_markdown: lines,
+        placeholder_hashes,
+        has_following_content_after,
+    };
+
+    let mut cache = match side_panel_markdown_cache().lock() {
+        Ok(cache) => cache,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    lru_touch(&mut cache.order, &key);
+    cache.entries.insert(key.clone(), rendered.clone());
+    cache.order.push_back(key);
+    while cache.order.len() > SIDE_PANEL_MARKDOWN_CACHE_LIMIT {
+        if let Some(oldest) = cache.order.pop_front() {
+            cache.entries.remove(&oldest);
+        }
+    }
 
     rendered
 }
@@ -1396,6 +1736,98 @@ fn side_panel_viewport_scroll_x(
     base_cells.saturating_add(pan_x_cells).clamp(0, max_cells)
 }
 
+fn fit_zoom_percent_for_area(
+    area: Rect,
+    img_w_px: u32,
+    img_h_px: u32,
+    font_size: Option<(u16, u16)>,
+) -> u8 {
+    if area.width == 0 || area.height == 0 || img_w_px == 0 || img_h_px == 0 {
+        return 100;
+    }
+
+    let (font_w, font_h) = font_size.unwrap_or((8, 16));
+    let font_w = font_w.max(1) as u32;
+    let font_h = font_h.max(1) as u32;
+    let zoom_w = area.width as u32 * font_w * 100 / img_w_px.max(1);
+    let zoom_h = area.height as u32 * font_h * 100 / img_h_px.max(1);
+    zoom_w.min(zoom_h).clamp(1, 200) as u8
+}
+
+fn plan_fit_image_render(
+    viewport_area: Rect,
+    viewport_start: usize,
+    image_start: usize,
+    reserved_rows: u16,
+    img_w_px: u32,
+    img_h_px: u32,
+    centered: bool,
+) -> Option<FitImageRenderPlan> {
+    if viewport_area.width == 0
+        || viewport_area.height == 0
+        || reserved_rows == 0
+        || img_w_px == 0
+        || img_h_px == 0
+    {
+        return None;
+    }
+
+    let reserved_template = Rect {
+        x: viewport_area.x,
+        y: 0,
+        width: viewport_area.width,
+        height: reserved_rows,
+    };
+    let fitted = fit_side_panel_image_area(reserved_template, img_w_px, img_h_px, centered);
+    if fitted.width == 0 || fitted.height == 0 {
+        return None;
+    }
+
+    let reserved_top = viewport_area.y as i32 + image_start as i32 - viewport_start as i32;
+    let fitted_top = reserved_top + fitted.y as i32;
+    let fitted_bottom = fitted_top + fitted.height as i32;
+    let viewport_top = viewport_area.y as i32;
+    let viewport_bottom = viewport_top + viewport_area.height as i32;
+
+    if fitted_bottom <= viewport_top || fitted_top >= viewport_bottom {
+        return None;
+    }
+
+    let visible_top = fitted_top.max(viewport_top);
+    let visible_bottom = fitted_bottom.min(viewport_bottom);
+    let visible_height = (visible_bottom - visible_top) as u16;
+    if visible_height == 0 {
+        return None;
+    }
+
+    if visible_height == fitted.height && fitted_top >= 0 {
+        return Some(FitImageRenderPlan::Full {
+            area: Rect {
+                x: fitted.x,
+                y: fitted_top as u16,
+                width: fitted.width,
+                height: fitted.height,
+            },
+        });
+    }
+
+    Some(FitImageRenderPlan::ClippedViewport {
+        area: Rect {
+            x: fitted.x,
+            y: visible_top.max(0) as u16,
+            width: fitted.width,
+            height: visible_height,
+        },
+        scroll_y: visible_top.saturating_sub(fitted_top),
+        zoom_percent: fit_zoom_percent_for_area(
+            fitted,
+            img_w_px,
+            img_h_px,
+            mermaid::get_font_size(),
+        ),
+    })
+}
+
 fn fit_side_panel_image_area(area: Rect, img_w_px: u32, img_h_px: u32, centered: bool) -> Rect {
     fit_image_area_with_font(
         area,
@@ -1494,6 +1926,10 @@ fn clamp_side_panel_image_rows(
 mod tests {
     use super::*;
     use std::sync::{Mutex, OnceLock};
+
+    fn clear_side_panel_render_caches() {
+        super::clear_side_panel_render_caches();
+    }
 
     fn mermaid_test_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -1642,6 +2078,44 @@ mod tests {
         assert_eq!(fitted.x, area.x);
         assert_eq!(fitted.width, area.width);
         assert!(fitted.height < area.height);
+    }
+
+    #[test]
+    fn plan_fit_image_render_uses_clipped_viewport_for_partial_visibility() {
+        let viewport = Rect::new(0, 10, 36, 12);
+        let plan =
+            plan_fit_image_render(viewport, 4, 0, 12, 720, 1440, true).expect("fit render plan");
+
+        match plan {
+            FitImageRenderPlan::ClippedViewport {
+                area,
+                scroll_y,
+                zoom_percent,
+            } => {
+                assert!(
+                    area.height < 12,
+                    "expected clipped visible height: {area:?}"
+                );
+                assert!(scroll_y > 0, "expected positive vertical clip offset");
+                assert!(zoom_percent > 0);
+            }
+            other => panic!("expected clipped viewport plan, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn plan_fit_image_render_uses_full_fit_when_fully_visible() {
+        let viewport = Rect::new(0, 10, 36, 12);
+        let plan =
+            plan_fit_image_render(viewport, 0, 0, 12, 720, 1440, true).expect("fit render plan");
+
+        match plan {
+            FitImageRenderPlan::Full { area } => {
+                assert_eq!(area.y, viewport.y);
+                assert_eq!(area.height, viewport.height);
+            }
+            other => panic!("expected full fit plan, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1909,15 +2383,25 @@ mod tests {
         let file_path = temp.path().join("live.md");
         std::fs::write(&file_path, "# First").expect("write initial content");
 
-        let page = crate::side_panel::SidePanelPage {
-            id: "live_demo".to_string(),
-            title: "Live Demo".to_string(),
-            file_path: file_path.display().to_string(),
-            format: crate::side_panel::SidePanelPageFormat::Markdown,
-            source: crate::side_panel::SidePanelPageSource::LinkedFile,
-            content: "# Stale".to_string(),
-            updated_at_ms: 1,
+        let mut snapshot = crate::side_panel::SidePanelSnapshot {
+            focused_page_id: Some("live_demo".to_string()),
+            pages: vec![crate::side_panel::SidePanelPage {
+                id: "live_demo".to_string(),
+                title: "Live Demo".to_string(),
+                file_path: file_path.display().to_string(),
+                format: crate::side_panel::SidePanelPageFormat::Markdown,
+                source: crate::side_panel::SidePanelPageSource::LinkedFile,
+                content: "# Stale".to_string(),
+                updated_at_ms: 1,
+            }],
         };
+
+        clear_side_panel_render_caches();
+        assert!(crate::side_panel::refresh_linked_page_content(
+            &mut snapshot,
+            None
+        ));
+        let page = snapshot.focused_page().expect("focused page");
 
         let first = render_side_panel_markdown_cached(&page, Rect::new(0, 0, 24, 20), false, false);
         let first_text: Vec<String> = first
@@ -1933,6 +2417,12 @@ mod tests {
 
         std::fs::write(&file_path, "# Second").expect("write updated content");
 
+        assert!(crate::side_panel::refresh_linked_page_content(
+            &mut snapshot,
+            None
+        ));
+        let page = snapshot.focused_page().expect("focused page");
+
         let second =
             render_side_panel_markdown_cached(&page, Rect::new(0, 0, 24, 20), false, false);
         let second_text: Vec<String> = second
@@ -1944,6 +2434,76 @@ mod tests {
             second_text.iter().any(|line| line.contains("Second")),
             "expected second render to reflect updated file content: {:?}",
             second_text
+        );
+    }
+
+    #[test]
+    fn render_side_panel_height_change_reuses_markdown_render_cache() {
+        clear_side_panel_render_caches();
+        let before = markdown::debug_stats().total_renders;
+        let page = crate::side_panel::SidePanelPage {
+            id: "height_cache_demo".to_string(),
+            title: "Height Cache Demo".to_string(),
+            file_path: "height_cache_demo.md".to_string(),
+            format: crate::side_panel::SidePanelPageFormat::Markdown,
+            source: crate::side_panel::SidePanelPageSource::Managed,
+            content:
+                "# Demo\n\nThis side panel should only parse markdown once for a stable width."
+                    .to_string(),
+            updated_at_ms: 9,
+        };
+
+        let _first =
+            render_side_panel_markdown_cached(&page, Rect::new(0, 0, 28, 18), false, false);
+        let after_first = markdown::debug_stats().total_renders;
+        let _second =
+            render_side_panel_markdown_cached(&page, Rect::new(0, 0, 28, 26), false, false);
+        let after_second = markdown::debug_stats().total_renders;
+
+        assert!(
+            after_first > before,
+            "expected initial render to parse markdown"
+        );
+        assert_eq!(
+            after_second, after_first,
+            "height-only cache miss should not trigger another markdown render"
+        );
+    }
+
+    #[test]
+    fn prewarm_focused_side_panel_reuses_markdown_cache_on_first_draw() {
+        clear_side_panel_render_caches();
+        let before = markdown::debug_stats().total_renders;
+        let snapshot = crate::side_panel::SidePanelSnapshot {
+            focused_page_id: Some("prewarm_demo".to_string()),
+            pages: vec![crate::side_panel::SidePanelPage {
+                id: "prewarm_demo".to_string(),
+                title: "Prewarm Demo".to_string(),
+                file_path: "prewarm_demo.md".to_string(),
+                format: crate::side_panel::SidePanelPageFormat::Markdown,
+                source: crate::side_panel::SidePanelPageSource::Managed,
+                content: "# Demo\n\nThis should be warm before first draw.".to_string(),
+                updated_at_ms: 7,
+            }],
+        };
+
+        assert!(prewarm_focused_side_panel(
+            &snapshot, 120, 40, 40, false, false
+        ));
+        let after_prewarm = markdown::debug_stats().total_renders;
+        let page = snapshot.focused_page().expect("focused page");
+        let pane_area = estimate_side_panel_pane_area(120, 40, 40).expect("side panel area");
+        let inner = side_panel_content_area(pane_area).expect("side panel content area");
+        let _ = render_side_panel_markdown_cached(&page, inner, false, false);
+        let after_draw = markdown::debug_stats().total_renders;
+
+        assert!(
+            after_prewarm > before,
+            "expected prewarm to render markdown once"
+        );
+        assert_eq!(
+            after_draw, after_prewarm,
+            "expected first draw to reuse prewarmed markdown cache"
         );
     }
 
@@ -1963,7 +2523,8 @@ mod tests {
             updated_at_ms: 42,
         };
 
-        let rendered = render_side_panel_markdown_cached(&page, Rect::new(0, 0, 24, 20), false, false);
+        let rendered =
+            render_side_panel_markdown_cached(&page, Rect::new(0, 0, 24, 20), false, false);
         let text: Vec<String> = rendered
             .lines
             .iter()
@@ -1997,7 +2558,8 @@ mod tests {
             updated_at_ms: 7,
         };
 
-        let rendered = render_side_panel_markdown_cached(&page, Rect::new(0, 0, 24, 20), false, false);
+        let rendered =
+            render_side_panel_markdown_cached(&page, Rect::new(0, 0, 24, 20), false, false);
         let text: Vec<String> = rendered
             .lines
             .iter()
