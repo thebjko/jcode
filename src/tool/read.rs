@@ -56,9 +56,9 @@ impl NormalizedReadRange {
 
 fn normalize_read_range(params: &ReadInput) -> Result<NormalizedReadRange> {
     let has_start_end = params.start_line.is_some() || params.end_line.is_some();
-    let has_offset_limit = params.offset.is_some() || params.limit.is_some();
+    let has_mixed_offset = params.offset.is_some();
 
-    if has_start_end && has_offset_limit {
+    if has_start_end && has_mixed_offset {
         return Err(anyhow::anyhow!(
             "Use either start_line/end_line (1-based) or offset/limit (0-based), not both."
         ));
@@ -288,11 +288,31 @@ mod tests {
     }
 
     #[test]
-    fn normalize_read_range_rejects_mixed_range_styles() {
+    fn normalize_read_range_supports_start_line_and_limit() {
         let params: ReadInput = serde_json::from_value(json!({
             "file_path": "src/lib.rs",
             "start_line": 10,
             "limit": 20
+        }))
+        .expect("deserialize params");
+
+        let range = normalize_read_range(&params).expect("start_line + limit should work");
+        assert_eq!(
+            range,
+            NormalizedReadRange {
+                offset: 9,
+                limit: 20,
+                style: ReadRangeStyle::StartEnd,
+            }
+        );
+    }
+
+    #[test]
+    fn normalize_read_range_rejects_start_line_and_offset() {
+        let params: ReadInput = serde_json::from_value(json!({
+            "file_path": "src/lib.rs",
+            "start_line": 10,
+            "offset": 20
         }))
         .expect("deserialize params");
 
@@ -386,6 +406,47 @@ mod tests {
             .await
             .expect("read execution should succeed");
 
+        assert!(
+            output.output.contains("use start_line=4 to continue"),
+            "output={:?}",
+            output.output
+        );
+    }
+
+    #[tokio::test]
+    async fn read_tool_supports_start_line_with_limit() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("sample.txt");
+        std::fs::write(&path, "one\ntwo\nthree\nfour\nfive\n").expect("write sample file");
+
+        let tool = ReadTool::new();
+        let output = tool
+            .execute(
+                json!({
+                    "file_path": "sample.txt",
+                    "start_line": 2,
+                    "limit": 2
+                }),
+                make_ctx(temp.path().to_path_buf()),
+            )
+            .await
+            .expect("read execution should succeed");
+
+        assert!(
+            output.output.contains("2\ttwo"),
+            "output={:?}",
+            output.output
+        );
+        assert!(
+            output.output.contains("3\tthree"),
+            "output={:?}",
+            output.output
+        );
+        assert!(
+            !output.output.contains("4\tfour"),
+            "output={:?}",
+            output.output
+        );
         assert!(
             output.output.contains("use start_line=4 to continue"),
             "output={:?}",
