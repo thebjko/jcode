@@ -1,4 +1,5 @@
 use anyhow::Result;
+use std::path::Path;
 use std::process::Command as ProcessCommand;
 
 use crate::{build, logging, session, startup_profile};
@@ -10,6 +11,55 @@ pub const CLIENT_SELFDEV_ENV: &str = "JCODE_CLIENT_SELFDEV_MODE";
 
 pub fn client_selfdev_requested() -> bool {
     std::env::var(CLIENT_SELFDEV_ENV).is_ok()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SelfDevBuildCommand {
+    program: String,
+    args: Vec<String>,
+    display: String,
+}
+
+fn selfdev_build_command(repo_dir: &Path) -> SelfDevBuildCommand {
+    let wrapper = repo_dir.join("scripts").join("dev_cargo.sh");
+    if wrapper.is_file() {
+        return SelfDevBuildCommand {
+            program: "bash".to_string(),
+            args: vec![
+                wrapper.to_string_lossy().into_owned(),
+                "build".to_string(),
+                "--release".to_string(),
+                "--bin".to_string(),
+                "jcode".to_string(),
+            ],
+            display: "scripts/dev_cargo.sh build --release --bin jcode".to_string(),
+        };
+    }
+
+    SelfDevBuildCommand {
+        program: "cargo".to_string(),
+        args: vec![
+            "build".to_string(),
+            "--release".to_string(),
+            "--bin".to_string(),
+            "jcode".to_string(),
+        ],
+        display: "cargo build --release --bin jcode".to_string(),
+    }
+}
+
+fn run_selfdev_build(repo_dir: &Path) -> Result<SelfDevBuildCommand> {
+    let build = selfdev_build_command(repo_dir);
+    let status = ProcessCommand::new(&build.program)
+        .args(&build.args)
+        .current_dir(repo_dir)
+        .status()?;
+
+    if !status.success() {
+        anyhow::bail!("Build failed: {}", build.display);
+    }
+
+    Ok(build)
 }
 
 async fn wait_for_reloading_server() -> bool {
@@ -59,20 +109,14 @@ pub async fn run_self_dev(should_build: bool, resume_session: Option<String>) ->
     crate::process_title::set_client_session_title(&session_id, true);
 
     if should_build {
-        output::stderr_info("Building...");
+        let build = selfdev_build_command(&repo_dir);
+        output::stderr_info(format!("Building with {}...", build.display));
 
-        let build_status = ProcessCommand::new("cargo")
-            .args(["build", "--release"])
-            .current_dir(&repo_dir)
-            .status()?;
-
-        if !build_status.success() {
-            anyhow::bail!("Build failed");
-        }
+        run_selfdev_build(&repo_dir)?;
 
         build::publish_local_current_build(&repo_dir)?;
 
-        output::stderr_info("✓ Build complete");
+        output::stderr_info("✓ Build complete; updated current launcher".to_string());
     }
 
     let target_binary = build::client_update_candidate(true)
@@ -83,8 +127,9 @@ pub async fn run_self_dev(should_build: bool, resume_session: Option<String>) ->
     if !target_binary.exists() {
         anyhow::bail!(
             "No binary found at {:?}\n\
-             Run 'cargo build --release' first, or use 'jcode self-dev --build'.",
-            target_binary
+             Run 'jcode self-dev --build' first, or build with '{}' and then publish current.",
+            target_binary,
+            selfdev_build_command(&repo_dir).display,
         );
     }
 
@@ -148,7 +193,7 @@ pub async fn run_self_dev(should_build: bool, resume_session: Option<String>) ->
 }
 #[cfg(test)]
 mod tests {
-    use super::wait_for_reloading_server;
+    use super::{selfdev_build_command, wait_for_reloading_server};
     use crate::{provider, session, storage, tool};
     use std::ffi::OsString;
     use std::sync::Arc;
@@ -392,5 +437,47 @@ mod tests {
         } else {
             crate::env::remove_var("JCODE_RUNTIME_DIR");
         }
+    }
+
+    #[test]
+    fn test_selfdev_build_command_prefers_repo_wrapper_when_present() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let scripts_dir = temp.path().join("scripts");
+        std::fs::create_dir_all(&scripts_dir).expect("create scripts dir");
+        std::fs::write(scripts_dir.join("dev_cargo.sh"), "#!/usr/bin/env bash\n")
+            .expect("write wrapper");
+
+        let build = selfdev_build_command(temp.path());
+        assert_eq!(build.program, "bash");
+        assert_eq!(
+            build.args,
+            vec![
+                temp.path()
+                    .join("scripts")
+                    .join("dev_cargo.sh")
+                    .to_string_lossy()
+                    .into_owned(),
+                "build".to_string(),
+                "--release".to_string(),
+                "--bin".to_string(),
+                "jcode".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_selfdev_build_command_falls_back_to_cargo_when_wrapper_missing() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let build = selfdev_build_command(temp.path());
+        assert_eq!(build.program, "cargo");
+        assert_eq!(
+            build.args,
+            vec![
+                "build".to_string(),
+                "--release".to_string(),
+                "--bin".to_string(),
+                "jcode".to_string(),
+            ]
+        );
     }
 }

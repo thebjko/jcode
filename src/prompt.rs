@@ -368,10 +368,11 @@ Use this tool to send commands to the debug socket for visual debugging, spawnin
 ## Workflow
 
 When you make code changes to jcode:
-1. Build with `cargo build --release`
-2. Use `selfdev` with action `reload` to restart with the new binary
-3. The session continues automatically after restart — you will receive a continuation message
-4. **After reload, immediately continue your work** — do not stop and wait for user input
+1. Build using the fastest practical local build path for self-dev iteration. Prefer the repo's standard fast dev build path when one exists (for example `scripts/dev_cargo.sh build --release --bin jcode` in this repo, which enables sccache/fast linker); otherwise use plain `cargo build --release --bin jcode`. If you want future launcher/Alt+; sessions to use the new build, publish the current build too, for example by using `selfdev reload` after the build or `jcode self-dev --build` outside the session.
+2. Avoid slow distribution/signoff builds like `release-lto` unless you specifically need to validate a production artifact.
+3. Use `selfdev` with action `reload` to restart with the new binary
+4. The session continues automatically after restart — you will receive a continuation message
+5. **After reload, immediately continue your work** — do not stop and wait for user input
 
 For testing UI changes, use the debug_socket tool to spawn testers and capture visual debug frames."#.to_string()
 }
@@ -414,10 +415,11 @@ Debug socket path: {}
 ## Workflow
 
 When you make code changes to jcode:
-1. Build with `cargo build --release`
-2. Use `selfdev` with action `reload` to restart with the new binary
-3. The session continues automatically after restart — you will receive a continuation message
-4. **After reload, immediately continue your work** — do not stop and wait for user input
+1. Build using the fastest practical local build path for self-dev iteration. Prefer the repo's standard fast dev build path when one exists (for example `scripts/dev_cargo.sh build --release --bin jcode` in this repo, which enables sccache/fast linker); otherwise use plain `cargo build --release --bin jcode`. If you want future launcher/Alt+; sessions to use the new build, publish the current build too, for example by using `selfdev reload` after the build or `jcode self-dev --build` outside the session.
+2. Avoid slow distribution/signoff builds like `release-lto` unless you specifically need to validate a production artifact.
+3. Use `selfdev` with action `reload` to restart with the new binary
+4. The session continues automatically after restart — you will receive a continuation message
+5. **After reload, immediately continue your work** — do not stop and wait for user input
 
 For testing UI changes, use the debug_socket tool to spawn testers and capture visual debug frames."#,
         debug_socket_path.display()

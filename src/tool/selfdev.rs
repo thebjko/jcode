@@ -146,7 +146,7 @@ pub fn selfdev_status_output() -> Result<ToolOutput> {
         }
     }
 
-        status.push_str("\n## Build Channels\n\n");
+    status.push_str("\n## Build Channels\n\n");
 
     if let Ok(Some(current)) = build::read_current_version() {
         status.push_str(&format!("**Current:** {}\n", current));
@@ -593,7 +593,7 @@ impl SelfDevTool {
             return Ok(ToolOutput::new(
                 format!(
                     "No binary found at {}.\n\
-                     Run 'cargo build --release' first, then try reload again.",
+                     Run 'jcode self-dev --build' first, or build with 'scripts/dev_cargo.sh build --release --bin jcode' and then try reload again.",
                     target_binary.display()
                 )
                 .to_string(),
