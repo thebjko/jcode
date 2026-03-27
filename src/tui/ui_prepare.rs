@@ -71,6 +71,14 @@ fn user_prompt_text_style() -> Style {
     Style::default().fg(user_text()).bg(user_bg())
 }
 
+fn default_message_alignment(role: &str, centered: bool) -> ratatui::layout::Alignment {
+    if centered && matches!(role, "user" | "assistant") {
+        ratatui::layout::Alignment::Center
+    } else {
+        ratatui::layout::Alignment::Left
+    }
+}
+
 fn assistant_message_copy_targets(
     content: &str,
     rendered_lines: &[Line<'static>],
@@ -296,7 +304,7 @@ fn prepare_messages_inner(
     startup_active: bool,
 ) -> PreparedMessages {
     let mut all_header_lines = header::build_persistent_header(app, width);
-    all_header_lines.extend(build_header_lines(app, width));
+    all_header_lines.extend(header::build_header_lines(app, width));
     let header_prepared = wrap_lines(all_header_lines, &[], &[], &[], width);
     let startup_prepared = if startup_active {
         wrap_lines(
@@ -1134,12 +1142,6 @@ fn prepare_body(app: &dyn TuiState, width: u16, include_streaming: bool) -> Prep
     let mut copy_targets: Vec<RawCopyTarget> = Vec::new();
     let centered = app.centered_mode();
     markdown::set_center_code_blocks(centered);
-    let align = if centered {
-        ratatui::layout::Alignment::Center
-    } else {
-        ratatui::layout::Alignment::Left
-    };
-
     let mut prompt_num = 0usize;
     let total_prompts = app
         .display_messages()
@@ -1149,6 +1151,7 @@ fn prepare_body(app: &dyn TuiState, width: u16, include_streaming: bool) -> Prep
     let pending_count = input_ui::pending_prompt_count(app);
 
     for (msg_idx, msg) in app.display_messages().iter().enumerate() {
+        let align = default_message_alignment(msg.role.as_str(), centered);
         if !lines.is_empty() && msg.role != "tool" && msg.role != "meta" && msg.role != "swarm" {
             lines.push(Line::from(""));
             line_raw_overrides.push(None);
@@ -1449,6 +1452,7 @@ fn prepare_body(app: &dyn TuiState, width: u16, include_streaming: bool) -> Prep
         }
         let content_width = width.saturating_sub(4) as usize;
         let md_lines = app.render_streaming_markdown(content_width);
+        let align = default_message_alignment("assistant", centered);
         for line in md_lines {
             lines.push(align_if_unset(line, align));
             line_raw_overrides.push(None);
@@ -1467,6 +1471,35 @@ fn prepare_body(app: &dyn TuiState, width: u16, include_streaming: bool) -> Prep
         &edit_tool_line_ranges,
         &copy_targets,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn centered_mode_only_centers_user_and_assistant_messages() {
+        assert_eq!(
+            default_message_alignment("user", true),
+            ratatui::layout::Alignment::Center
+        );
+        assert_eq!(
+            default_message_alignment("assistant", true),
+            ratatui::layout::Alignment::Center
+        );
+        assert_eq!(
+            default_message_alignment("tool", true),
+            ratatui::layout::Alignment::Left
+        );
+        assert_eq!(
+            default_message_alignment("system", true),
+            ratatui::layout::Alignment::Left
+        );
+        assert_eq!(
+            default_message_alignment("swarm", true),
+            ratatui::layout::Alignment::Left
+        );
+    }
 }
 
 fn wrap_lines(

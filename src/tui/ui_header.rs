@@ -1,9 +1,10 @@
 #![allow(dead_code)]
 
 use super::{
-    TuiState, binary_age, dim_color, header_animation_color, header_chrome_color,
-    header_fade_color, header_fade_t, header_icon_color, header_name_color, header_session_color,
-    is_running_stable_release, semver, shorten_model_name,
+    TuiState, binary_age, dim_color, get_unseen_changelog_entries, header_animation_color,
+    header_chrome_color, header_fade_color, header_fade_t, header_icon_color, header_name_color,
+    header_session_color, is_running_stable_release, render_rounded_box, semver,
+    shorten_model_name,
 };
 use crate::auth::{AuthState, AuthStatus};
 use crate::tui::color_support::rgb;
@@ -388,6 +389,239 @@ pub(super) fn build_persistent_header(app: &dyn TuiState, width: u16) -> Vec<Lin
                 .alignment(align),
         );
     }
+
+    lines
+}
+
+pub(crate) fn build_header_lines(app: &dyn TuiState, width: u16) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line> = Vec::new();
+    let centered = app.centered_mode();
+    let align = if centered {
+        ratatui::layout::Alignment::Center
+    } else {
+        ratatui::layout::Alignment::Left
+    };
+
+    let model = app.provider_model();
+    let provider_name = app.provider_name();
+    let upstream = app.upstream_provider();
+    let auth = app.auth_status();
+    let provider_label = {
+        let trimmed = provider_name.trim();
+        if trimmed.is_empty() {
+            "unknown".to_string()
+        } else {
+            let name = trimmed.to_lowercase();
+            let auth_tag = match name.as_str() {
+                "anthropic" => {
+                    if std::env::var("ANTHROPIC_API_KEY").is_ok() {
+                        "api-key"
+                    } else if auth.anthropic.has_oauth {
+                        "oauth"
+                    } else {
+                        ""
+                    }
+                }
+                "openai" => {
+                    if auth.openai_has_api_key {
+                        "api-key"
+                    } else if auth.openai_has_oauth {
+                        "oauth"
+                    } else {
+                        ""
+                    }
+                }
+                "copilot" => {
+                    if auth.copilot_has_api_token {
+                        "oauth"
+                    } else {
+                        ""
+                    }
+                }
+                "openrouter" => "api-key",
+                _ => "",
+            };
+            if auth_tag.is_empty() {
+                name
+            } else {
+                format!("{}:{}", auth_tag, name)
+            }
+        }
+    };
+
+    let w = width as usize;
+    let model_info = if let Some(ref provider) = upstream {
+        let full = format!(
+            "({}) {} via {} · /model to switch",
+            provider_label, model, provider
+        );
+        if full.chars().count() <= w {
+            full
+        } else {
+            let short = format!("({}) {} via {}", provider_label, model, provider);
+            if short.chars().count() <= w {
+                short
+            } else {
+                format!("({}) {}", provider_label, model)
+            }
+        }
+    } else {
+        let full = format!("({}) {} · /model to switch", provider_label, model);
+        if full.chars().count() <= w {
+            full
+        } else {
+            format!("({}) {}", provider_label, model)
+        }
+    };
+    lines.push(
+        Line::from(Span::styled(model_info, Style::default().fg(dim_color()))).alignment(align),
+    );
+
+    let auth_line = build_auth_status_line(&auth, w);
+    if !auth_line.spans.is_empty() {
+        lines.push(auth_line.alignment(align));
+    }
+
+    if let Some(goal_badge) = crate::goal::header_badge(
+        app.working_dir().as_deref().map(std::path::Path::new),
+        app.side_panel(),
+    ) {
+        lines.push(
+            Line::from(Span::styled(
+                goal_badge,
+                Style::default().fg(rgb(170, 200, 120)),
+            ))
+            .alignment(align),
+        );
+    }
+
+    let new_entries = get_unseen_changelog_entries();
+    let term_width = width as usize;
+    if !new_entries.is_empty() && term_width > 20 {
+        const MAX_LINES: usize = 8;
+        let available_width = term_width.saturating_sub(2);
+        let display_count = new_entries.len().min(MAX_LINES);
+        let has_more = new_entries.len() > MAX_LINES;
+
+        let mut content: Vec<Line> = Vec::new();
+        for entry in new_entries.iter().take(display_count) {
+            content.push(
+                Line::from(Span::styled(
+                    format!("• {}", entry),
+                    Style::default().fg(dim_color()),
+                ))
+                .alignment(align),
+            );
+        }
+        if has_more {
+            content.push(
+                Line::from(Span::styled(
+                    format!(
+                        "  …{} more · /changelog to see all",
+                        new_entries.len() - MAX_LINES
+                    ),
+                    Style::default().fg(dim_color()),
+                ))
+                .alignment(align),
+            );
+        }
+
+        let boxed = render_rounded_box(
+            "Updates",
+            content,
+            available_width,
+            Style::default().fg(dim_color()),
+        );
+        for line in boxed {
+            lines.push(line.alignment(align));
+        }
+    }
+
+    let mcps = app.mcp_servers();
+    let mcp_text = if mcps.is_empty() {
+        "mcp: (none)".to_string()
+    } else {
+        let full_parts: Vec<String> = mcps
+            .iter()
+            .map(|(name, count)| {
+                if *count > 0 {
+                    format!("{} ({} tools)", name, count)
+                } else {
+                    format!("{} (...)", name)
+                }
+            })
+            .collect();
+        let full = format!("mcp: {}", full_parts.join(", "));
+        if full.chars().count() <= w {
+            full
+        } else {
+            let short_parts: Vec<String> = mcps
+                .iter()
+                .map(|(name, count)| {
+                    if *count > 0 {
+                        format!("{}({})", name, count)
+                    } else {
+                        format!("{}(…)", name)
+                    }
+                })
+                .collect();
+            let short = format!("mcp: {}", short_parts.join(" "));
+            if short.chars().count() <= w {
+                short
+            } else {
+                format!("mcp: {} servers", mcps.len())
+            }
+        }
+    };
+    lines.push(
+        Line::from(Span::styled(mcp_text, Style::default().fg(dim_color()))).alignment(align),
+    );
+
+    let skills = app.available_skills();
+    if !skills.is_empty() {
+        let full = format!(
+            "skills: {}",
+            skills
+                .iter()
+                .map(|s| format!("/{}", s))
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+        let skills_text = if full.chars().count() <= w {
+            full
+        } else {
+            format!("skills: {} loaded", skills.len())
+        };
+        lines.push(
+            Line::from(Span::styled(skills_text, Style::default().fg(dim_color())))
+                .alignment(align),
+        );
+    }
+
+    let client_count = app.connected_clients().unwrap_or(0);
+    let session_count = app.server_sessions().len();
+    if client_count > 0 || session_count > 1 {
+        let mut parts = Vec::new();
+        if client_count > 0 {
+            parts.push(format!(
+                "{} client{}",
+                client_count,
+                if client_count == 1 { "" } else { "s" }
+            ));
+        }
+        if session_count > 1 {
+            parts.push(format!("{} sessions", session_count));
+        }
+        lines.push(
+            Line::from(Span::styled(
+                format!("server: {}", parts.join(", ")),
+                Style::default().fg(dim_color()),
+            ))
+            .alignment(align),
+        );
+    }
+
+    lines.push(Line::from(""));
 
     lines
 }

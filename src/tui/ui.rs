@@ -75,6 +75,11 @@ pub(crate) use messages::{
     render_assistant_message, render_swarm_message, render_system_message, render_tool_message,
 };
 use picker_ui::draw_picker_line;
+pub use pinned_ui::SidePanelDebugStats;
+pub(crate) use pinned_ui::{
+    clear_side_panel_render_caches, prewarm_focused_side_panel, reset_side_panel_debug_stats,
+    side_panel_debug_stats,
+};
 use pinned_ui::{
     collect_pinned_content_cached, draw_pinned_content_cached, draw_side_panel_markdown,
 };
@@ -1076,7 +1081,7 @@ pub fn get_grouped_changelog() -> Vec<ChangelogGroup> {
 /// Reads the last-seen commit hash from ~/.jcode/last_seen_changelog,
 /// filters the embedded changelog to only new entries, then saves the latest hash.
 /// Returns just the commit subjects (not the hashes).
-fn get_unseen_changelog_entries() -> &'static Vec<String> {
+pub(super) fn get_unseen_changelog_entries() -> &'static Vec<String> {
     static ENTRIES: OnceLock<Vec<String>> = OnceLock::new();
     ENTRIES.get_or_init(|| {
         let all_entries = parse_changelog();
@@ -2541,7 +2546,15 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
         capture.render_order.push("prepare_messages".to_string());
     }
     let prep_start = Instant::now();
-    let prepared = prepare::prepare_messages(app, chat_area.width, chat_area.height);
+    let prepared = prepare::prepare_messages(
+        app,
+        if app.chat_native_scrollbar() && chat_area.width > 1 {
+            chat_area.width.saturating_sub(1)
+        } else {
+            chat_area.width
+        },
+        chat_area.height,
+    );
     if let Some(ref mut capture) = debug_capture {
         capture.image_regions = prepared
             .image_regions
@@ -3039,270 +3052,6 @@ fn lerp_style(from: Style, to: Style, t: f32) -> Style {
     s
 }
 
-fn build_header_lines(app: &dyn TuiState, width: u16) -> Vec<Line<'static>> {
-    let mut lines: Vec<Line> = Vec::new();
-    let centered = app.centered_mode();
-    let align = if centered {
-        ratatui::layout::Alignment::Center
-    } else {
-        ratatui::layout::Alignment::Left
-    };
-
-    let model = app.provider_model();
-    let provider_name = app.provider_name();
-    let upstream = app.upstream_provider();
-    let auth = app.auth_status();
-    let provider_label = {
-        let trimmed = provider_name.trim();
-        if trimmed.is_empty() {
-            "unknown".to_string()
-        } else {
-            let name = trimmed.to_lowercase();
-            let auth_tag = match name.as_str() {
-                "anthropic" => {
-                    if std::env::var("ANTHROPIC_API_KEY").is_ok() {
-                        "api-key"
-                    } else if auth.anthropic.has_oauth {
-                        "oauth"
-                    } else {
-                        ""
-                    }
-                }
-                "openai" => {
-                    if auth.openai_has_api_key {
-                        "api-key"
-                    } else if auth.openai_has_oauth {
-                        "oauth"
-                    } else {
-                        ""
-                    }
-                }
-                "copilot" => {
-                    if auth.copilot_has_api_token {
-                        "oauth"
-                    } else {
-                        ""
-                    }
-                }
-                "openrouter" => "api-key",
-                _ => "",
-            };
-            if auth_tag.is_empty() {
-                name
-            } else {
-                format!("{}:{}", auth_tag, name)
-            }
-        }
-    };
-
-    // Line: provider + model + upstream provider if available + hint to switch
-    let w = width as usize;
-    let model_info = if let Some(ref provider) = upstream {
-        let full = format!(
-            "({}) {} via {} · /model to switch",
-            provider_label, model, provider
-        );
-        if full.chars().count() <= w {
-            full
-        } else {
-            let short = format!("({}) {} via {}", provider_label, model, provider);
-            if short.chars().count() <= w {
-                short
-            } else {
-                format!("({}) {}", provider_label, model)
-            }
-        }
-    } else {
-        let full = format!("({}) {} · /model to switch", provider_label, model);
-        if full.chars().count() <= w {
-            full
-        } else {
-            format!("({}) {}", provider_label, model)
-        }
-    };
-    lines.push(
-        Line::from(Span::styled(model_info, Style::default().fg(dim_color()))).alignment(align),
-    );
-
-    // Line: Auth status indicators (colored dots for each provider)
-    let auth_line = header::build_auth_status_line(&auth, w);
-    if !auth_line.spans.is_empty() {
-        lines.push(auth_line.alignment(align));
-    }
-
-    if let Some(goal_badge) = crate::goal::header_badge(
-        app.working_dir().as_deref().map(std::path::Path::new),
-        app.side_panel(),
-    ) {
-        lines.push(
-            Line::from(Span::styled(
-                goal_badge,
-                Style::default().fg(rgb(170, 200, 120)),
-            ))
-            .alignment(align),
-        );
-    }
-
-    // Line 3+: Recent changes in a box (from git log, embedded at build time)
-    // Each line is "hash:subject". We filter to only show commits since the user last saw updates.
-    let new_entries = get_unseen_changelog_entries();
-    let term_width = width as usize;
-    if !new_entries.is_empty() && term_width > 20 {
-        const MAX_LINES: usize = 8;
-        let available_width = term_width.saturating_sub(2);
-        let display_count = new_entries.len().min(MAX_LINES);
-        let has_more = new_entries.len() > MAX_LINES;
-
-        let mut content: Vec<Line> = Vec::new();
-        for entry in new_entries.iter().take(display_count) {
-            content.push(
-                Line::from(Span::styled(
-                    format!("• {}", entry),
-                    Style::default().fg(dim_color()),
-                ))
-                .alignment(align),
-            );
-        }
-        if has_more {
-            content.push(
-                Line::from(Span::styled(
-                    format!(
-                        "  …{} more · /changelog to see all",
-                        new_entries.len() - MAX_LINES
-                    ),
-                    Style::default().fg(dim_color()),
-                ))
-                .alignment(align),
-            );
-        }
-
-        let boxed = render_rounded_box(
-            "Updates",
-            content,
-            available_width,
-            Style::default().fg(dim_color()),
-        );
-        for line in boxed {
-            lines.push(line.alignment(align));
-        }
-    }
-
-    // Line 4: MCPs - show server names with tool counts, or (none)
-    let mcps = app.mcp_servers();
-    let mcp_text = if mcps.is_empty() {
-        "mcp: (none)".to_string()
-    } else {
-        let full_parts: Vec<String> = mcps
-            .iter()
-            .map(|(name, count)| {
-                if *count > 0 {
-                    format!("{} ({} tools)", name, count)
-                } else {
-                    format!("{} (...)", name)
-                }
-            })
-            .collect();
-        let full = format!("mcp: {}", full_parts.join(", "));
-        if full.chars().count() <= w {
-            full
-        } else {
-            // Try shorter: just names with counts
-            let short_parts: Vec<String> = mcps
-                .iter()
-                .map(|(name, count)| {
-                    if *count > 0 {
-                        format!("{}({})", name, count)
-                    } else {
-                        format!("{}(…)", name)
-                    }
-                })
-                .collect();
-            let short = format!("mcp: {}", short_parts.join(" "));
-            if short.chars().count() <= w {
-                short
-            } else {
-                // Just count
-                format!("mcp: {} servers", mcps.len())
-            }
-        }
-    };
-    lines.push(
-        Line::from(Span::styled(mcp_text, Style::default().fg(dim_color()))).alignment(align),
-    );
-
-    // Line 4: Skills (if any)
-    let skills = app.available_skills();
-    if !skills.is_empty() {
-        let full = format!(
-            "skills: {}",
-            skills
-                .iter()
-                .map(|s| format!("/{}", s))
-                .collect::<Vec<_>>()
-                .join(" ")
-        );
-        let skills_text = if full.chars().count() <= w {
-            full
-        } else {
-            format!("skills: {} loaded", skills.len())
-        };
-        lines.push(
-            Line::from(Span::styled(skills_text, Style::default().fg(dim_color())))
-                .alignment(align),
-        );
-    }
-
-    // Line 5: Server stats (if running as server with clients)
-    let client_count = app.connected_clients().unwrap_or(0);
-    let session_count = app.server_sessions().len();
-    if client_count > 0 || session_count > 1 {
-        let mut parts = Vec::new();
-        if client_count > 0 {
-            parts.push(format!(
-                "{} client{}",
-                client_count,
-                if client_count == 1 { "" } else { "s" }
-            ));
-        }
-        if session_count > 1 {
-            parts.push(format!("{} sessions", session_count));
-        }
-        lines.push(
-            Line::from(Span::styled(
-                format!("server: {}", parts.join(", ")),
-                Style::default().fg(dim_color()),
-            ))
-            .alignment(align),
-        );
-    }
-
-    // Context window info (at the end of header) - DISABLED
-    // let context_info = app.context_info();
-    // if context_info.total_chars > 0 {
-    //     let context_width = width.saturating_sub(4) as usize;
-    //     let context_limit = app
-    //         .context_limit()
-    //         .unwrap_or(crate::provider::DEFAULT_CONTEXT_LIMIT);
-    //     let context_lines = render_context_bar(&context_info, context_width, context_limit);
-    //     if !context_lines.is_empty() {
-    //         let boxed = render_rounded_box(
-    //             "Context",
-    //             context_lines,
-    //             width as usize,
-    //             Style::default().fg(dim_color()),
-    //         );
-    //         for line in boxed {
-    //             lines.push(line.alignment(align));
-    //         }
-    //     }
-    // }
-
-    // Blank line after header
-    lines.push(Line::from(""));
-
-    lines
-}
-
 fn capture_widget_placements(
     placements: &[info_widget::WidgetPlacement],
 ) -> Vec<WidgetPlacementCapture> {
@@ -3394,6 +3143,76 @@ fn rect_within_bounds(rect: Rect, bounds: Rect) -> bool {
     rect.x >= bounds.x && rect.y >= bounds.y && right <= bounds_right && bottom <= bounds_bottom
 }
 
+pub(crate) fn split_native_scrollbar_area(area: Rect, enabled: bool) -> (Rect, Option<Rect>) {
+    if !enabled || area.width <= 1 {
+        return (area, None);
+    }
+
+    let content = Rect {
+        width: area.width.saturating_sub(1),
+        ..area
+    };
+    let scrollbar = Rect {
+        x: area.x.saturating_add(area.width.saturating_sub(1)),
+        y: area.y,
+        width: 1,
+        height: area.height,
+    };
+    (content, Some(scrollbar))
+}
+
+pub(crate) fn render_native_scrollbar(
+    frame: &mut Frame,
+    area: Rect,
+    scroll: usize,
+    total_lines: usize,
+    visible_height: usize,
+    focused: bool,
+) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+
+    let track_height = area.height as usize;
+    let thumb_height = if visible_height == 0 || total_lines == 0 {
+        1
+    } else if total_lines <= visible_height {
+        track_height
+    } else {
+        ((visible_height * track_height).div_ceil(total_lines)).clamp(1, track_height)
+    };
+    let max_thumb_offset = track_height.saturating_sub(thumb_height);
+    let max_scroll = total_lines.saturating_sub(visible_height);
+    let thumb_offset = if max_scroll == 0 {
+        0
+    } else {
+        scroll.min(max_scroll) * max_thumb_offset / max_scroll
+    };
+
+    let track_color = if focused {
+        rgb(110, 125, 150)
+    } else {
+        rgb(70, 75, 85)
+    };
+    let thumb_color = if focused {
+        rgb(190, 210, 255)
+    } else {
+        rgb(145, 155, 180)
+    };
+
+    let mut lines = Vec::with_capacity(track_height);
+    for row in 0..track_height {
+        let (glyph, color) = if row >= thumb_offset && row < thumb_offset + thumb_height {
+            ("█", thumb_color)
+        } else {
+            ("│", track_color)
+        };
+        lines.push(Line::from(Span::styled(glyph, Style::default().fg(color))));
+    }
+
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3405,6 +3224,20 @@ mod tests {
         LOCK.get_or_init(|| Mutex::new(()))
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    #[test]
+    fn split_native_scrollbar_area_reserves_one_column_when_enabled() {
+        let (content, scrollbar) = split_native_scrollbar_area(Rect::new(3, 4, 20, 8), true);
+        assert_eq!(content, Rect::new(3, 4, 19, 8));
+        assert_eq!(scrollbar, Some(Rect::new(22, 4, 1, 8)));
+    }
+
+    #[test]
+    fn split_native_scrollbar_area_skips_tiny_regions() {
+        let (content, scrollbar) = split_native_scrollbar_area(Rect::new(1, 2, 1, 5), true);
+        assert_eq!(content, Rect::new(1, 2, 1, 5));
+        assert!(scrollbar.is_none());
     }
 
     #[derive(Clone, Default)]
@@ -3683,6 +3516,12 @@ mod tests {
         }
         fn cache_ttl_status(&self) -> Option<crate::tui::CacheTtlInfo> {
             None
+        }
+        fn chat_native_scrollbar(&self) -> bool {
+            false
+        }
+        fn side_panel_native_scrollbar(&self) -> bool {
+            false
         }
     }
 
