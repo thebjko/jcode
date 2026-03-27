@@ -368,10 +368,10 @@ Use this tool to send commands to the debug socket for visual debugging, spawnin
 ## Workflow
 
 When you make code changes to jcode:
-1. If you want the new build to become the active launcher/current build for future `jcode` and Alt+; sessions, prefer the built-in self-dev publish flow: run `jcode self-dev --build` outside the session, or build in-session and then use `selfdev reload`.
-2. For build-only iteration, use the fastest practical local build path. Prefer the repo's standard fast dev build path when one exists (for example `scripts/dev_cargo.sh build --release --bin jcode` in this repo, which enables sccache/fast linker); otherwise use plain `cargo build --release --bin jcode`.
-3. Avoid slow distribution/signoff builds like `release-lto` unless you specifically need to validate a production artifact.
-4. Use `selfdev` with action `reload` to restart with the new binary after building in-session.
+1. By default, prefer the normal build-and-activate flow: run `jcode self-dev --build` so the new build becomes the active launcher/current build for future `jcode` and Alt+; sessions.
+2. If you are already inside a self-dev session and need to rebuild the binary you are running, use the fastest practical local build path for in-session iteration. Prefer the repo's standard fast dev build path when one exists (for example `scripts/dev_cargo.sh build --release --bin jcode` in this repo, which enables sccache/fast linker); otherwise use plain `cargo build --release --bin jcode`, then use `selfdev reload`.
+3. If the local machine does not have enough resources and a remote build host is explicitly configured (for example via `JCODE_REMOTE_HOST` or `scripts/remote_build.sh --host HOST`), you may use the repo's remote build path instead of local cargo builds.
+4. Avoid slow distribution/signoff builds like `release-lto` unless you specifically need to validate a production artifact.
 5. The session continues automatically after restart — you will receive a continuation message
 6. **After reload, immediately continue your work** — do not stop and wait for user input
 
@@ -416,10 +416,10 @@ Debug socket path: {}
 ## Workflow
 
 When you make code changes to jcode:
-1. If you want the new build to become the active launcher/current build for future `jcode` and Alt+; sessions, prefer the built-in self-dev publish flow: run `jcode self-dev --build` outside the session, or build in-session and then use `selfdev reload`.
-2. For build-only iteration, use the fastest practical local build path. Prefer the repo's standard fast dev build path when one exists (for example `scripts/dev_cargo.sh build --release --bin jcode` in this repo, which enables sccache/fast linker); otherwise use plain `cargo build --release --bin jcode`.
-3. Avoid slow distribution/signoff builds like `release-lto` unless you specifically need to validate a production artifact.
-4. Use `selfdev` with action `reload` to restart with the new binary after building in-session.
+1. By default, prefer the normal build-and-activate flow: run `jcode self-dev --build` so the new build becomes the active launcher/current build for future `jcode` and Alt+; sessions.
+2. If you are already inside a self-dev session and need to rebuild the binary you are running, use the fastest practical local build path for in-session iteration. Prefer the repo's standard fast dev build path when one exists (for example `scripts/dev_cargo.sh build --release --bin jcode` in this repo, which enables sccache/fast linker); otherwise use plain `cargo build --release --bin jcode`, then use `selfdev reload`.
+3. If the local machine does not have enough resources and a remote build host is explicitly configured (for example via `JCODE_REMOTE_HOST` or `scripts/remote_build.sh --host HOST`), you may use the repo's remote build path instead of local cargo builds.
+4. Avoid slow distribution/signoff builds like `release-lto` unless you specifically need to validate a production artifact.
 5. The session continues automatically after restart — you will receive a continuation message
 6. **After reload, immediately continue your work** — do not stop and wait for user input
 
@@ -667,7 +667,8 @@ mod tests {
         let prompt = build_system_prompt_with_selfdev(None, &[], true);
         assert!(prompt.contains("jcode self-dev --build"));
         assert!(prompt.contains("selfdev reload"));
-        assert!(prompt.contains("For build-only iteration"));
+        assert!(prompt.contains("By default, prefer the normal build-and-activate flow"));
         assert!(prompt.contains("scripts/dev_cargo.sh build --release --bin jcode"));
+        assert!(prompt.contains("JCODE_REMOTE_HOST"));
     }
 }
