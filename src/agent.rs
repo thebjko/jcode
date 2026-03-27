@@ -1,5 +1,6 @@
 #![allow(unused_assignments)]
 
+mod compaction_support;
 mod interrupts;
 mod prompt_support;
 mod stream_support;
@@ -162,76 +163,6 @@ impl Agent {
             .collect()
     }
 
-    fn is_context_limit_error(error: &str) -> bool {
-        let lower = error.to_lowercase();
-        lower.contains("context length")
-            || lower.contains("context window")
-            || lower.contains("maximum context")
-            || lower.contains("max context")
-            || lower.contains("token limit")
-            || lower.contains("too many tokens")
-            || lower.contains("prompt is too long")
-            || lower.contains("input is too long")
-            || lower.contains("request too large")
-            || lower.contains("length limit")
-            || lower.contains("maximum tokens")
-            || (lower.contains("exceeded") && lower.contains("tokens"))
-    }
-
-    /// Best-effort emergency recovery after a context-limit error.
-    ///
-    /// Performs a synchronous hard compaction and resets provider session state,
-    /// allowing the caller to retry the same turn immediately.
-    fn try_auto_compact_after_context_limit(&mut self, error: &str) -> bool {
-        if !Self::is_context_limit_error(error) {
-            return false;
-        }
-        if !self.provider.supports_compaction() {
-            return false;
-        }
-
-        let context_limit = self.provider.context_window() as u64;
-        let all_messages = self.session.messages_for_provider();
-        let compaction = self.registry.compaction();
-
-        let (dropped, usage_pct) = match compaction.try_write() {
-            Ok(mut manager) => {
-                // Force a conservative usage reading so hard-compaction is attempted
-                // even when heuristic estimation undercounts tool/system overhead.
-                manager.update_observed_input_tokens(context_limit);
-                let usage_pct = manager.context_usage_with(&all_messages) * 100.0;
-                match manager.hard_compact_with(&all_messages) {
-                    Ok(dropped) => {
-                        self.sync_session_compaction_state_from_manager(&manager);
-                        (dropped, usage_pct)
-                    }
-                    Err(reason) => {
-                        logging::warn(&format!(
-                            "Context-limit auto-recovery failed: hard compact failed ({})",
-                            reason
-                        ));
-                        return false;
-                    }
-                }
-            }
-            Err(_) => {
-                logging::warn("Context-limit auto-recovery skipped: compaction manager lock busy");
-                return false;
-            }
-        };
-
-        self.cache_tracker.reset();
-        self.locked_tools = None;
-        self.provider_session_id = None;
-        self.session.provider_session_id = None;
-
-        logging::warn(&format!(
-            "Context limit exceeded; auto-compacted and retrying (dropped {} messages, usage was {:.1}%)",
-            dropped, usage_pct
-        ));
-
-        true
-    }
 
     pub fn new(provider: Arc<dyn Provider>, registry: Registry) -> Self {
         let mut agent = Self::build_base(provider, registry, Session::create(None, None), None);
@@ -457,74 +388,6 @@ impl Agent {
         (all_messages, None)
     }
 
-    fn effective_context_tokens_from_usage(
-        &self,
-        input_tokens: u64,
-        cache_read_input_tokens: Option<u64>,
-        cache_creation_input_tokens: Option<u64>,
-    ) -> u64 {
-        if input_tokens == 0 {
-            return 0;
-        }
-        let cache_read = cache_read_input_tokens.unwrap_or(0);
-        let cache_creation = cache_creation_input_tokens.unwrap_or(0);
-        let provider_name = self.provider.name().to_lowercase();
-
-        let split_cache_accounting = provider_name.contains("anthropic")
-            || provider_name.contains("claude")
-            || cache_creation > 0
-            || cache_read > input_tokens;
-
-        if split_cache_accounting {
-            input_tokens
-                .saturating_add(cache_read)
-                .saturating_add(cache_creation)
-        } else {
-            input_tokens
-        }
-    }
-
-    fn update_compaction_usage_from_stream(
-        &mut self,
-        input_tokens: u64,
-        cache_read_input_tokens: Option<u64>,
-        cache_creation_input_tokens: Option<u64>,
-    ) {
-        if !self.provider.uses_jcode_compaction() || input_tokens == 0 {
-            return;
-        }
-        let observed = self.effective_context_tokens_from_usage(
-            input_tokens,
-            cache_read_input_tokens,
-            cache_creation_input_tokens,
-        );
-        let compaction = self.registry.compaction();
-        if let Ok(mut manager) = compaction.try_write() {
-            manager.update_observed_input_tokens(observed);
-            manager.push_token_snapshot(observed);
-        };
-    }
-
-    /// Push an embedding snapshot for the semantic compaction mode.
-    /// Called after each assistant turn with a short text snippet.
-    /// No-op if the embedding model is unavailable or mode is not semantic.
-    fn push_embedding_snapshot_if_semantic(&mut self, text: &str) {
-        use crate::config::CompactionMode;
-        let is_semantic = {
-            let compaction = self.registry.compaction();
-            compaction
-                .try_read()
-                .map(|m| m.mode() == CompactionMode::Semantic)
-                .unwrap_or(false)
-        };
-        if !is_semantic {
-            return;
-        }
-        let compaction = self.registry.compaction();
-        if let Ok(mut manager) = compaction.try_write() {
-            manager.push_embedding_snapshot(text);
-        };
-    }
 
     fn repair_missing_tool_outputs(&mut self) -> usize {
         let mut known_results = HashSet::new();
