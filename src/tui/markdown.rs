@@ -255,6 +255,8 @@ pub struct IncrementalMarkdownRenderer {
     last_checkpoint: usize,
     /// Number of lines at last checkpoint
     lines_at_checkpoint: usize,
+    /// Whether a blank separator should be preserved at the checkpoint boundary
+    checkpoint_needs_separator: bool,
     /// Width constraint
     max_width: Option<usize>,
 }
@@ -266,6 +268,7 @@ impl IncrementalMarkdownRenderer {
             rendered_text: String::new(),
             last_checkpoint: 0,
             lines_at_checkpoint: 0,
+            checkpoint_needs_separator: false,
             max_width,
         }
     }
@@ -286,32 +289,12 @@ impl IncrementalMarkdownRenderer {
             return self.rendered_lines.clone();
         }
 
-        // Fast path: text was only appended
-        if full_text.starts_with(&self.rendered_text) {
-            // Find a safe re-render point
-            // Safe points are after: double newlines (paragraph end), code block end
-            let rerender_from = self.find_safe_rerender_point();
-
-            if rerender_from >= self.last_checkpoint {
-                // Re-render from the safe point
-                let text_to_render = &full_text[rerender_from..];
-                let new_lines = render_markdown_with_width(text_to_render, self.max_width);
-
-                // Keep lines up to checkpoint, append new lines
-                self.rendered_lines.truncate(self.lines_at_checkpoint);
-                self.rendered_lines.extend(new_lines);
-
-                // Update checkpoint only at markdown-safe boundaries.
-                // This prevents checkpointing inside fenced code blocks during streaming.
-                self.refresh_checkpoint(full_text, false);
-
-                self.rendered_text = full_text.to_string();
-                return self.rendered_lines.clone();
-            }
-        }
-
-        // Slow path: text changed in middle or was truncated
-        // Full re-render required
+        // Full re-render required.
+        //
+        // We previously tried to splice newly-appended markdown from a saved checkpoint,
+        // but markdown block separators and list continuity make that unsafe without
+        // carrying richer parser state across updates. In practice this caused transient
+        // streaming artifacts like duplicated/misaligned content. Favor correctness here.
         self.rendered_lines = render_markdown_with_width(full_text, self.max_width);
         self.rendered_text = full_text.to_string();
 
@@ -329,10 +312,17 @@ impl IncrementalMarkdownRenderer {
 
     /// Find the last complete block in text
     fn find_last_complete_block(&self, text: &str) -> Option<usize> {
+        self.find_last_complete_block_checkpoint(text)
+            .map(|checkpoint| checkpoint.offset)
+    }
+
+    fn find_last_complete_block_checkpoint(&self, text: &str) -> Option<CompleteBlockCheckpoint> {
         let mut checkpoint = None;
         let mut line_start = 0usize;
         let mut fence_state: Option<(char, usize)> = None;
         let mut display_math_open = false;
+        let mut last_nonblank_kind: Option<MarkdownBlockKind> = None;
+        let spacing_mode = effective_markdown_spacing_mode();
 
         while line_start <= text.len() {
             let relative_end = text[line_start..].find('\n');
@@ -351,7 +341,14 @@ impl IncrementalMarkdownRenderer {
                 Some((fence_char, fence_len)) => {
                     if is_closing_fence(line, fence_char, fence_len) {
                         fence_state = None;
-                        checkpoint = Some(line_end_including_newline);
+                        last_nonblank_kind = Some(MarkdownBlockKind::CodeBlock);
+                        checkpoint = Some(CompleteBlockCheckpoint {
+                            offset: line_end_including_newline,
+                            needs_separator: spacing_separates_after(
+                                MarkdownBlockKind::CodeBlock,
+                                spacing_mode,
+                            ),
+                        });
                     }
                 }
                 None => {
@@ -359,7 +356,14 @@ impl IncrementalMarkdownRenderer {
                         let dd_count = count_unescaped_double_dollar(line);
                         if dd_count % 2 == 1 {
                             display_math_open = false;
-                            checkpoint = Some(line_end_including_newline);
+                            last_nonblank_kind = Some(MarkdownBlockKind::DisplayMath);
+                            checkpoint = Some(CompleteBlockCheckpoint {
+                                offset: line_end_including_newline,
+                                needs_separator: spacing_separates_after(
+                                    MarkdownBlockKind::DisplayMath,
+                                    spacing_mode,
+                                ),
+                            });
                         }
                     } else if let Some((fence_char, fence_len)) = parse_opening_fence(line) {
                         fence_state = Some((fence_char, fence_len));
@@ -369,12 +373,33 @@ impl IncrementalMarkdownRenderer {
                             if dd_count % 2 == 1 {
                                 display_math_open = true;
                             } else {
-                                checkpoint = Some(line_end_including_newline);
+                                last_nonblank_kind = Some(MarkdownBlockKind::DisplayMath);
+                                checkpoint = Some(CompleteBlockCheckpoint {
+                                    offset: line_end_including_newline,
+                                    needs_separator: spacing_separates_after(
+                                        MarkdownBlockKind::DisplayMath,
+                                        spacing_mode,
+                                    ),
+                                });
                             }
                         } else if line_ends_with_newline && is_heading_line(line.trim_start()) {
-                            checkpoint = Some(line_end_including_newline);
+                            last_nonblank_kind = Some(MarkdownBlockKind::Heading);
+                            checkpoint = Some(CompleteBlockCheckpoint {
+                                offset: line_end_including_newline,
+                                needs_separator: spacing_separates_after(
+                                    MarkdownBlockKind::Heading,
+                                    spacing_mode,
+                                ),
+                            });
                         } else if line.trim().is_empty() {
-                            checkpoint = Some(line_end_including_newline);
+                            checkpoint = Some(CompleteBlockCheckpoint {
+                                offset: line_end_including_newline,
+                                needs_separator: last_nonblank_kind
+                                    .map(|kind| spacing_separates_after(kind, spacing_mode))
+                                    .unwrap_or(false),
+                            });
+                        } else {
+                            last_nonblank_kind = Some(infer_markdown_line_kind(line));
                         }
                     }
                 }
@@ -393,12 +418,19 @@ impl IncrementalMarkdownRenderer {
     ///
     /// `force = true` recomputes prefix line counts even when checkpoint byte position is unchanged.
     fn refresh_checkpoint(&mut self, full_text: &str, force: bool) {
-        let new_checkpoint = self.find_last_complete_block(full_text).unwrap_or(0);
-        if !force && new_checkpoint == self.last_checkpoint {
+        let checkpoint = self.find_last_complete_block_checkpoint(full_text);
+        let new_checkpoint = checkpoint.map(|cp| cp.offset).unwrap_or(0);
+        let new_checkpoint_needs_separator =
+            checkpoint.map(|cp| cp.needs_separator).unwrap_or(false);
+        if !force
+            && new_checkpoint == self.last_checkpoint
+            && new_checkpoint_needs_separator == self.checkpoint_needs_separator
+        {
             return;
         }
 
         self.last_checkpoint = new_checkpoint;
+        self.checkpoint_needs_separator = new_checkpoint_needs_separator;
         if new_checkpoint == 0 {
             self.lines_at_checkpoint = 0;
         } else {
@@ -414,6 +446,7 @@ impl IncrementalMarkdownRenderer {
         self.rendered_text.clear();
         self.last_checkpoint = 0;
         self.lines_at_checkpoint = 0;
+        self.checkpoint_needs_separator = false;
     }
 
     /// Update width constraint, resets if changed
@@ -425,9 +458,74 @@ impl IncrementalMarkdownRenderer {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CompleteBlockCheckpoint {
+    offset: usize,
+    needs_separator: bool,
+}
+
 fn is_heading_line(line: &str) -> bool {
     let hashes = line.chars().take_while(|c| *c == '#').count();
     hashes > 0 && hashes <= 6 && line.chars().nth(hashes) == Some(' ')
+}
+
+fn is_thematic_break_line(line: &str) -> bool {
+    let trimmed = line.trim();
+    let mut marker: Option<char> = None;
+    let mut count = 0usize;
+
+    for ch in trimmed.chars() {
+        if ch == ' ' || ch == '\t' {
+            continue;
+        }
+        match marker {
+            None if matches!(ch, '-' | '*' | '_') => {
+                marker = Some(ch);
+                count = 1;
+            }
+            Some(existing) if ch == existing => count += 1,
+            _ => return false,
+        }
+    }
+
+    count >= 3
+}
+
+fn looks_like_ordered_list_item(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    let digit_count = trimmed.chars().take_while(|c| c.is_ascii_digit()).count();
+    digit_count > 0
+        && matches!(trimmed.chars().nth(digit_count), Some('.' | ')'))
+        && matches!(trimmed.chars().nth(digit_count + 1), Some(' ' | '\t'))
+}
+
+fn infer_markdown_line_kind(line: &str) -> MarkdownBlockKind {
+    let trimmed = line.trim_start();
+    if is_heading_line(trimmed) {
+        MarkdownBlockKind::Heading
+    } else if is_thematic_break_line(trimmed) {
+        MarkdownBlockKind::Rule
+    } else if trimmed.starts_with('>') {
+        MarkdownBlockKind::BlockQuote
+    } else if trimmed.starts_with("- ")
+        || trimmed.starts_with("* ")
+        || trimmed.starts_with("+ ")
+        || looks_like_ordered_list_item(trimmed)
+    {
+        MarkdownBlockKind::List
+    } else if trimmed.starts_with('<') {
+        MarkdownBlockKind::HtmlBlock
+    } else {
+        MarkdownBlockKind::Paragraph
+    }
+}
+
+fn rendered_rule_width(max_width: Option<usize>) -> usize {
+    match max_width {
+        Some(width) if center_code_blocks() => width.min(RULE_LEN),
+        Some(width) => width,
+        None => RULE_LEN,
+    }
 }
 
 // Colors matching ui.rs palette
@@ -1152,8 +1250,8 @@ pub fn render_markdown_with_width(text: &str, max_width: Option<usize>) -> Vec<L
                         in_footnote_definition,
                     ),
                 );
-                in_definition_list = false;
                 exit_centered_structured_block(&mut centered_blocks, lines.len());
+                in_definition_list = false;
                 if blockquote_depth == 0 && list_stack.is_empty() && !in_footnote_definition {
                     push_block_separator(
                         &mut lines,
@@ -1464,7 +1562,7 @@ pub fn render_markdown_with_width(text: &str, max_width: Option<usize>) -> Vec<L
                     ),
                 );
                 let block_start = lines.len();
-                let width = max_width.unwrap_or(RULE_LEN);
+                let width = rendered_rule_width(max_width);
                 let rule = Span::styled("─".repeat(width), Style::default().fg(md_dim_color()));
                 lines.push(with_blockquote_prefix(
                     Line::from(rule).left_aligned(),
@@ -2394,8 +2492,8 @@ pub fn render_markdown_lazy(
                         in_footnote_definition,
                     ),
                 );
-                in_definition_list = false;
                 exit_centered_structured_block(&mut centered_blocks, lines.len());
+                in_definition_list = false;
                 if blockquote_depth == 0 && list_stack.is_empty() && !in_footnote_definition {
                     push_block_separator(
                         &mut lines,
@@ -2710,7 +2808,7 @@ pub fn render_markdown_lazy(
                     ),
                 );
                 let block_start = lines.len();
-                let width = max_width.unwrap_or(RULE_LEN);
+                let width = rendered_rule_width(max_width);
                 let rule = Span::styled("─".repeat(width), Style::default().fg(md_dim_color()));
                 lines.push(with_blockquote_prefix(
                     Line::from(rule).left_aligned(),
@@ -3774,6 +3872,60 @@ mod tests {
     }
 
     #[test]
+    fn test_centered_mode_centers_rules_as_blocks() {
+        let saved = center_code_blocks();
+        set_center_code_blocks(true);
+        let lines = render_markdown_with_width("before\n\n---\n\nafter", Some(50));
+        set_center_code_blocks(saved);
+
+        let rule_line = lines
+            .iter()
+            .find(|line| line_to_string(line).contains("────"))
+            .expect("rule line");
+        let text = line_to_string(rule_line);
+        assert!(
+            leading_spaces(&text) > 0,
+            "rule should be centered: {text:?}"
+        );
+        assert!(
+            UnicodeWidthStr::width(text.trim()) <= RULE_LEN,
+            "rule should not span full width: {text:?}"
+        );
+    }
+
+    #[test]
+    fn test_centered_mode_keeps_lists_left_aligned() {
+        let saved = center_code_blocks();
+        set_center_code_blocks(true);
+        let lines = render_markdown_with_width("- one\n- two", Some(50));
+        set_center_code_blocks(saved);
+
+        let rendered: Vec<String> = lines
+            .iter()
+            .map(line_to_string)
+            .filter(|line| !line.is_empty())
+            .collect();
+
+        assert_eq!(rendered, vec!["• one", "• two"]);
+    }
+
+    #[test]
+    fn test_centered_mode_keeps_blockquotes_left_aligned() {
+        let saved = center_code_blocks();
+        set_center_code_blocks(true);
+        let lines = render_markdown_with_width("> quoted\n> second line", Some(50));
+        set_center_code_blocks(saved);
+
+        let rendered: Vec<String> = lines
+            .iter()
+            .map(line_to_string)
+            .filter(|line| !line.is_empty())
+            .collect();
+
+        assert_eq!(rendered, vec!["│ quoted", "│ second line"]);
+    }
+
+    #[test]
     fn test_compact_spacing_keeps_heading_tight_but_separates_list_from_next_heading() {
         let md = "# Intro\nBody\n\n- one\n- two\n\n# Next\nBody";
         let rendered: Vec<String> = render_markdown_with_mode(md, MarkdownSpacingMode::Compact)
@@ -3963,6 +4115,37 @@ mod tests {
             "Expected unclosed bracket line to remain visible: {}",
             rendered
         );
+    }
+
+    #[test]
+    fn test_incremental_renderer_matches_full_render_for_prefixes() {
+        let sample = concat!(
+            "## Plan\n\n",
+            "First paragraph with **bold** text.\n\n",
+            "---\n\n",
+            "- item one\n",
+            "- item two\n\n",
+            "```rust\n",
+            "fn main() {\n",
+            "    println!(\"hi\");\n",
+            "}\n",
+            "```\n\n",
+            "Trailing <span>html</span> text.\n",
+        );
+
+        let mut renderer = IncrementalMarkdownRenderer::new(Some(60));
+        for end in 0..=sample.len() {
+            if !sample.is_char_boundary(end) {
+                continue;
+            }
+            let prefix = &sample[..end];
+            let incremental = lines_to_string(&renderer.update(prefix));
+            let full = lines_to_string(&render_markdown_with_width(prefix, Some(60)));
+            assert_eq!(
+                incremental, full,
+                "incremental render diverged at prefix {end}:\n--- prefix ---\n{prefix:?}\n--- incremental ---\n{incremental}\n--- full ---\n{full}"
+            );
+        }
     }
 
     #[test]
