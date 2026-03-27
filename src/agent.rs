@@ -2,8 +2,13 @@
 
 mod interrupts;
 mod prompt_support;
+mod stream_support;
 mod utils;
 
+use self::stream_support::{
+    send_stream_keepalive_broadcast, send_stream_keepalive_mpsc, stream_keepalive_ticker,
+};
+use self::utils::{git_state_for_dir, trace_enabled};
 use crate::build;
 use crate::bus::{Bus, BusEvent, SubagentStatus, ToolEvent, ToolStatus};
 use crate::cache_tracker::CacheTracker;
@@ -15,22 +20,18 @@ use crate::message::{
 };
 use crate::protocol::{HistoryMessage, ServerEvent};
 use crate::provider::{NativeToolResult, Provider};
-use crate::session::{
-    EnvSnapshot, Session, SessionStatus, StoredDisplayRole, StoredMessage,
-};
+use crate::session::{EnvSnapshot, Session, SessionStatus, StoredDisplayRole, StoredMessage};
 use crate::skill::SkillRegistry;
 use crate::tool::{Registry, ToolContext, ToolExecutionMode};
 use anyhow::Result;
 use chrono::Utc;
 use futures::StreamExt;
-use self::utils::{git_state_for_dir, trace_enabled};
 use std::collections::HashSet;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, mpsc};
-use tokio::time::{self, MissedTickBehavior};
 
 pub use interrupts::{
     BackgroundToolSignal, GracefulShutdownSignal, InterruptSignal, SoftInterruptMessage,
@@ -58,33 +59,6 @@ const JCODE_NATIVE_TOOLS: &[&str] = &["selfdev", "communicate"];
 static RECOVERED_TEXT_WRAPPED_TOOL_CALLS: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 const STREAM_KEEPALIVE_PONG_ID: u64 = 0;
-
-fn stream_keepalive_interval() -> Duration {
-    if cfg!(test) {
-        Duration::from_millis(50)
-    } else {
-        Duration::from_secs(30)
-    }
-}
-
-fn stream_keepalive_ticker() -> time::Interval {
-    let interval = stream_keepalive_interval();
-    let mut ticker = time::interval_at(time::Instant::now() + interval, interval);
-    ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
-    ticker
-}
-
-fn send_stream_keepalive_broadcast(event_tx: &broadcast::Sender<ServerEvent>) {
-    let _ = event_tx.send(ServerEvent::Pong {
-        id: STREAM_KEEPALIVE_PONG_ID,
-    });
-}
-
-fn send_stream_keepalive_mpsc(event_tx: &mpsc::UnboundedSender<ServerEvent>) {
-    let _ = event_tx.send(ServerEvent::Pong {
-        id: STREAM_KEEPALIVE_PONG_ID,
-    });
-}
 
 fn tool_output_to_content_blocks(
     tool_use_id: String,
@@ -4246,7 +4220,6 @@ fn print_tool_summary(tool: &ToolCall) {
         _ => {}
     }
 }
-
 
 #[cfg(test)]
 mod tests {
