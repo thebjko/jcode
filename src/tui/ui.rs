@@ -230,6 +230,10 @@ fn clear_area(frame: &mut Frame, area: Rect) {
     super::color_support::clear_buf(area, frame.buffer_mut());
 }
 
+pub(crate) fn left_aligned_content_inset(width: u16, centered: bool) -> u16 {
+    if centered || width <= 1 { 0 } else { 1 }
+}
+
 const RIGHT_RAIL_HEADER_HEIGHT: u16 = 1;
 
 fn right_rail_border_style(focused: bool, focus_color: Color) -> Style {
@@ -2484,14 +2488,18 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
             crate::config::DiagramPanePosition::Side => {
                 const MIN_DIAGRAM_WIDTH: u16 = 24;
                 const MIN_CHAT_WIDTH: u16 = 20;
+                const AUTO_DIAGRAM_WIDTH_CAP_PERCENT: u32 = 50;
                 let max_diagram = area.width.saturating_sub(MIN_CHAT_WIDTH);
                 if max_diagram >= MIN_DIAGRAM_WIDTH {
                     let ratio = app.diagram_pane_ratio().clamp(25, 100) as u32;
                     let ratio_target = ((area.width as u32 * ratio) / 100) as u16;
+                    let auto_cap =
+                        ((area.width as u32 * AUTO_DIAGRAM_WIDTH_CAP_PERCENT) / 100) as u16;
                     let needed =
                         estimate_pinned_diagram_pane_width(diagram, area.height, MIN_DIAGRAM_WIDTH);
+                    let auto_target = needed.min(max_diagram).min(auto_cap.max(MIN_DIAGRAM_WIDTH));
                     let diagram_width = ratio_target
-                        .max(needed.min(max_diagram))
+                        .max(auto_target)
                         .max(MIN_DIAGRAM_WIDTH)
                         .min(max_diagram);
                     let chat_width = area.width.saturating_sub(diagram_width);
@@ -2660,7 +2668,12 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
         capture.render_order.push("prepare_messages".to_string());
     }
     let prep_start = Instant::now();
-    let prepared_full_width = prepare::prepare_messages(app, chat_area.width, chat_area.height);
+    let chat_left_inset = left_aligned_content_inset(chat_area.width, app.centered_mode());
+    let prepared_full_width = prepare::prepare_messages(
+        app,
+        chat_area.width.saturating_sub(chat_left_inset),
+        chat_area.height,
+    );
     let show_donut = crate::config::config().display.idle_animation
         && app.display_messages().is_empty()
         && !app.is_processing()
@@ -2682,7 +2695,14 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
         && chat_area.width > 1
         && initial_content_height + fixed_height > available_height;
     let prepared = if chat_scrollbar_visible {
-        prepare::prepare_messages(app, chat_area.width.saturating_sub(1), chat_area.height)
+        prepare::prepare_messages(
+            app,
+            chat_area
+                .width
+                .saturating_sub(chat_left_inset)
+                .saturating_sub(1),
+            chat_area.height,
+        )
     } else {
         prepared_full_width
     };
@@ -3452,6 +3472,13 @@ mod tests {
         let (content, scrollbar) = split_native_scrollbar_area(Rect::new(1, 2, 1, 5), true);
         assert_eq!(content, Rect::new(1, 2, 1, 5));
         assert!(scrollbar.is_none());
+    }
+
+    #[test]
+    fn left_aligned_content_inset_only_applies_when_not_centered() {
+        assert_eq!(left_aligned_content_inset(40, true), 0);
+        assert_eq!(left_aligned_content_inset(40, false), 1);
+        assert_eq!(left_aligned_content_inset(1, false), 0);
     }
 
     #[test]
@@ -5264,6 +5291,74 @@ mod tests {
             2,
             "trimmed message should not add blank lines"
         );
+    }
+
+    #[test]
+    fn test_render_swarm_message_uses_task_icon_for_assignments() {
+        crate::tui::markdown::set_center_code_blocks(false);
+        let msg = DisplayMessage::swarm("Task · sheep", "Implement compaction asymptotic fixes");
+
+        let lines = render_swarm_message(&msg, 80, crate::config::DiffDisplayMode::Off);
+        let rendered: Vec<String> = lines.iter().map(extract_line_text).collect();
+
+        assert_eq!(rendered[0], "│ ⚑ Task · sheep");
+        assert_eq!(rendered[1], "│ Implement compaction asymptotic fixes");
+    }
+
+    #[test]
+    fn test_render_swarm_message_centered_mode_left_aligns_with_shared_padding() {
+        let saved = crate::tui::markdown::center_code_blocks();
+        crate::tui::markdown::set_center_code_blocks(true);
+
+        let msg = DisplayMessage::swarm("Plan · sheep", "4 items · v1");
+        let lines = render_swarm_message(&msg, 80, crate::config::DiffDisplayMode::Off);
+        let rendered: Vec<String> = lines.iter().map(extract_line_text).collect();
+
+        assert_eq!(rendered.len(), 2, "expected compact header + body layout");
+
+        let header_pad = rendered[0].chars().take_while(|c| *c == ' ').count();
+        let body_pad = rendered[1].chars().take_while(|c| *c == ' ').count();
+        assert!(
+            header_pad > 0,
+            "centered swarm header should be padded: {rendered:?}"
+        );
+        assert_eq!(
+            header_pad, body_pad,
+            "centered swarm block should share one left pad"
+        );
+        assert_eq!(rendered[0].trim_start(), "│ ☰ Plan · sheep");
+        assert_eq!(rendered[1].trim_start(), "│ 4 items · v1");
+        for line in &lines {
+            assert_eq!(
+                line.alignment,
+                Some(ratatui::layout::Alignment::Left),
+                "centered swarm lines should be left-aligned after padding"
+            );
+        }
+
+        crate::tui::markdown::set_center_code_blocks(saved);
+    }
+
+    #[test]
+    fn test_render_swarm_message_centered_mode_keeps_task_icon_and_padding() {
+        let saved = crate::tui::markdown::center_code_blocks();
+        crate::tui::markdown::set_center_code_blocks(true);
+
+        let msg = DisplayMessage::swarm("Task · sheep", "Implement compaction asymptotic fixes");
+        let lines = render_swarm_message(&msg, 80, crate::config::DiffDisplayMode::Off);
+        let rendered: Vec<String> = lines.iter().map(extract_line_text).collect();
+
+        assert!(
+            rendered[0].starts_with(' '),
+            "centered task header should be padded: {rendered:?}"
+        );
+        assert_eq!(rendered[0].trim_start(), "│ ⚑ Task · sheep");
+        assert_eq!(
+            rendered[1].trim_start(),
+            "│ Implement compaction asymptotic fixes"
+        );
+
+        crate::tui::markdown::set_center_code_blocks(saved);
     }
 
     #[test]

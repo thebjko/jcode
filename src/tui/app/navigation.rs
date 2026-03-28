@@ -2,6 +2,17 @@ use super::*;
 use ratatui::layout::Rect;
 
 impl App {
+    fn adaptive_scroll_amount_from_gap(
+        gap: Option<std::time::Duration>,
+        slow_amount: usize,
+    ) -> usize {
+        match gap.map(|gap| gap.as_millis()) {
+            Some(ms) if ms < 24 => 1,
+            Some(ms) if ms < 80 => slow_amount.min(2).max(1),
+            _ => slow_amount.max(1),
+        }
+    }
+
     fn current_visible_diagram_hash(&self) -> Option<u64> {
         if self.diagram_mode != crate::config::DiagramDisplayMode::Pinned
             || !self.diagram_pane_enabled
@@ -38,6 +49,8 @@ impl App {
         if self.side_panel.focused_page().is_some() {
             self.diff_pane_scroll_x = 0;
         }
+        crate::tui::mermaid::clear_image_state();
+        crate::tui::clear_side_panel_render_caches();
         self.last_visible_diagram_hash = self.current_visible_diagram_hash();
     }
 
@@ -90,6 +103,7 @@ impl App {
             self.diagram_index = 0;
             self.diagram_scroll_x = 0;
             self.diagram_scroll_y = 0;
+            self.last_visible_diagram_hash = None;
             return;
         }
         if !self.diagram_pane_enabled {
@@ -102,6 +116,7 @@ impl App {
             self.diagram_index = 0;
             self.diagram_scroll_x = 0;
             self.diagram_scroll_y = 0;
+            self.last_visible_diagram_hash = None;
             return;
         }
 
@@ -110,6 +125,8 @@ impl App {
             self.diagram_scroll_x = 0;
             self.diagram_scroll_y = 0;
         }
+
+        self.last_visible_diagram_hash = self.current_visible_diagram_hash();
     }
 
     pub(super) fn set_diagram_focus(&mut self, focus: bool) {
@@ -237,8 +254,10 @@ impl App {
     }
 
     fn side_pane_mouse_scroll_amount(&mut self) -> usize {
-        self.last_mouse_scroll = Some(Instant::now());
-        self.side_pane_line_scroll_amount()
+        let now = Instant::now();
+        let gap = self.last_mouse_scroll.map(|last| now.duration_since(last));
+        self.last_mouse_scroll = Some(now);
+        Self::adaptive_scroll_amount_from_gap(gap, self.side_pane_line_scroll_amount())
     }
 
     pub(super) fn cycle_diagram(&mut self, direction: i32) {
@@ -298,6 +317,8 @@ impl App {
             self.diagram_pane_ratio_target = next;
             self.diagram_pane_anim_start = None;
         }
+
+        self.handle_diagram_geometry_change();
 
         if announce {
             self.set_status_notice(format!("Diagram pane: {}%", next));
@@ -411,6 +432,7 @@ impl App {
         self.diagram_pane_ratio = self.diagram_pane_ratio_target;
         self.diagram_pane_ratio_from = self.diagram_pane_ratio_target;
         self.diagram_pane_anim_start = None;
+        self.handle_diagram_geometry_change();
         let label = match self.diagram_pane_position {
             DiagramPanePosition::Side => "side",
             DiagramPanePosition::Top => "top",
@@ -670,6 +692,7 @@ impl App {
             match mouse.kind {
                 MouseEventKind::Drag(MouseButton::Left) => {
                     if diagram_available {
+                        self.diagram_pane_anim_start = None;
                         let is_side = matches!(
                             self.diagram_pane_position,
                             crate::config::DiagramPanePosition::Side
@@ -822,8 +845,10 @@ impl App {
     }
 
     pub(super) fn mouse_scroll_amount(&mut self) -> usize {
-        self.last_mouse_scroll = Some(Instant::now());
-        3
+        let now = Instant::now();
+        let gap = self.last_mouse_scroll.map(|last| now.duration_since(last));
+        self.last_mouse_scroll = Some(now);
+        Self::adaptive_scroll_amount_from_gap(gap, 3)
     }
 
     pub(super) fn scroll_up(&mut self, amount: usize) {
@@ -894,5 +919,40 @@ impl App {
 
     pub(super) fn debug_scroll_bottom(&mut self) {
         self.follow_chat_bottom();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::App;
+    use std::time::Duration;
+
+    #[test]
+    fn adaptive_scroll_amount_uses_small_steps_for_rapid_events() {
+        assert_eq!(
+            App::adaptive_scroll_amount_from_gap(Some(Duration::from_millis(12)), 3),
+            1
+        );
+        assert_eq!(
+            App::adaptive_scroll_amount_from_gap(Some(Duration::from_millis(40)), 3),
+            2
+        );
+        assert_eq!(
+            App::adaptive_scroll_amount_from_gap(Some(Duration::from_millis(140)), 3),
+            3
+        );
+    }
+
+    #[test]
+    fn adaptive_scroll_amount_respects_smaller_slow_amounts() {
+        assert_eq!(
+            App::adaptive_scroll_amount_from_gap(Some(Duration::from_millis(12)), 1),
+            1
+        );
+        assert_eq!(
+            App::adaptive_scroll_amount_from_gap(Some(Duration::from_millis(40)), 1),
+            1
+        );
+        assert_eq!(App::adaptive_scroll_amount_from_gap(None, 1), 1);
     }
 }

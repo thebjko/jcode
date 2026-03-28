@@ -43,8 +43,7 @@ pub(super) fn render_native_scrollbar(
     let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
         .begin_symbol(None)
         .end_symbol(None)
-        .track_symbol(Some("▕"))
-        .track_style(Style::default().fg(dim_color()))
+        .track_symbol(None)
         .thumb_symbol("▐")
         .thumb_style(Style::default().fg(if focused {
             tool_color()
@@ -209,6 +208,13 @@ pub(super) fn draw_messages(
 ) -> info_widget::Margins {
     let (render_area, scrollbar_area) =
         super::split_native_scrollbar_area(area, show_native_scrollbar);
+    let left_inset = super::left_aligned_content_inset(render_area.width, app.centered_mode());
+    let text_render_area = Rect {
+        x: render_area.x.saturating_add(left_inset),
+        y: render_area.y,
+        width: render_area.width.saturating_sub(left_inset),
+        height: render_area.height,
+    };
     let wrapped_lines = &prepared.wrapped_lines;
     let wrapped_user_indices = &prepared.wrapped_user_indices;
     let wrapped_user_prompt_starts = &prepared.wrapped_user_prompt_starts;
@@ -221,7 +227,7 @@ pub(super) fn draw_messages(
         total_lines,
         wrapped_user_prompt_starts,
         user_prompt_texts,
-        render_area,
+        text_render_area,
     );
 
     super::set_last_max_scroll(max_scroll);
@@ -239,16 +245,16 @@ pub(super) fn draw_messages(
             wrapped_user_prompt_starts,
             user_prompt_texts,
             scroll,
-            render_area.width,
+            text_render_area.width,
         )
     } else {
         0u16
     };
 
     let content_area = Rect {
-        x: render_area.x,
+        x: text_render_area.x,
         y: render_area.y.saturating_add(prompt_preview_lines),
-        width: render_area.width,
+        width: text_render_area.width,
         height: render_area.height.saturating_sub(prompt_preview_lines),
     };
     let visible_height = content_area.height as usize;
@@ -676,9 +682,9 @@ pub(super) fn draw_messages(
 
                     let line_count = preview_lines.len() as u16;
                     let preview_area = Rect {
-                        x: render_area.x,
+                        x: content_area.x,
                         y: render_area.y,
-                        width: render_area.width.saturating_sub(1),
+                        width: content_area.width.saturating_sub(1),
                         height: line_count,
                     };
                     clear_area(frame, preview_area);
