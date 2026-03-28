@@ -168,6 +168,67 @@ fn line_is_blank(line: &Line<'_>) -> bool {
             .all(|span| span.content.as_ref().is_empty())
 }
 
+fn repeated_gutter_prefix_text(line: &Line<'_>) -> Option<String> {
+    let plain = line_plain_text(line);
+    let leading_spaces = plain
+        .chars()
+        .take_while(|ch| ch.is_whitespace())
+        .map(char::len_utf8)
+        .sum::<usize>();
+    let mut rest = &plain[leading_spaces..];
+    let mut gutter_count = 0usize;
+    while let Some(next) = rest.strip_prefix("│ ") {
+        gutter_count += 1;
+        rest = next;
+    }
+
+    if gutter_count == 0 {
+        return None;
+    }
+
+    Some(format!(
+        "{}{}",
+        " ".repeat(leading_spaces),
+        "│ ".repeat(gutter_count)
+    ))
+}
+
+fn leading_spans_for_display_width(
+    line: &Line<'static>,
+    target_width: usize,
+) -> Vec<Span<'static>> {
+    if target_width == 0 {
+        return Vec::new();
+    }
+
+    let mut spans = Vec::new();
+    let mut collected_width = 0usize;
+
+    for span in &line.spans {
+        if collected_width >= target_width {
+            break;
+        }
+
+        let mut text = String::new();
+        let mut span_width = 0usize;
+        for ch in span.content.chars() {
+            let ch_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+            if collected_width + span_width + ch_width > target_width {
+                break;
+            }
+            text.push(ch);
+            span_width += ch_width;
+        }
+
+        if !text.is_empty() {
+            spans.push(Span::styled(text, span.style));
+            collected_width += span_width;
+        }
+    }
+
+    spans
+}
+
 fn push_blank_separator(lines: &mut Vec<Line<'static>>) {
     if lines.last().map(line_is_blank).unwrap_or(false) {
         return;
@@ -3164,6 +3225,29 @@ pub fn wrap_line(line: Line<'static>, width: usize) -> Vec<Line<'static>> {
     // Preserve the original alignment
     let alignment = line.alignment;
 
+    let repeated_prefix = repeated_gutter_prefix_text(&line).and_then(|prefix_text| {
+        let prefix_width = UnicodeWidthStr::width(prefix_text.as_str());
+        if prefix_width == 0 || prefix_width >= width {
+            None
+        } else {
+            Some((
+                leading_spans_for_display_width(&line, prefix_width),
+                prefix_width,
+            ))
+        }
+    });
+
+    let seed_repeated_prefix =
+        |current_spans: &mut Vec<Span<'static>>, current_width: &mut usize, pending: &mut bool| {
+            if *pending {
+                if let Some((prefix_spans, prefix_width)) = &repeated_prefix {
+                    current_spans.extend(prefix_spans.iter().cloned());
+                    *current_width = prefix_width.to_owned();
+                }
+                *pending = false;
+            }
+        };
+
     if let Some(balanced) = wrap_line_balanced(&line, width) {
         return balanced;
     }
@@ -3171,6 +3255,7 @@ pub fn wrap_line(line: Line<'static>, width: usize) -> Vec<Line<'static>> {
     let mut result: Vec<Line<'static>> = Vec::new();
     let mut current_spans: Vec<Span<'static>> = Vec::with_capacity(line.spans.len());
     let mut current_width = 0usize;
+    let mut pending_repeated_prefix = false;
 
     for span in line.spans {
         let style = span.style;
@@ -3210,6 +3295,7 @@ pub fn wrap_line(line: Line<'static>, width: usize) -> Vec<Line<'static>> {
                 }
                 result.push(new_line);
                 current_width = 0;
+                pending_repeated_prefix = repeated_prefix.is_some();
             }
 
             // Handle chunks longer than width (force break by grapheme/char with width tracking)
@@ -3219,6 +3305,11 @@ pub fn wrap_line(line: Line<'static>, width: usize) -> Vec<Line<'static>> {
                 let mut part_width = 0usize;
 
                 for c in chunk.chars() {
+                    seed_repeated_prefix(
+                        &mut current_spans,
+                        &mut current_width,
+                        &mut pending_repeated_prefix,
+                    );
                     let char_width = c.to_string().width();
 
                     // Would this char overflow the available width?
@@ -3240,7 +3331,14 @@ pub fn wrap_line(line: Line<'static>, width: usize) -> Vec<Line<'static>> {
                             }
                             result.push(new_line);
                             current_width = 0;
+                            pending_repeated_prefix = repeated_prefix.is_some();
                         }
+
+                        seed_repeated_prefix(
+                            &mut current_spans,
+                            &mut current_width,
+                            &mut pending_repeated_prefix,
+                        );
                     }
 
                     part.push(c);
@@ -3249,10 +3347,20 @@ pub fn wrap_line(line: Line<'static>, width: usize) -> Vec<Line<'static>> {
 
                 // Don't forget remaining part
                 if !part.is_empty() {
+                    seed_repeated_prefix(
+                        &mut current_spans,
+                        &mut current_width,
+                        &mut pending_repeated_prefix,
+                    );
                     current_spans.push(Span::styled(part, style));
                     current_width += part_width;
                 }
             } else {
+                seed_repeated_prefix(
+                    &mut current_spans,
+                    &mut current_width,
+                    &mut pending_repeated_prefix,
+                );
                 current_spans.push(Span::styled(chunk, style));
                 current_width += chunk_width;
             }
@@ -3869,7 +3977,9 @@ mod tests {
         let rendered: Vec<String> = wrapped.iter().map(line_to_string).collect();
 
         assert!(
-            rendered.first().is_some_and(|line| line.starts_with("┌─ rust ")),
+            rendered
+                .first()
+                .is_some_and(|line| line.starts_with("┌─ rust ")),
             "expected code block header: {rendered:?}"
         );
         assert_eq!(rendered.last().map(String::as_str), Some("└─"));
@@ -3888,6 +3998,29 @@ mod tests {
         assert!(
             flattened.contains("let alpha_beta_gamma = delta_epsilon_zeta();"),
             "wrapped code body should preserve code text order: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn test_wrapped_text_code_block_with_long_token_keeps_gutter_on_continuations() {
+        let lines = render_markdown(
+            "```text\nui_viewport::render_native_scrollbar|viewport::render_native_scrollbar|render_native_scrollbar(\n```",
+        );
+        let wrapped = wrap_lines(lines, 24);
+        let rendered: Vec<String> = wrapped.iter().map(line_to_string).collect();
+
+        assert_eq!(rendered.first().map(String::as_str), Some("┌─ text "));
+        assert_eq!(rendered.last().map(String::as_str), Some("└─"));
+
+        let body = &rendered[1..rendered.len() - 1];
+        assert!(body.len() >= 2, "expected wrapped code body: {rendered:?}");
+        assert!(
+            body.iter().all(|line| line.starts_with("│ ")),
+            "every wrapped continuation should preserve the framed gutter: {rendered:?}"
+        );
+        assert!(
+            body.concat().contains("render_native_scrollbar"),
+            "wrapped code body should preserve the long identifier: {rendered:?}"
         );
     }
 
