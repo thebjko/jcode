@@ -463,6 +463,18 @@ pub fn redact_secrets(text: &str) -> String {
                 .expect("valid SCALEWAY_API_KEY assignment regex"),
             Regex::new(r"(?m)^\s*(STACKIT_API_KEY\s*=\s*)[^\r\n]+")
                 .expect("valid STACKIT_API_KEY assignment regex"),
+            Regex::new(r"(?m)^\s*(GROQ_API_KEY\s*=\s*)[^\r\n]+")
+                .expect("valid GROQ_API_KEY assignment regex"),
+            Regex::new(r"(?m)^\s*(MISTRAL_API_KEY\s*=\s*)[^\r\n]+")
+                .expect("valid MISTRAL_API_KEY assignment regex"),
+            Regex::new(r"(?m)^\s*(PERPLEXITY_API_KEY\s*=\s*)[^\r\n]+")
+                .expect("valid PERPLEXITY_API_KEY assignment regex"),
+            Regex::new(r"(?m)^\s*(TOGETHER_API_KEY\s*=\s*)[^\r\n]+")
+                .expect("valid TOGETHER_API_KEY assignment regex"),
+            Regex::new(r"(?m)^\s*(DEEPINFRA_API_KEY\s*=\s*)[^\r\n]+")
+                .expect("valid DEEPINFRA_API_KEY assignment regex"),
+            Regex::new(r"(?m)^\s*(XAI_API_KEY\s*=\s*)[^\r\n]+")
+                .expect("valid XAI_API_KEY assignment regex"),
             Regex::new(r"(?m)^\s*(CHUTES_API_KEY\s*=\s*)[^\r\n]+")
                 .expect("valid CHUTES_API_KEY assignment regex"),
             Regex::new(r"(?m)^\s*(CEREBRAS_API_KEY\s*=\s*)[^\r\n]+")
@@ -499,6 +511,12 @@ pub fn redact_secrets(text: &str) -> String {
         "NEBIUS_API_KEY",
         "SCALEWAY_API_KEY",
         "STACKIT_API_KEY",
+        "GROQ_API_KEY",
+        "MISTRAL_API_KEY",
+        "PERPLEXITY_API_KEY",
+        "TOGETHER_API_KEY",
+        "DEEPINFRA_API_KEY",
+        "XAI_API_KEY",
         "CHUTES_API_KEY",
         "CEREBRAS_API_KEY",
         "OPENAI_COMPAT_API_KEY",
