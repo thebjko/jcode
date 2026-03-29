@@ -23,10 +23,9 @@ pub fn get_repo_dir() -> Option<PathBuf> {
             .parent()
             .and_then(|p| p.parent())
             .and_then(|p| p.parent())
+            && is_jcode_repo(repo)
         {
-            if is_jcode_repo(repo) {
-                return Some(repo.to_path_buf());
-            }
+            return Some(repo.to_path_buf());
         }
     }
 
@@ -34,10 +33,10 @@ pub fn get_repo_dir() -> Option<PathBuf> {
     // This matters for self-dev sessions launched from the repo but running
     // from an installed canary/stable binary whose current_exe() is outside
     // the source tree.
-    if let Ok(cwd) = std::env::current_dir() {
-        if let Some(repo) = find_repo_in_ancestors(&cwd) {
-            return Some(repo);
-        }
+    if let Ok(cwd) = std::env::current_dir()
+        && let Some(repo) = find_repo_in_ancestors(&cwd)
+    {
+        return Some(repo);
     }
 
     None
@@ -162,37 +161,36 @@ pub fn update_launcher_symlink_to_stable() -> Result<PathBuf> {
 /// - Then stable channel path
 /// - Finally currently running executable
 pub fn client_update_candidate(is_selfdev_session: bool) -> Option<(PathBuf, &'static str)> {
-    if let Ok(current) = current_binary_path() {
-        if current.exists() {
-            return Some((current, "current"));
-        }
+    if let Ok(current) = current_binary_path()
+        && current.exists()
+    {
+        return Some((current, "current"));
     }
 
     if is_selfdev_session {
-        if let Some(repo_dir) = get_repo_dir() {
-            if let Some(dev) = find_dev_binary(&repo_dir) {
-                if dev.exists() {
-                    return Some((dev, "dev"));
-                }
-            }
+        if let Some(repo_dir) = get_repo_dir()
+            && let Some(dev) = find_dev_binary(&repo_dir)
+            && dev.exists()
+        {
+            return Some((dev, "dev"));
         }
-        if let Ok(canary) = canary_binary_path() {
-            if canary.exists() {
-                return Some((canary, "canary"));
-            }
-        }
-    }
-
-    if let Ok(launcher) = launcher_binary_path() {
-        if launcher.exists() {
-            return Some((launcher, "launcher"));
+        if let Ok(canary) = canary_binary_path()
+            && canary.exists()
+        {
+            return Some((canary, "canary"));
         }
     }
 
-    if let Ok(stable) = stable_binary_path() {
-        if stable.exists() {
-            return Some((stable, "stable"));
-        }
+    if let Ok(launcher) = launcher_binary_path()
+        && launcher.exists()
+    {
+        return Some((launcher, "launcher"));
+    }
+
+    if let Ok(stable) = stable_binary_path()
+        && stable.exists()
+    {
+        return Some((stable, "stable"));
     }
 
     std::env::current_exe().ok().map(|exe| (exe, "current"))
@@ -353,12 +351,11 @@ impl BuildManifest {
     /// Check if we should use stable or canary for a given session
     pub fn binary_for_session(&self, session_id: &str) -> BinaryChoice {
         // If this session is the canary tester, use canary
-        if let Some(ref canary_session) = self.canary_session {
-            if canary_session == session_id {
-                if let Some(ref canary) = self.canary {
-                    return BinaryChoice::Canary(canary.clone());
-                }
-            }
+        if let Some(ref canary_session) = self.canary_session
+            && canary_session == session_id
+            && let Some(ref canary) = self.canary
+        {
+            return BinaryChoice::Canary(canary.clone());
         }
         // Otherwise use stable
         if let Some(ref stable) = self.stable {

@@ -92,11 +92,11 @@ pub async fn run_self_dev(should_build: bool, resume_session: Option<String>) ->
     startup_profile::mark("selfdev_session_create");
     let is_resume = resume_session.is_some();
     let session_id = if let Some(id) = resume_session {
-        if let Ok(mut session) = session::Session::load(&id) {
-            if !session.is_canary {
-                session.set_canary("self-dev");
-                let _ = session.save();
-            }
+        if let Ok(mut session) = session::Session::load(&id)
+            && !session.is_canary
+        {
+            session.set_canary("self-dev");
+            let _ = session.save();
         }
         id
     } else {
@@ -116,7 +116,7 @@ pub async fn run_self_dev(should_build: bool, resume_session: Option<String>) ->
 
         build::publish_local_current_build(&repo_dir)?;
 
-        output::stderr_info("✓ Build complete; updated current launcher".to_string());
+        output::stderr_info("✓ Build complete; updated current launcher");
     }
 
     let target_binary = build::client_update_candidate(true)

@@ -26,31 +26,31 @@ impl ChannelRegistry {
     pub fn from_config(config: &SafetyConfig) -> Self {
         let mut channels: Vec<Arc<dyn MessageChannel>> = Vec::new();
 
-        if config.telegram_enabled {
-            if let (Some(token), Some(chat_id)) = (
+        if config.telegram_enabled
+            && let (Some(token), Some(chat_id)) = (
                 config.telegram_bot_token.clone(),
                 config.telegram_chat_id.clone(),
-            ) {
-                channels.push(Arc::new(TelegramChannel::new(
-                    token,
-                    chat_id,
-                    config.telegram_reply_enabled,
-                )));
-            }
+            )
+        {
+            channels.push(Arc::new(TelegramChannel::new(
+                token,
+                chat_id,
+                config.telegram_reply_enabled,
+            )));
         }
 
-        if config.discord_enabled {
-            if let (Some(token), Some(channel_id)) = (
+        if config.discord_enabled
+            && let (Some(token), Some(channel_id)) = (
                 config.discord_bot_token.clone(),
                 config.discord_channel_id.clone(),
-            ) {
-                channels.push(Arc::new(DiscordChannel::new(
-                    token,
-                    channel_id,
-                    config.discord_reply_enabled,
-                    config.discord_bot_user_id.clone(),
-                )));
-            }
+            )
+        {
+            channels.push(Arc::new(DiscordChannel::new(
+                token,
+                channel_id,
+                config.discord_reply_enabled,
+                config.discord_bot_user_id.clone(),
+            )));
         }
 
         Self { channels }
@@ -352,10 +352,10 @@ impl MessageChannel for DiscordChannel {
                         }
 
                         // If we know our bot user ID, also skip our own messages
-                        if let Some(ref bot_id) = self.bot_user_id {
-                            if msg.author.id == *bot_id {
-                                continue;
-                            }
+                        if let Some(ref bot_id) = self.bot_user_id
+                            && msg.author.id == *bot_id
+                        {
+                            continue;
                         }
 
                         let trimmed = msg.content.trim();
