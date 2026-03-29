@@ -269,7 +269,7 @@ impl crate::tui::TuiState for App {
     }
 
     fn is_processing(&self) -> bool {
-        self.is_processing || self.split_launch_in_flight()
+        self.is_processing || self.pending_queued_dispatch || self.split_launch_in_flight()
     }
 
     fn queued_messages(&self) -> &[String] {

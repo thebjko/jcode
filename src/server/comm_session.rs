@@ -12,6 +12,7 @@ use crate::session::Session;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::{Mutex, RwLock, broadcast, mpsc};
 
 fn create_visible_spawn_session(
@@ -54,6 +55,71 @@ fn spawn_visible_session_window(
 
 fn persist_headed_startup_message(session_id: &str, message: &str) {
     crate::tui::App::save_startup_message_for_session(session_id, message.to_string());
+}
+
+async fn register_visible_spawned_member(
+    session_id: &str,
+    swarm_id: &str,
+    working_dir: Option<&str>,
+    has_startup_message: bool,
+    swarm_members: &Arc<RwLock<HashMap<String, SwarmMember>>>,
+    swarms_by_id: &Arc<RwLock<HashMap<String, HashSet<String>>>>,
+    event_history: &Arc<RwLock<std::collections::VecDeque<SwarmEvent>>>,
+    event_counter: &Arc<std::sync::atomic::AtomicU64>,
+    swarm_event_tx: &broadcast::Sender<SwarmEvent>,
+) {
+    let (event_tx, _event_rx) = mpsc::unbounded_channel();
+    let now = Instant::now();
+    let friendly_name = crate::id::extract_session_name(session_id)
+        .map(|name| name.to_string())
+        .unwrap_or_else(|| session_id.to_string());
+    let (status, detail) = if has_startup_message {
+        ("running".to_string(), Some("startup queued".to_string()))
+    } else {
+        ("spawned".to_string(), Some("launching client".to_string()))
+    };
+
+    {
+        let mut members = swarm_members.write().await;
+        members.insert(
+            session_id.to_string(),
+            SwarmMember {
+                session_id: session_id.to_string(),
+                event_tx,
+                working_dir: working_dir.map(PathBuf::from),
+                swarm_id: Some(swarm_id.to_string()),
+                swarm_enabled: true,
+                status,
+                detail,
+                friendly_name: Some(friendly_name),
+                role: "agent".to_string(),
+                joined_at: now,
+                last_status_change: now,
+                is_headless: false,
+            },
+        );
+    }
+
+    {
+        let mut swarms = swarms_by_id.write().await;
+        swarms
+            .entry(swarm_id.to_string())
+            .or_insert_with(HashSet::new)
+            .insert(session_id.to_string());
+    }
+
+    record_swarm_event_for_session(
+        session_id,
+        SwarmEventType::MemberChange {
+            action: "joined".to_string(),
+        },
+        swarm_members,
+        event_history,
+        event_counter,
+        swarm_event_tx,
+    )
+    .await;
+    broadcast_swarm_status(swarm_id, swarm_members, swarms_by_id).await;
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -104,6 +170,11 @@ pub(super) async fn handle_comm_spawn(
                 .map(|agent_guard| agent_guard.provider_model())
         })
     };
+    let spawn_model = crate::config::config()
+        .agents
+        .swarm_model
+        .clone()
+        .or(coordinator_model.clone());
     let coordinator_is_canary = {
         let agent_sessions = sessions.read().await;
         agent_sessions
@@ -119,7 +190,7 @@ pub(super) async fn handle_comm_spawn(
 
     let visible_spawn = create_visible_spawn_session(
         working_dir.as_deref(),
-        coordinator_model.as_deref(),
+        spawn_model.as_deref(),
         coordinator_is_canary,
     )
     .and_then(|(new_session_id, cwd)| {
@@ -146,7 +217,7 @@ pub(super) async fn handle_comm_spawn(
                 swarm_plans,
                 soft_interrupt_queues,
                 coordinator_is_canary,
-                coordinator_model.clone(),
+                spawn_model.clone(),
                 Some(Arc::clone(mcp_pool)),
             )
             .await
@@ -167,6 +238,7 @@ pub(super) async fn handle_comm_spawn(
 
     match spawn_result {
         Ok((new_session_id, is_headless_fallback)) => {
+            let startup_message = initial_message.clone();
             {
                 let mut plans = swarm_plans.write().await;
                 if let Some(plan) = plans.get_mut(&swarm_id) {
@@ -185,7 +257,22 @@ pub(super) async fn handle_comm_spawn(
                 swarms_by_id,
             )
             .await;
-            if let Some(initial_msg) = initial_message {
+            if !is_headless_fallback {
+                register_visible_spawned_member(
+                    &new_session_id,
+                    &swarm_id,
+                    working_dir.as_deref(),
+                    startup_message.is_some(),
+                    swarm_members,
+                    swarms_by_id,
+                    event_history,
+                    event_counter,
+                    swarm_event_tx,
+                )
+                .await;
+            }
+
+            if let Some(initial_msg) = startup_message {
                 if is_headless_fallback {
                     record_swarm_event_for_session(
                         &new_session_id,
@@ -546,13 +633,15 @@ async fn require_coordinator_swarm(
 
 #[cfg(test)]
 mod tests {
-    use super::ensure_spawn_coordinator_swarm;
+    use super::{ensure_spawn_coordinator_swarm, register_visible_spawned_member};
     use crate::protocol::{NotificationType, ServerEvent};
+    use crate::server::SwarmEventType;
     use crate::server::SwarmMember;
-    use std::collections::{HashMap, HashSet};
+    use std::collections::{HashMap, HashSet, VecDeque};
     use std::sync::Arc;
+    use std::sync::atomic::AtomicU64;
     use std::time::Instant;
-    use tokio::sync::{RwLock, mpsc};
+    use tokio::sync::{RwLock, broadcast, mpsc};
 
     fn member(
         session_id: &str,
@@ -577,6 +666,48 @@ mod tests {
             },
             event_rx,
         )
+    }
+
+    #[tokio::test]
+    async fn register_visible_spawned_member_marks_startup_as_running() {
+        let swarm_members = Arc::new(RwLock::new(HashMap::new()));
+        let swarms_by_id = Arc::new(RwLock::new(HashMap::new()));
+        let event_history = Arc::new(RwLock::new(VecDeque::new()));
+        let event_counter = Arc::new(AtomicU64::new(0));
+        let (swarm_event_tx, _swarm_event_rx) = broadcast::channel(8);
+
+        register_visible_spawned_member(
+            "child-1",
+            "swarm-1",
+            Some("/tmp/worktree"),
+            true,
+            &swarm_members,
+            &swarms_by_id,
+            &event_history,
+            &event_counter,
+            &swarm_event_tx,
+        )
+        .await;
+
+        let members = swarm_members.read().await;
+        let member = members.get("child-1").expect("spawned member should exist");
+        assert_eq!(member.status, "running");
+        assert_eq!(member.detail.as_deref(), Some("startup queued"));
+        assert_eq!(member.swarm_id.as_deref(), Some("swarm-1"));
+        assert_eq!(member.working_dir.as_deref(), Some(std::path::Path::new("/tmp/worktree")));
+        drop(members);
+
+        assert!(swarms_by_id
+            .read()
+            .await
+            .get("swarm-1")
+            .is_some_and(|members| members.contains("child-1")));
+
+        let history = event_history.read().await;
+        assert!(history.iter().any(|event| {
+            event.session_id == "child-1"
+                && matches!(event.event, SwarmEventType::MemberChange { ref action } if action == "joined")
+        }));
     }
 
     #[tokio::test]
