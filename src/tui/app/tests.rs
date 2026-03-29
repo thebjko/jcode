@@ -3038,6 +3038,23 @@ fn test_model_command_trailing_space_shows_model_suggestions() {
 }
 
 #[test]
+fn test_login_command_suggestions_follow_provider_catalog() {
+    let app = create_test_app();
+    let suggestions = app.get_suggestions_for("/login ");
+
+    for provider in crate::provider_catalog::tui_login_providers() {
+        assert!(
+            suggestions
+                .iter()
+                .any(|(cmd, detail)| cmd == &format!("/login {}", provider.id)
+                    && detail == &provider.menu_detail),
+            "missing /login suggestion for provider {}",
+            provider.id
+        );
+    }
+}
+
+#[test]
 fn test_model_autocomplete_completes_unique_match() {
     let mut app = create_test_app();
     configure_test_remote_models(&mut app);
