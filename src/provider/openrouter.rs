@@ -104,8 +104,11 @@ fn autodetected_openai_compatible_profile()
         .filter(|profile| profile.id != OPENAI_COMPAT_PROFILE.id)
         .filter_map(|profile| {
             let resolved = resolve_openai_compatible_profile(*profile);
-            load_api_key_from_env_or_config(&resolved.api_key_env, &resolved.env_file)
-                .map(|_| resolved)
+            if crate::provider_catalog::openai_compatible_profile_is_configured(*profile) {
+                Some(resolved)
+            } else {
+                None
+            }
         })
         .collect::<Vec<_>>();
 
@@ -237,6 +240,22 @@ fn configured_dynamic_bearer_provider() -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
+fn configured_allow_no_auth() -> bool {
+    std::env::var("JCODE_OPENROUTER_ALLOW_NO_AUTH")
+        .ok()
+        .and_then(|raw| parse_env_bool(&raw))
+        .or_else(|| {
+            autodetected_openai_compatible_profile().and_then(|profile| {
+                if profile.requires_api_key {
+                    None
+                } else {
+                    Some(true)
+                }
+            })
+        })
+        .unwrap_or(false)
+}
+
 #[derive(Debug, Clone)]
 enum ProviderAuth {
     AuthorizationBearer {
@@ -249,6 +268,9 @@ enum ProviderAuth {
         label: String,
     },
     AzureEntra {
+        label: String,
+    },
+    None {
         label: String,
     },
 }
@@ -264,6 +286,7 @@ impl ProviderAuth {
                 let token = crate::auth::azure::get_bearer_token().await?;
                 Ok(req.bearer_auth(token))
             }
+            Self::None { .. } => Ok(req),
         }
     }
 
@@ -272,6 +295,7 @@ impl ProviderAuth {
             Self::AuthorizationBearer { label, .. } => label,
             Self::HeaderValue { label, .. } => label,
             Self::AzureEntra { label } => label,
+            Self::None { label } => label,
         }
     }
 }
@@ -768,6 +792,9 @@ impl OpenRouterProvider {
         ) {
             return crate::auth::azure::has_configuration();
         }
+        if configured_allow_no_auth() {
+            return true;
+        }
         Self::get_api_key().is_some()
     }
 
@@ -790,6 +817,26 @@ impl OpenRouterProvider {
                     other
                 ),
             };
+        }
+
+        if configured_allow_no_auth() {
+            if let Some(api_key) = Self::get_api_key() {
+                let key_name = configured_api_key_name();
+                return Ok(match configured_auth_header_mode() {
+                    AuthHeaderMode::AuthorizationBearer => ProviderAuth::AuthorizationBearer {
+                        token: api_key,
+                        label: key_name,
+                    },
+                    AuthHeaderMode::ApiKey => ProviderAuth::HeaderValue {
+                        header_name: HeaderName::from_static("api-key"),
+                        value: api_key,
+                        label: key_name,
+                    },
+                });
+            }
+            return Ok(ProviderAuth::None {
+                label: "local endpoint (no auth)".to_string(),
+            });
         }
 
         let key_name = configured_api_key_name();
@@ -2393,6 +2440,42 @@ mod tests {
         assert_eq!(configured_api_base(), opencode.api_base);
         assert_eq!(configured_api_key_name(), opencode.api_key_env);
         assert_eq!(configured_env_file_name(), opencode.env_file);
+        assert!(OpenRouterProvider::has_credentials());
+    }
+
+    #[test]
+    fn autodetects_single_saved_local_openai_compatible_profile() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let temp = TempDir::new().expect("create temp dir");
+        let _xdg = EnvVarGuard::set("XDG_CONFIG_HOME", temp.path());
+        let _home = EnvVarGuard::set("HOME", temp.path());
+        let _appdata = EnvVarGuard::set("APPDATA", temp.path().join("AppData").join("Roaming"));
+        let _openrouter_base = EnvVarGuard::remove("JCODE_OPENROUTER_API_BASE");
+        let _openrouter_key = EnvVarGuard::remove("JCODE_OPENROUTER_API_KEY_NAME");
+        let _openrouter_file = EnvVarGuard::remove("JCODE_OPENROUTER_ENV_FILE");
+        let _openrouter_dynamic = EnvVarGuard::remove("JCODE_OPENROUTER_DYNAMIC_BEARER_PROVIDER");
+        let _openrouter_no_auth = EnvVarGuard::remove("JCODE_OPENROUTER_ALLOW_NO_AUTH");
+        let _openrouter_api_key = EnvVarGuard::remove("OPENROUTER_API_KEY");
+        let _lmstudio_api_key = EnvVarGuard::remove("LMSTUDIO_API_KEY");
+
+        let lmstudio = crate::provider_catalog::resolve_openai_compatible_profile(
+            crate::provider_catalog::LMSTUDIO_PROFILE,
+        );
+        let config_dir = test_config_dir(&temp).join("jcode");
+        std::fs::create_dir_all(&config_dir).expect("create test config dir");
+        std::fs::write(
+            config_dir.join(&lmstudio.env_file),
+            format!(
+                "{}=1\n",
+                crate::provider_catalog::OPENAI_COMPAT_LOCAL_ENABLED_ENV
+            ),
+        )
+        .expect("write local config");
+
+        assert_eq!(configured_api_base(), lmstudio.api_base);
+        assert_eq!(configured_api_key_name(), lmstudio.api_key_env);
+        assert_eq!(configured_env_file_name(), lmstudio.env_file);
+        assert!(configured_allow_no_auth());
         assert!(OpenRouterProvider::has_credentials());
     }
 

@@ -122,6 +122,77 @@ pub fn format_background_task_notification_markdown(task: &BackgroundTaskComplet
     message
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedBackgroundTaskNotification {
+    pub task_id: String,
+    pub tool_name: String,
+    pub status: String,
+    pub duration: String,
+    pub exit_label: String,
+    pub preview: Option<String>,
+    pub full_output_command: String,
+}
+
+pub fn parse_background_task_notification_markdown(
+    content: &str,
+) -> Option<ParsedBackgroundTaskNotification> {
+    static HEADER_RE: OnceLock<Regex> = OnceLock::new();
+    static FULL_OUTPUT_RE: OnceLock<Regex> = OnceLock::new();
+
+    let header_re = HEADER_RE.get_or_init(|| {
+        Regex::new(
+            r"^\*\*Background task\*\* `(?P<task_id>[^`]+)` · `(?P<tool_name>[^`]+)` · (?P<status>.+?) · (?P<duration>[0-9]+(?:\.[0-9]+)?s) · (?P<exit_label>.+)$",
+        )
+        .expect("valid background task header regex")
+    });
+    let full_output_re = FULL_OUTPUT_RE.get_or_init(|| {
+        Regex::new(r#"^_Full output:_ `(?P<command>[^`]+)`$"#)
+            .expect("valid background task full output regex")
+    });
+
+    let normalized = content.replace("\r\n", "\n").replace('\r', "\n");
+    let mut sections = normalized.split("\n\n");
+    let header = sections.next()?.trim();
+    let captures = header_re.captures(header)?;
+
+    let mut preview: Option<String> = None;
+    let mut full_output_command: Option<String> = None;
+
+    for section in sections {
+        let trimmed = section.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        if let Some(captures) = full_output_re.captures(trimmed) {
+            full_output_command = Some(captures["command"].to_string());
+            continue;
+        }
+
+        if trimmed == "_No output captured._" {
+            preview = None;
+            continue;
+        }
+
+        if let Some(fenced) = trimmed
+            .strip_prefix("```text\n")
+            .and_then(|body| body.strip_suffix("\n```"))
+        {
+            preview = Some(fenced.to_string());
+        }
+    }
+
+    Some(ParsedBackgroundTaskNotification {
+        task_id: captures["task_id"].to_string(),
+        tool_name: captures["tool_name"].to_string(),
+        status: captures["status"].to_string(),
+        duration: captures["duration"].to_string(),
+        exit_label: captures["exit_label"].to_string(),
+        preview,
+        full_output_command: full_output_command?,
+    })
+}
+
 pub fn background_task_status_notice(task: &BackgroundTaskCompleted) -> String {
     match task.status {
         BackgroundTaskStatus::Completed => {
@@ -475,6 +546,10 @@ pub fn redact_secrets(text: &str) -> String {
                 .expect("valid DEEPINFRA_API_KEY assignment regex"),
             Regex::new(r"(?m)^\s*(XAI_API_KEY\s*=\s*)[^\r\n]+")
                 .expect("valid XAI_API_KEY assignment regex"),
+            Regex::new(r"(?m)^\s*(LMSTUDIO_API_KEY\s*=\s*)[^\r\n]+")
+                .expect("valid LMSTUDIO_API_KEY assignment regex"),
+            Regex::new(r"(?m)^\s*(OLLAMA_API_KEY\s*=\s*)[^\r\n]+")
+                .expect("valid OLLAMA_API_KEY assignment regex"),
             Regex::new(r"(?m)^\s*(CHUTES_API_KEY\s*=\s*)[^\r\n]+")
                 .expect("valid CHUTES_API_KEY assignment regex"),
             Regex::new(r"(?m)^\s*(CEREBRAS_API_KEY\s*=\s*)[^\r\n]+")
@@ -517,6 +592,8 @@ pub fn redact_secrets(text: &str) -> String {
         "TOGETHER_API_KEY",
         "DEEPINFRA_API_KEY",
         "XAI_API_KEY",
+        "LMSTUDIO_API_KEY",
+        "OLLAMA_API_KEY",
         "CHUTES_API_KEY",
         "CEREBRAS_API_KEY",
         "OPENAI_COMPAT_API_KEY",
@@ -943,5 +1020,36 @@ mod tests {
 
         assert!(rendered.contains("✗ failed"));
         assert!(rendered.contains("_No output captured._"));
+    }
+
+    #[test]
+    fn parse_background_task_notification_markdown_extracts_fields() {
+        let rendered = format_background_task_notification_markdown(&BackgroundTaskCompleted {
+            task_id: "abc123".to_string(),
+            tool_name: "bash".to_string(),
+            session_id: "session".to_string(),
+            status: BackgroundTaskStatus::Completed,
+            exit_code: Some(0),
+            output_preview: "[stderr] first line\n[stdout] second line\n".to_string(),
+            output_file: std::path::PathBuf::from("/tmp/output.log"),
+            duration_secs: 7.1,
+            notify: true,
+        });
+
+        let parsed = parse_background_task_notification_markdown(&rendered)
+            .expect("background task notification should parse");
+        assert_eq!(parsed.task_id, "abc123");
+        assert_eq!(parsed.tool_name, "bash");
+        assert_eq!(parsed.status, "✓ completed");
+        assert_eq!(parsed.duration, "7.1s");
+        assert_eq!(parsed.exit_label, "exit 0");
+        assert_eq!(
+            parsed.preview.as_deref(),
+            Some("[stderr] first line\n[stdout] second line")
+        );
+        assert_eq!(
+            parsed.full_output_command,
+            "bg action=\"output\" task_id=\"abc123\""
+        );
     }
 }

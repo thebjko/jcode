@@ -1,6 +1,8 @@
 pub use jcode_provider_metadata::*;
 use std::collections::HashSet;
 
+pub const OPENAI_COMPAT_LOCAL_ENABLED_ENV: &str = "JCODE_OPENAI_COMPAT_LOCAL_ENABLED";
+
 pub fn resolve_openai_compatible_profile(
     profile: OpenAiCompatibleProfile,
 ) -> ResolvedOpenAiCompatibleProfile {
@@ -12,6 +14,7 @@ pub fn resolve_openai_compatible_profile(
         env_file: profile.env_file.to_string(),
         setup_url: profile.setup_url.to_string(),
         default_model: profile.default_model.map(ToString::to_string),
+        requires_api_key: profile.requires_api_key,
     };
 
     if profile.id != OPENAI_COMPAT_PROFILE.id {
@@ -69,6 +72,7 @@ pub fn apply_openai_compatible_profile_env(profile: Option<OpenAiCompatibleProfi
         "JCODE_OPENROUTER_ENV_FILE",
         "JCODE_OPENROUTER_CACHE_NAMESPACE",
         "JCODE_OPENROUTER_PROVIDER_FEATURES",
+        "JCODE_OPENROUTER_ALLOW_NO_AUTH",
         "JCODE_OPENROUTER_MODEL_CATALOG",
         "JCODE_OPENROUTER_AUTH_HEADER",
         "JCODE_OPENROUTER_DYNAMIC_BEARER_PROVIDER",
@@ -87,6 +91,11 @@ pub fn apply_openai_compatible_profile_env(profile: Option<OpenAiCompatibleProfi
         crate::env::set_var("JCODE_OPENROUTER_ENV_FILE", &resolved.env_file);
         crate::env::set_var("JCODE_OPENROUTER_CACHE_NAMESPACE", &resolved.id);
         crate::env::set_var("JCODE_OPENROUTER_PROVIDER_FEATURES", "0");
+        if resolved.requires_api_key {
+            crate::env::remove_var("JCODE_OPENROUTER_ALLOW_NO_AUTH");
+        } else {
+            crate::env::set_var("JCODE_OPENROUTER_ALLOW_NO_AUTH", "1");
+        }
     }
 }
 
@@ -98,10 +107,12 @@ pub fn openrouter_like_api_key_sources() -> Vec<(String, String)> {
     ));
 
     for profile in openai_compatible_profiles() {
-        sources.push((
-            profile.api_key_env.to_string(),
-            profile.env_file.to_string(),
-        ));
+        if profile.requires_api_key {
+            sources.push((
+                profile.api_key_env.to_string(),
+                profile.env_file.to_string(),
+            ));
+        }
     }
 
     if let Some(source) = configured_api_key_source(
@@ -123,6 +134,28 @@ pub fn openrouter_like_api_key_sources() -> Vec<(String, String)> {
     }
 
     dedup_sources(sources)
+}
+
+fn parse_bool_like(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+pub fn openai_compatible_profile_is_configured(profile: OpenAiCompatibleProfile) -> bool {
+    let resolved = resolve_openai_compatible_profile(profile);
+    if load_api_key_from_env_or_config(&resolved.api_key_env, &resolved.env_file).is_some() {
+        return true;
+    }
+
+    if resolved.requires_api_key {
+        return false;
+    }
+
+    load_env_value_from_env_or_config(OPENAI_COMPAT_LOCAL_ENABLED_ENV, &resolved.env_file)
+        .map(|value| parse_bool_like(&value))
+        .unwrap_or(false)
 }
 
 pub fn configured_api_key_source(
@@ -717,8 +750,11 @@ mod tests {
         crate::env::set_var("XDG_CONFIG_HOME", &config_root);
         crate::env::remove_var("ZHIPU_API_KEY");
         crate::env::remove_var("ZAI_API_KEY");
-        std::fs::write(config_root.join("jcode").join("zai.env"), "ZAI_API_KEY=legacy-secret\n")
-            .expect("env file");
+        std::fs::write(
+            config_root.join("jcode").join("zai.env"),
+            "ZAI_API_KEY=legacy-secret\n",
+        )
+        .expect("env file");
 
         assert_eq!(
             load_api_key_from_env_or_config("ZHIPU_API_KEY", "zai.env").as_deref(),

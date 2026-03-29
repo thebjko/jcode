@@ -173,13 +173,7 @@ impl AuthStatus {
                 }
             }
             crate::provider_catalog::LoginProviderTarget::OpenAiCompatible(profile) => {
-                let resolved = crate::provider_catalog::resolve_openai_compatible_profile(profile);
-                if crate::provider_catalog::load_api_key_from_env_or_config(
-                    &resolved.api_key_env,
-                    &resolved.env_file,
-                )
-                .is_some()
-                {
+                if crate::provider_catalog::openai_compatible_profile_is_configured(profile) {
                     AuthState::Available
                 } else {
                     AuthState::NotConfigured
@@ -225,7 +219,21 @@ impl AuthStatus {
             crate::provider_catalog::LoginProviderTarget::OpenAiCompatible(profile) => {
                 let resolved = crate::provider_catalog::resolve_openai_compatible_profile(profile);
                 if self.state_for_provider(provider) == AuthState::Available {
-                    format!("API key (`{}`)", resolved.api_key_env)
+                    if resolved.requires_api_key {
+                        format!("API key (`{}`)", resolved.api_key_env)
+                    } else if crate::provider_catalog::load_api_key_from_env_or_config(
+                        &resolved.api_key_env,
+                        &resolved.env_file,
+                    )
+                    .is_some()
+                    {
+                        format!(
+                            "local endpoint (`{}`) + optional API key (`{}`)",
+                            resolved.api_base, resolved.api_key_env
+                        )
+                    } else {
+                        format!("local endpoint (`{}`)", resolved.api_base)
+                    }
                 } else {
                     "not configured".to_string()
                 }

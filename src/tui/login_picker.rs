@@ -564,6 +564,7 @@ fn auth_kind_color(kind: &str) -> Color {
         "device code" => Color::Rgb(111, 214, 181),
         "CLI" => Color::Rgb(131, 215, 255),
         "API key / CLI" => Color::Rgb(229, 187, 111),
+        "local endpoint" => Color::Rgb(111, 214, 181),
         _ => Color::Rgb(180, 190, 220),
     }
 }
