@@ -312,13 +312,13 @@ pub async fn resolve_direct_tokens(client: &Client) -> Result<CursorDirectTokens
         if !token_is_expiring_soon(&tokens.access_token) {
             return Ok(tokens);
         }
-        if let Some(refresh_token) = tokens.refresh_token.as_deref() {
-            if let Ok(refreshed) = refresh_direct_access_token(client, refresh_token).await {
-                return Ok(CursorDirectTokens {
-                    source: tokens.source,
-                    ..refreshed
-                });
-            }
+        if let Some(refresh_token) = tokens.refresh_token.as_deref()
+            && let Ok(refreshed) = refresh_direct_access_token(client, refresh_token).await
+        {
+            return Ok(CursorDirectTokens {
+                source: tokens.source,
+                ..refreshed
+            });
         }
     }
 
@@ -331,13 +331,13 @@ pub async fn resolve_direct_tokens(client: &Client) -> Result<CursorDirectTokens
                 source: "cursor_vscdb",
             });
         }
-        if let Some(refresh_token) = refresh_token.as_deref() {
-            if let Ok(refreshed) = refresh_direct_access_token(client, refresh_token).await {
-                return Ok(CursorDirectTokens {
-                    source: "cursor_vscdb",
-                    ..refreshed
-                });
-            }
+        if let Some(refresh_token) = refresh_token.as_deref()
+            && let Ok(refreshed) = refresh_direct_access_token(client, refresh_token).await
+        {
+            return Ok(CursorDirectTokens {
+                source: "cursor_vscdb",
+                ..refreshed
+            });
         }
     }
 

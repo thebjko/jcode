@@ -120,7 +120,7 @@ pub fn tokens_path() -> Result<std::path::PathBuf> {
 }
 
 pub fn gemini_cli_oauth_path() -> Result<std::path::PathBuf> {
-    Ok(crate::storage::user_home_path(".gemini/oauth_creds.json")?)
+    crate::storage::user_home_path(".gemini/oauth_creds.json")
 }
 
 pub fn load_tokens() -> Result<GeminiTokens> {
@@ -230,61 +230,60 @@ pub async fn login() -> Result<GeminiTokens> {
     let (verifier, challenge) = super::oauth::generate_pkce_public();
     let state = super::oauth::generate_state_public();
 
-    if !browser_suppressed() {
-        if let Ok(listener) = super::oauth::bind_callback_listener(0) {
-            let port = listener.local_addr()?.port();
-            let redirect_uri = format!("http://127.0.0.1:{port}/oauth2callback");
-            let auth_url = build_web_auth_url(&redirect_uri, &challenge, &state)?;
+    if !browser_suppressed()
+        && let Ok(listener) = super::oauth::bind_callback_listener(0)
+    {
+        let port = listener.local_addr()?.port();
+        let redirect_uri = format!("http://127.0.0.1:{port}/oauth2callback");
+        let auth_url = build_web_auth_url(&redirect_uri, &challenge, &state)?;
 
-            eprintln!("\nOpening browser for Gemini login...\n");
-            eprintln!("If the browser didn't open, visit:\n{}\n", auth_url);
-            if let Some(qr) = crate::login_qr::indented_section(
-                &auth_url,
-                "Scan this QR on another device if this machine has no browser:",
-                "    ",
-            ) {
-                eprintln!("{qr}\n");
-            }
+        eprintln!("\nOpening browser for Gemini login...\n");
+        eprintln!("If the browser didn't open, visit:\n{}\n", auth_url);
+        if let Some(qr) = crate::login_qr::indented_section(
+            &auth_url,
+            "Scan this QR on another device if this machine has no browser:",
+            "    ",
+        ) {
+            eprintln!("{qr}\n");
+        }
 
-            let browser_opened = open::that(&auth_url).is_ok();
-            if browser_opened {
-                eprintln!(
-                    "Waiting up to 300s for automatic callback on {}",
-                    redirect_uri
-                );
-                eprintln!(
-                    "If the page says sign-in succeeded but jcode does not continue within a few seconds, press Ctrl+C and retry with NO_BROWSER=true to use the manual code flow."
-                );
-                match tokio::time::timeout(
-                    std::time::Duration::from_secs(300),
-                    super::oauth::wait_for_callback_async_on_listener(listener, &state),
-                )
-                .await
-                {
-                    Ok(Ok(code)) => {
-                        let tokens =
-                            exchange_authorization_code(&code, Some(&verifier), &redirect_uri)
-                                .await
-                                .context("Gemini token exchange failed")?;
-                        save_tokens(&tokens)?;
-                        return Ok(tokens);
-                    }
-                    Ok(Err(err)) => {
-                        eprintln!(
-                            "Automatic callback failed ({err}). Falling back to manual auth code entry."
-                        );
-                    }
-                    Err(_) => {
-                        eprintln!(
-                            "Timed out waiting for callback. Falling back to manual auth code entry."
-                        );
-                    }
+        let browser_opened = open::that(&auth_url).is_ok();
+        if browser_opened {
+            eprintln!(
+                "Waiting up to 300s for automatic callback on {}",
+                redirect_uri
+            );
+            eprintln!(
+                "If the page says sign-in succeeded but jcode does not continue within a few seconds, press Ctrl+C and retry with NO_BROWSER=true to use the manual code flow."
+            );
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(300),
+                super::oauth::wait_for_callback_async_on_listener(listener, &state),
+            )
+            .await
+            {
+                Ok(Ok(code)) => {
+                    let tokens = exchange_authorization_code(&code, Some(&verifier), &redirect_uri)
+                        .await
+                        .context("Gemini token exchange failed")?;
+                    save_tokens(&tokens)?;
+                    return Ok(tokens);
                 }
-            } else {
-                eprintln!(
-                    "Couldn't open a browser on this machine. Falling back to manual auth code entry.\n"
-                );
+                Ok(Err(err)) => {
+                    eprintln!(
+                        "Automatic callback failed ({err}). Falling back to manual auth code entry."
+                    );
+                }
+                Err(_) => {
+                    eprintln!(
+                        "Timed out waiting for callback. Falling back to manual auth code entry."
+                    );
+                }
             }
+        } else {
+            eprintln!(
+                "Couldn't open a browser on this machine. Falling back to manual auth code entry.\n"
+            );
         }
     }
 

@@ -208,52 +208,52 @@ pub async fn login() -> Result<AntigravityTokens> {
     let redirect_uri = redirect_uri(DEFAULT_PORT);
     let auth_url = build_auth_url(&redirect_uri, &challenge, &state)?;
 
-    if !browser_suppressed() {
-        if let Ok(listener) = crate::auth::oauth::bind_callback_listener(DEFAULT_PORT) {
-            eprintln!("\nOpening browser for Antigravity login...\n");
-            eprintln!("If the browser didn't open, visit:\n{}\n", auth_url);
-            if let Some(qr) = crate::login_qr::indented_section(
-                &auth_url,
-                "Scan this QR on another device if this machine has no browser:",
-                "    ",
-            ) {
-                eprintln!("{qr}\n");
-            }
+    if !browser_suppressed()
+        && let Ok(listener) = crate::auth::oauth::bind_callback_listener(DEFAULT_PORT)
+    {
+        eprintln!("\nOpening browser for Antigravity login...\n");
+        eprintln!("If the browser didn't open, visit:\n{}\n", auth_url);
+        if let Some(qr) = crate::login_qr::indented_section(
+            &auth_url,
+            "Scan this QR on another device if this machine has no browser:",
+            "    ",
+        ) {
+            eprintln!("{qr}\n");
+        }
 
-            let browser_opened = open::that(&auth_url).is_ok();
-            if browser_opened {
-                eprintln!(
-                    "Waiting up to 300s for automatic callback on {}",
-                    redirect_uri
-                );
-                eprintln!(
-                    "If the browser lands on a loopback error page instead of returning to jcode, copy the full URL from the address bar and re-run with NO_BROWSER=true to paste it manually."
-                );
-                match tokio::time::timeout(
-                    std::time::Duration::from_secs(300),
-                    crate::auth::oauth::wait_for_callback_async_on_listener(listener, &state),
-                )
-                .await
-                {
-                    Ok(Ok(code)) => {
-                        return exchange_callback_code(&code, &verifier, &redirect_uri).await;
-                    }
-                    Ok(Err(err)) => {
-                        eprintln!(
-                            "Automatic callback failed ({err}). Falling back to manual callback paste."
-                        );
-                    }
-                    Err(_) => {
-                        eprintln!(
-                            "Timed out waiting for callback. Falling back to manual callback paste."
-                        );
-                    }
+        let browser_opened = open::that(&auth_url).is_ok();
+        if browser_opened {
+            eprintln!(
+                "Waiting up to 300s for automatic callback on {}",
+                redirect_uri
+            );
+            eprintln!(
+                "If the browser lands on a loopback error page instead of returning to jcode, copy the full URL from the address bar and re-run with NO_BROWSER=true to paste it manually."
+            );
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(300),
+                crate::auth::oauth::wait_for_callback_async_on_listener(listener, &state),
+            )
+            .await
+            {
+                Ok(Ok(code)) => {
+                    return exchange_callback_code(&code, &verifier, &redirect_uri).await;
                 }
-            } else {
-                eprintln!(
-                    "Couldn't open a browser on this machine. Falling back to manual callback paste.\n"
-                );
+                Ok(Err(err)) => {
+                    eprintln!(
+                        "Automatic callback failed ({err}). Falling back to manual callback paste."
+                    );
+                }
+                Err(_) => {
+                    eprintln!(
+                        "Timed out waiting for callback. Falling back to manual callback paste."
+                    );
+                }
             }
+        } else {
+            eprintln!(
+                "Couldn't open a browser on this machine. Falling back to manual callback paste.\n"
+            );
         }
     }
 

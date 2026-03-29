@@ -68,12 +68,11 @@ fn session_pid_path(name: &str) -> PathBuf {
 
 fn is_session_alive(name: &str) -> bool {
     let pid_path = session_pid_path(name);
-    if let Ok(pid_str) = std::fs::read_to_string(&pid_path) {
-        if let Ok(pid) = pid_str.trim().parse::<u32>() {
-            if platform::is_process_running(pid) {
-                return session_socket_path(name).exists();
-            }
-        }
+    if let Ok(pid_str) = std::fs::read_to_string(&pid_path)
+        && let Ok(pid) = pid_str.trim().parse::<u32>()
+        && platform::is_process_running(pid)
+    {
+        return session_socket_path(name).exists();
     }
     false
 }
@@ -334,24 +333,24 @@ async fn download_browser_binary() -> Result<()> {
     std::fs::write(xpi_path(), &xpi_bytes)?;
 
     // Download host binary if available
-    if let Some(host) = host_asset {
-        if let Some(host_url) = host["browser_download_url"].as_str() {
-            let host_bytes = reqwest::Client::new()
-                .get(host_url)
-                .header("User-Agent", "jcode")
-                .send()
-                .await?
-                .bytes()
-                .await
-                .context("Failed to download host binary")?;
+    if let Some(host) = host_asset
+        && let Some(host_url) = host["browser_download_url"].as_str()
+    {
+        let host_bytes = reqwest::Client::new()
+            .get(host_url)
+            .header("User-Agent", "jcode")
+            .send()
+            .await?
+            .bytes()
+            .await
+            .context("Failed to download host binary")?;
 
-            let host_path = host_binary_path();
-            std::fs::write(&host_path, &host_bytes)?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(&host_path, std::fs::Permissions::from_mode(0o755))?;
-            }
+        let host_path = host_binary_path();
+        std::fs::write(&host_path, &host_bytes)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&host_path, std::fs::Permissions::from_mode(0o755))?;
         }
     }
 
@@ -409,16 +408,13 @@ fn install_native_host_manifest() -> Result<bool> {
     let manifest_path = manifest_dir.join(format!("{}.json", NATIVE_HOST_NAME));
 
     // Check if an existing manifest is already valid (from standalone install or previous setup)
-    if manifest_path.exists() {
-        if let Ok(contents) = std::fs::read_to_string(&manifest_path) {
-            if let Ok(existing) = serde_json::from_str::<serde_json::Value>(&contents) {
-                if let Some(existing_path) = existing["path"].as_str() {
-                    if std::path::Path::new(existing_path).exists() {
-                        return Ok(false);
-                    }
-                }
-            }
-        }
+    if manifest_path.exists()
+        && let Ok(contents) = std::fs::read_to_string(&manifest_path)
+        && let Ok(existing) = serde_json::from_str::<serde_json::Value>(&contents)
+        && let Some(existing_path) = existing["path"].as_str()
+        && std::path::Path::new(existing_path).exists()
+    {
+        return Ok(false);
     }
 
     let host_path = host_binary_path();

@@ -539,12 +539,11 @@ impl BackgroundTaskManager {
         if let Ok(mut entries) = fs::read_dir(&self.output_dir).await {
             while let Ok(Some(entry)) = entries.next_entry().await {
                 let path = entry.path();
-                if path.extension().map(|e| e == "json").unwrap_or(false) {
-                    if let Some(status) = self.read_status_file(&path).await {
-                        let reconciled =
-                            self.finalize_detached_status_if_needed(status, &path).await;
-                        results.push(reconciled);
-                    }
+                if path.extension().map(|e| e == "json").unwrap_or(false)
+                    && let Some(status) = self.read_status_file(&path).await
+                {
+                    let reconciled = self.finalize_detached_status_if_needed(status, &path).await;
+                    results.push(reconciled);
                 }
             }
         }
@@ -647,13 +646,12 @@ impl BackgroundTaskManager {
         if let Ok(mut entries) = fs::read_dir(&self.output_dir).await {
             while let Ok(Some(entry)) = entries.next_entry().await {
                 let path = entry.path();
-                if let Ok(metadata) = fs::metadata(&path).await {
-                    if let Ok(modified) = metadata.modified() {
-                        if modified < cutoff {
-                            let _ = fs::remove_file(&path).await;
-                            removed += 1;
-                        }
-                    }
+                if let Ok(metadata) = fs::metadata(&path).await
+                    && let Ok(modified) = metadata.modified()
+                    && modified < cutoff
+                {
+                    let _ = fs::remove_file(&path).await;
+                    removed += 1;
                 }
             }
         }

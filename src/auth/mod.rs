@@ -90,12 +90,11 @@ impl AuthStatus {
     /// Check all authentication sources and return their status.
     /// Results are cached for 30 seconds to avoid expensive PATH scanning on every frame.
     pub fn check() -> Self {
-        if let Ok(cache) = AUTH_STATUS_CACHE.read() {
-            if let Some((ref status, ref when)) = *cache {
-                if when.elapsed().as_secs() < AUTH_STATUS_CACHE_TTL_SECS {
-                    return status.clone();
-                }
-            }
+        if let Ok(cache) = AUTH_STATUS_CACHE.read()
+            && let Some((ref status, ref when)) = *cache
+            && when.elapsed().as_secs() < AUTH_STATUS_CACHE_TTL_SECS
+        {
+            return status.clone();
         }
 
         let status = Self::check_uncached();
@@ -113,10 +112,10 @@ impl AuthStatus {
     /// falls back to a cheap local-files/env-only probe that avoids subprocesses
     /// such as `cursor-agent status` or `sqlite3` lookups.
     pub fn check_fast() -> Self {
-        if let Ok(cache) = AUTH_STATUS_CACHE.read() {
-            if let Some((ref status, _)) = *cache {
-                return status.clone();
-            }
+        if let Ok(cache) = AUTH_STATUS_CACHE.read()
+            && let Some((ref status, _)) = *cache
+        {
+            return status.clone();
         }
 
         Self::check_uncached_fast()
@@ -307,17 +306,14 @@ impl AuthStatus {
         let mut anthropic = ProviderAuth::default();
 
         // Check OAuth
-        match claude::load_credentials() {
-            Ok(creds) => {
-                let now_ms = chrono::Utc::now().timestamp_millis();
-                anthropic.has_oauth = true;
-                if creds.expires_at > now_ms {
-                    anthropic.state = AuthState::Available;
-                } else {
-                    anthropic.state = AuthState::Expired;
-                }
+        if let Ok(creds) = claude::load_credentials() {
+            let now_ms = chrono::Utc::now().timestamp_millis();
+            anthropic.has_oauth = true;
+            if creds.expires_at > now_ms {
+                anthropic.state = AuthState::Available;
+            } else {
+                anthropic.state = AuthState::Expired;
             }
-            Err(_) => {}
         }
 
         // Check API key (overrides expired OAuth)
@@ -345,30 +341,27 @@ impl AuthStatus {
         }
 
         // Check OpenAI (Codex OAuth or API key)
-        match codex::load_credentials() {
-            Ok(creds) => {
-                // Check if we have OAuth tokens (not just API key fallback)
-                if !creds.refresh_token.is_empty() {
-                    status.openai_has_oauth = true;
-                    // Has OAuth - check expiry if available
-                    if let Some(expires_at) = creds.expires_at {
-                        let now_ms = chrono::Utc::now().timestamp_millis();
-                        if expires_at > now_ms {
-                            status.openai = AuthState::Available;
-                        } else {
-                            status.openai = AuthState::Expired;
-                        }
-                    } else {
-                        // No expiry info, assume available
+        if let Ok(creds) = codex::load_credentials() {
+            // Check if we have OAuth tokens (not just API key fallback)
+            if !creds.refresh_token.is_empty() {
+                status.openai_has_oauth = true;
+                // Has OAuth - check expiry if available
+                if let Some(expires_at) = creds.expires_at {
+                    let now_ms = chrono::Utc::now().timestamp_millis();
+                    if expires_at > now_ms {
                         status.openai = AuthState::Available;
+                    } else {
+                        status.openai = AuthState::Expired;
                     }
-                } else if !creds.access_token.is_empty() {
-                    // API key fallback
-                    status.openai_has_api_key = true;
+                } else {
+                    // No expiry info, assume available
                     status.openai = AuthState::Available;
                 }
+            } else if !creds.access_token.is_empty() {
+                // API key fallback
+                status.openai_has_api_key = true;
+                status.openai = AuthState::Available;
             }
-            Err(_) => {}
         }
 
         // Fall back to env var (or combine with OAuth)
@@ -454,17 +447,14 @@ impl AuthStatus {
         }
 
         let mut anthropic = ProviderAuth::default();
-        match claude::load_credentials() {
-            Ok(creds) => {
-                let now_ms = chrono::Utc::now().timestamp_millis();
-                anthropic.has_oauth = true;
-                if creds.expires_at > now_ms {
-                    anthropic.state = AuthState::Available;
-                } else {
-                    anthropic.state = AuthState::Expired;
-                }
+        if let Ok(creds) = claude::load_credentials() {
+            let now_ms = chrono::Utc::now().timestamp_millis();
+            anthropic.has_oauth = true;
+            if creds.expires_at > now_ms {
+                anthropic.state = AuthState::Available;
+            } else {
+                anthropic.state = AuthState::Expired;
             }
-            Err(_) => {}
         }
         if std::env::var("ANTHROPIC_API_KEY").is_ok() {
             anthropic.has_api_key = true;
@@ -486,26 +476,23 @@ impl AuthStatus {
             status.azure = AuthState::Available;
         }
 
-        match codex::load_credentials() {
-            Ok(creds) => {
-                if !creds.refresh_token.is_empty() {
-                    status.openai_has_oauth = true;
-                    if let Some(expires_at) = creds.expires_at {
-                        let now_ms = chrono::Utc::now().timestamp_millis();
-                        if expires_at > now_ms {
-                            status.openai = AuthState::Available;
-                        } else {
-                            status.openai = AuthState::Expired;
-                        }
-                    } else {
+        if let Ok(creds) = codex::load_credentials() {
+            if !creds.refresh_token.is_empty() {
+                status.openai_has_oauth = true;
+                if let Some(expires_at) = creds.expires_at {
+                    let now_ms = chrono::Utc::now().timestamp_millis();
+                    if expires_at > now_ms {
                         status.openai = AuthState::Available;
+                    } else {
+                        status.openai = AuthState::Expired;
                     }
-                } else if !creds.access_token.is_empty() {
-                    status.openai_has_api_key = true;
+                } else {
                     status.openai = AuthState::Available;
                 }
+            } else if !creds.access_token.is_empty() {
+                status.openai_has_api_key = true;
+                status.openai = AuthState::Available;
             }
-            Err(_) => {}
         }
         if std::env::var("OPENAI_API_KEY")
             .ok()
@@ -603,10 +590,10 @@ fn command_exists(command: &str) -> bool {
     }
 
     // Check per-process cache first (O(1) on repeated calls)
-    if let Ok(cache) = COMMAND_EXISTS_CACHE.lock() {
-        if let Some(&cached) = cache.get(command) {
-            return cached;
-        }
+    if let Ok(cache) = COMMAND_EXISTS_CACHE.lock()
+        && let Some(&cached) = cache.get(command)
+    {
+        return cached;
     }
 
     let path_var = match std::env::var_os("PATH") {
@@ -663,7 +650,7 @@ fn is_wsl2_windows_path(dir: &std::path::Path) -> bool {
     }
     if let Some(Component::Normal(drive)) = it.next() {
         let s = drive.to_string_lossy();
-        return s.len() == 1 && s.chars().next().map_or(false, |c| c.is_ascii_alphabetic());
+        return s.len() == 1 && s.chars().next().is_some_and(|c| c.is_ascii_alphabetic());
     }
     false
 }

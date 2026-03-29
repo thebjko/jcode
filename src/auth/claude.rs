@@ -214,24 +214,21 @@ pub fn load_auth_file() -> Result<JcodeAuthFile> {
     let mut auth: JcodeAuthFile = crate::storage::read_json(&path)
         .with_context(|| format!("Could not read jcode credentials from {:?}", path))?;
 
-    if auth.anthropic_accounts.is_empty() {
-        if let Some(legacy) = auth.anthropic.take() {
-            if !legacy.access.is_empty() {
-                crate::logging::info(
-                    "Migrating legacy single-account auth.json to multi-account format",
-                );
-                auth.anthropic_accounts.push(AnthropicAccount {
-                    label: "default".to_string(),
-                    access: legacy.access,
-                    refresh: legacy.refresh,
-                    expires: legacy.expires,
-                    email: None,
-                    subscription_type: Some("max".to_string()),
-                });
-                auth.active_anthropic_account = Some("default".to_string());
-                let _ = save_auth_file(&auth);
-            }
-        }
+    if auth.anthropic_accounts.is_empty()
+        && let Some(legacy) = auth.anthropic.take()
+        && !legacy.access.is_empty()
+    {
+        crate::logging::info("Migrating legacy single-account auth.json to multi-account format");
+        auth.anthropic_accounts.push(AnthropicAccount {
+            label: "default".to_string(),
+            access: legacy.access,
+            refresh: legacy.refresh,
+            expires: legacy.expires,
+            email: None,
+            subscription_type: Some("max".to_string()),
+        });
+        auth.active_anthropic_account = Some("default".to_string());
+        let _ = save_auth_file(&auth);
     }
 
     if relabel_accounts(&mut auth) {

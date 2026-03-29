@@ -70,10 +70,10 @@ impl CopilotApiToken {
 /// 3. ~/.config/github-copilot/apps.json (VS Code)
 pub fn load_github_token() -> Result<String> {
     // 1. Environment variable
-    if let Ok(token) = std::env::var("GITHUB_TOKEN") {
-        if !token.trim().is_empty() {
-            return Ok(token.trim().to_string());
-        }
+    if let Ok(token) = std::env::var("GITHUB_TOKEN")
+        && !token.trim().is_empty()
+    {
+        return Ok(token.trim().to_string());
     }
 
     // Get config directory
@@ -139,7 +139,7 @@ fn load_token_from_json(path: &PathBuf) -> Result<String> {
     let token = select_preferred_token(&config)
         .ok_or_else(|| anyhow::anyhow!("No oauth_token found in {}", path.display()))?;
 
-    return Ok(token.clone());
+    Ok(token.clone())
 }
 
 fn select_preferred_token(
@@ -447,8 +447,6 @@ pub fn choose_default_model(available_models: &[CopilotModelInfo]) -> String {
         "claude-opus-4.6".to_string()
     } else if model_ids.contains(&"claude-sonnet-4.6") {
         "claude-sonnet-4.6".to_string()
-    } else if model_ids.contains(&"claude-sonnet-4") {
-        "claude-sonnet-4".to_string()
     } else {
         "claude-sonnet-4".to_string()
     }
