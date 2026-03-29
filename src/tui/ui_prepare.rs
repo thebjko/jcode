@@ -273,15 +273,13 @@ pub(super) fn prepare_messages(
             Ok(c) => c,
             Err(poisoned) => {
                 let mut c = poisoned.into_inner();
-                c.key = None;
-                c.prepared = None;
+                c.entries.clear();
                 c
             }
         };
-        if cache.key.as_ref() == Some(&key) {
-            if let Some(prepared) = cache.prepared.clone() {
-                return prepared;
-            }
+        let mut cache = cache;
+        if let Some(prepared) = cache.get_exact(&key) {
+            return prepared;
         }
     }
 
@@ -289,8 +287,7 @@ pub(super) fn prepare_messages(
 
     {
         if let Ok(mut cache) = full_prep_cache().lock() {
-            cache.key = Some(key);
-            cache.prepared = Some(prepared.clone());
+            cache.insert(key, prepared.clone());
         }
     }
 

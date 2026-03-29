@@ -1687,10 +1687,37 @@ struct FullPrepCacheKey {
     startup_active: bool,
 }
 
+#[derive(Clone)]
+struct FullPrepCacheEntry {
+    key: FullPrepCacheKey,
+    prepared: Arc<PreparedMessages>,
+}
+
+const FULL_PREP_CACHE_MAX_ENTRIES: usize = 4;
+
 #[derive(Default)]
 struct FullPrepCacheState {
-    key: Option<FullPrepCacheKey>,
-    prepared: Option<Arc<PreparedMessages>>,
+    entries: VecDeque<FullPrepCacheEntry>,
+}
+
+impl FullPrepCacheState {
+    fn get_exact(&mut self, key: &FullPrepCacheKey) -> Option<Arc<PreparedMessages>> {
+        let pos = self.entries.iter().position(|entry| &entry.key == key)?;
+        let entry = self.entries.remove(pos)?;
+        let prepared = entry.prepared.clone();
+        self.entries.push_front(entry);
+        Some(prepared)
+    }
+
+    fn insert(&mut self, key: FullPrepCacheKey, prepared: Arc<PreparedMessages>) {
+        if let Some(pos) = self.entries.iter().position(|entry| entry.key == key) {
+            self.entries.remove(pos);
+        }
+        self.entries.push_front(FullPrepCacheEntry { key, prepared });
+        while self.entries.len() > FULL_PREP_CACHE_MAX_ENTRIES {
+            self.entries.pop_back();
+        }
+    }
 }
 
 static FULL_PREP_CACHE: OnceLock<Mutex<FullPrepCacheState>> = OnceLock::new();
@@ -4069,6 +4096,113 @@ mod tests {
         }
 
         assert_eq!(cache.entries.len(), BODY_CACHE_MAX_ENTRIES);
+        assert!(
+            cache.entries.iter().all(|entry| entry.key.width >= 42),
+            "oldest widths should be evicted"
+        );
+    }
+
+    #[test]
+    fn test_full_prep_cache_state_keeps_multiple_width_entries() {
+        let key_a = FullPrepCacheKey {
+            width: 40,
+            height: 20,
+            diff_mode: crate::config::DiffDisplayMode::Off,
+            messages_version: 1,
+            diagram_mode: crate::config::DiagramDisplayMode::Pinned,
+            centered: false,
+            is_processing: false,
+            streaming_text_len: 0,
+            streaming_text_hash: 0,
+            batch_progress_hash: 0,
+            startup_active: false,
+        };
+        let key_b = FullPrepCacheKey {
+            width: 39,
+            ..key_a.clone()
+        };
+
+        let prepared_a = Arc::new(PreparedMessages {
+            wrapped_lines: vec![Line::from("a")],
+            wrapped_plain_lines: Arc::new(vec!["a".to_string()]),
+            wrapped_copy_offsets: Arc::new(vec![0]),
+            raw_plain_lines: Arc::new(Vec::new()),
+            wrapped_line_map: Arc::new(Vec::new()),
+            wrapped_user_indices: Vec::new(),
+            wrapped_user_prompt_starts: Vec::new(),
+            wrapped_user_prompt_ends: Vec::new(),
+            user_prompt_texts: Vec::new(),
+            image_regions: Vec::new(),
+            edit_tool_ranges: Vec::new(),
+            copy_targets: Vec::new(),
+        });
+        let prepared_b = Arc::new(PreparedMessages {
+            wrapped_lines: vec![Line::from("b")],
+            wrapped_plain_lines: Arc::new(vec!["b".to_string()]),
+            wrapped_copy_offsets: Arc::new(vec![0]),
+            raw_plain_lines: Arc::new(Vec::new()),
+            wrapped_line_map: Arc::new(Vec::new()),
+            wrapped_user_indices: Vec::new(),
+            wrapped_user_prompt_starts: Vec::new(),
+            wrapped_user_prompt_ends: Vec::new(),
+            user_prompt_texts: Vec::new(),
+            image_regions: Vec::new(),
+            edit_tool_ranges: Vec::new(),
+            copy_targets: Vec::new(),
+        });
+
+        let mut cache = FullPrepCacheState::default();
+        cache.insert(key_a.clone(), prepared_a.clone());
+        cache.insert(key_b.clone(), prepared_b.clone());
+
+        let hit_a = cache
+            .get_exact(&key_a)
+            .expect("expected width 40 full prep cache hit");
+        let hit_b = cache
+            .get_exact(&key_b)
+            .expect("expected width 39 full prep cache hit");
+
+        assert!(Arc::ptr_eq(&hit_a, &prepared_a));
+        assert!(Arc::ptr_eq(&hit_b, &prepared_b));
+        assert_eq!(cache.entries.len(), 2);
+    }
+
+    #[test]
+    fn test_full_prep_cache_state_evicts_oldest_entries() {
+        let mut cache = FullPrepCacheState::default();
+
+        for idx in 0..(FULL_PREP_CACHE_MAX_ENTRIES + 2) {
+            let key = FullPrepCacheKey {
+                width: 40 + idx as u16,
+                height: 20,
+                diff_mode: crate::config::DiffDisplayMode::Off,
+                messages_version: 1,
+                diagram_mode: crate::config::DiagramDisplayMode::Pinned,
+                centered: false,
+                is_processing: false,
+                streaming_text_len: 0,
+                streaming_text_hash: 0,
+                batch_progress_hash: 0,
+                startup_active: false,
+            };
+            let prepared = Arc::new(PreparedMessages {
+                wrapped_lines: vec![Line::from(format!("{idx}"))],
+                wrapped_plain_lines: Arc::new(vec![format!("{idx}")]),
+                wrapped_copy_offsets: Arc::new(vec![0]),
+                raw_plain_lines: Arc::new(Vec::new()),
+                wrapped_line_map: Arc::new(Vec::new()),
+                wrapped_user_indices: Vec::new(),
+                wrapped_user_prompt_starts: Vec::new(),
+                wrapped_user_prompt_ends: Vec::new(),
+                user_prompt_texts: Vec::new(),
+                image_regions: Vec::new(),
+                edit_tool_ranges: Vec::new(),
+                copy_targets: Vec::new(),
+            });
+            cache.insert(key, prepared);
+        }
+
+        assert_eq!(cache.entries.len(), FULL_PREP_CACHE_MAX_ENTRIES);
         assert!(
             cache.entries.iter().all(|entry| entry.key.width >= 42),
             "oldest widths should be evicted"
