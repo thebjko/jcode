@@ -7179,6 +7179,50 @@ fn test_remote_tui_state_falls_back_to_cached_model_after_startup_phase_clears()
 }
 
 #[test]
+fn test_new_for_remote_uses_startup_stub_without_loading_full_transcript() {
+    let _guard = crate::storage::lock_test_env();
+    let temp_home = tempfile::TempDir::new().expect("create temp home");
+    let prev_home = std::env::var_os("JCODE_HOME");
+    crate::env::set_var("JCODE_HOME", temp_home.path());
+
+    let session_id = "session_otter_stub_125";
+    let mut session = crate::session::Session::create_with_id(
+        session_id.to_string(),
+        None,
+        Some("remote cached model".to_string()),
+    );
+    session.model = Some("gpt-5.4".to_string());
+    session.append_stored_message(crate::session::StoredMessage {
+        id: "msg-startup-stub".to_string(),
+        role: crate::message::Role::User,
+        content: vec![crate::message::ContentBlock::Text {
+            text: "hello from persisted history".to_string(),
+            cache_control: None,
+        }],
+        display_role: None,
+        timestamp: None,
+        tool_duration_ms: None,
+        token_usage: None,
+    });
+    session.save().expect("save remote session");
+
+    let app = App::new_for_remote(Some(session_id.to_string()));
+    assert_eq!(app.session_id(), session_id);
+    assert!(app.display_messages().is_empty());
+    assert!(app.session.messages.is_empty());
+    assert_eq!(
+        crate::tui::TuiState::provider_model(&app),
+        "connecting to server…"
+    );
+
+    if let Some(prev_home) = prev_home {
+        crate::env::set_var("JCODE_HOME", prev_home);
+    } else {
+        crate::env::remove_var("JCODE_HOME");
+    }
+}
+
+#[test]
 fn test_remote_tui_state_shows_connected_after_startup_phase_clears_without_model() {
     let mut app = App::new_for_remote(None);
     app.remote_session_id = Some("session_connected_123".to_string());

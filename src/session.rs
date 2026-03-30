@@ -293,6 +293,53 @@ pub struct Session {
     provider_messages_cache_mode: PersistVectorMode,
 }
 
+#[derive(Debug, Deserialize)]
+struct SessionStartupStub {
+    id: String,
+    #[serde(default)]
+    parent_id: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+    #[serde(default)]
+    compaction: Option<StoredCompactionState>,
+    #[serde(default)]
+    provider_session_id: Option<String>,
+    #[serde(default)]
+    provider_key: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    subagent_model: Option<String>,
+    #[serde(default)]
+    improve_mode: Option<SessionImproveMode>,
+    #[serde(default)]
+    autoreview_enabled: Option<bool>,
+    #[serde(default)]
+    autojudge_enabled: Option<bool>,
+    #[serde(default)]
+    is_canary: bool,
+    #[serde(default)]
+    testing_build: Option<String>,
+    #[serde(default)]
+    working_dir: Option<String>,
+    #[serde(default)]
+    short_name: Option<String>,
+    #[serde(default)]
+    status: SessionStatus,
+    #[serde(default)]
+    last_pid: Option<u32>,
+    #[serde(default)]
+    last_active_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    is_debug: bool,
+    #[serde(default)]
+    saved: bool,
+    #[serde(default)]
+    save_label: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 struct SessionJournalMeta {
     parent_id: Option<String>,
@@ -848,6 +895,45 @@ impl Session {
     pub fn load(session_id: &str) -> Result<Self> {
         let path = session_path(session_id)?;
         Self::load_from_path(&path)
+    }
+
+    /// Load only the metadata needed for remote-client startup.
+    ///
+    /// This intentionally skips heavyweight transcript vectors so the remote
+    /// client can paint quickly while the server performs the authoritative
+    /// session restore + history bootstrap.
+    pub fn load_startup_stub(session_id: &str) -> Result<Self> {
+        let path = session_path(session_id)?;
+        let reader = BufReader::new(std::fs::File::open(&path)?);
+        let stub: SessionStartupStub = serde_json::from_reader(reader)?;
+
+        let mut session = Self::create_with_id(stub.id, stub.parent_id, stub.title);
+        session.created_at = stub.created_at;
+        session.updated_at = stub.updated_at;
+        session.compaction = stub.compaction;
+        session.provider_session_id = stub.provider_session_id;
+        session.provider_key = stub.provider_key;
+        session.model = stub.model;
+        session.subagent_model = stub.subagent_model;
+        session.improve_mode = stub.improve_mode;
+        session.autoreview_enabled = stub.autoreview_enabled;
+        session.autojudge_enabled = stub.autojudge_enabled;
+        session.is_canary = stub.is_canary;
+        session.testing_build = stub.testing_build;
+        session.working_dir = stub.working_dir;
+        session.short_name = stub.short_name;
+        session.status = stub.status;
+        session.last_pid = stub.last_pid;
+        session.last_active_at = stub.last_active_at;
+        session.is_debug = stub.is_debug;
+        session.saved = stub.saved;
+        session.save_label = stub.save_label;
+        session.messages.clear();
+        session.env_snapshots.clear();
+        session.memory_injections.clear();
+        session.replay_events.clear();
+        session.reset_persist_state(true);
+        Ok(session)
     }
 
     pub fn save(&mut self) -> Result<()> {
@@ -1545,6 +1631,72 @@ mod tests {
                 .as_nanos()
         );
         assert!(!session_exists(&random_id));
+    }
+
+    #[test]
+    fn load_startup_stub_preserves_metadata_but_skips_heavy_vectors() {
+        let _env_lock = lock_env();
+        let temp_home = tempfile::Builder::new()
+            .prefix("jcode-startup-stub-test-")
+            .tempdir()
+            .expect("create temp JCODE_HOME");
+        let _home = EnvVarGuard::set("JCODE_HOME", temp_home.path().as_os_str());
+
+        let session_id = "session_startup_stub_roundtrip";
+        let mut session = Session::create_with_id(
+            session_id.to_string(),
+            Some("parent_123".to_string()),
+            Some("startup stub".to_string()),
+        );
+        session.model = Some("gpt-5.4".to_string());
+        session.provider_key = Some("openai".to_string());
+        session.set_canary("self-dev");
+        session.append_stored_message(StoredMessage {
+            id: "msg_1".to_string(),
+            role: Role::User,
+            content: vec![ContentBlock::Text {
+                text: "hello world".to_string(),
+                cache_control: None,
+            }],
+            display_role: None,
+            timestamp: Some(Utc::now()),
+            tool_duration_ms: None,
+            token_usage: None,
+        });
+        session.record_env_snapshot(EnvSnapshot {
+            captured_at: Utc::now(),
+            reason: "resume".to_string(),
+            session_id: session_id.to_string(),
+            working_dir: Some(temp_home.path().to_string_lossy().to_string()),
+            provider: "openai".to_string(),
+            model: "gpt-5.4".to_string(),
+            jcode_version: "test".to_string(),
+            jcode_git_hash: Some("abc123".to_string()),
+            jcode_git_dirty: Some(false),
+            os: "linux".to_string(),
+            arch: "x86_64".to_string(),
+            pid: 123,
+            is_selfdev: true,
+            is_debug: false,
+            is_canary: true,
+            testing_build: Some("self-dev".to_string()),
+            working_git: None,
+        });
+        session.record_memory_injection("summary".to_string(), "content".to_string(), 1, 5);
+        session.record_replay_display_message("system", Some("Launch".to_string()), "boot");
+        session.save().expect("save session");
+
+        let stub = Session::load_startup_stub(session_id).expect("load startup stub");
+        assert_eq!(stub.id, session_id);
+        assert_eq!(stub.parent_id.as_deref(), Some("parent_123"));
+        assert_eq!(stub.title.as_deref(), Some("startup stub"));
+        assert_eq!(stub.model.as_deref(), Some("gpt-5.4"));
+        assert_eq!(stub.provider_key.as_deref(), Some("openai"));
+        assert!(stub.is_canary);
+        assert!(stub.messages.is_empty());
+        assert!(stub.env_snapshots.is_empty());
+        assert!(stub.memory_injections.is_empty());
+        assert!(stub.replay_events.is_empty());
     }
 
     #[test]

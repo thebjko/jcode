@@ -25,16 +25,18 @@ use crate::message::{
 };
 use crate::protocol::{HistoryMessage, ServerEvent};
 use crate::provider::{NativeToolResult, Provider};
-use crate::session::{EnvSnapshot, Session, SessionStatus, StoredDisplayRole, StoredMessage};
+use crate::session::{
+    EnvSnapshot, GitState, Session, SessionStatus, StoredDisplayRole, StoredMessage,
+};
 use crate::skill::SkillRegistry;
 use crate::tool::{Registry, ToolContext, ToolExecutionMode};
 use anyhow::Result;
 use chrono::Utc;
 use futures::StreamExt;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, mpsc};
 
@@ -47,7 +49,40 @@ pub use jcode_agent_runtime::{
 const JCODE_NATIVE_TOOLS: &[&str] = &["selfdev", "communicate"];
 static RECOVERED_TEXT_WRAPPED_TOOL_CALLS: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
+static JCODE_REPO_SOURCE_STATE: LazyLock<(Option<String>, Option<bool>)> = LazyLock::new(|| {
+    crate::build::get_repo_dir()
+        .map(|repo_dir| {
+            (
+                build::current_git_hash(&repo_dir).ok(),
+                build::is_working_tree_dirty(&repo_dir).ok(),
+            )
+        })
+        .unwrap_or((None, None))
+});
+static WORKING_GIT_STATE_CACHE: LazyLock<StdMutex<HashMap<PathBuf, Option<GitState>>>> =
+    LazyLock::new(|| StdMutex::new(HashMap::new()));
 const STREAM_KEEPALIVE_PONG_ID: u64 = 0;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EnvSnapshotDetail {
+    Minimal,
+    Full,
+}
+
+fn cached_git_state_for_dir(dir: &Path) -> Option<GitState> {
+    let cache_key = dir.to_path_buf();
+    if let Ok(cache) = WORKING_GIT_STATE_CACHE.lock()
+        && let Some(state) = cache.get(&cache_key)
+    {
+        return state.clone();
+    }
+
+    let state = git_state_for_dir(dir);
+    if let Ok(mut cache) = WORKING_GIT_STATE_CACHE.lock() {
+        cache.insert(cache_key, state.clone());
+    }
+    state
+}
 
 /// Token usage from the last API request
 #[derive(Debug, Clone, Default, serde::Serialize)]
@@ -477,7 +512,7 @@ impl Agent {
 
     /// Record a lightweight environment snapshot for post-mortem debugging
     fn log_env_snapshot(&mut self, reason: &str) {
-        let snapshot = self.build_env_snapshot(reason);
+        let snapshot = self.build_env_snapshot(reason, self.env_snapshot_detail());
         self.session.record_env_snapshot(snapshot.clone());
         if !self.session.messages.is_empty() {
             let _ = self.session.save();
@@ -489,20 +524,27 @@ impl Agent {
         }
     }
 
-    fn build_env_snapshot(&self, reason: &str) -> EnvSnapshot {
-        let (jcode_git_hash, jcode_git_dirty) = if let Some(repo_dir) = build::get_repo_dir() {
-            (
-                build::current_git_hash(&repo_dir).ok(),
-                build::is_working_tree_dirty(&repo_dir).ok(),
-            )
+    fn env_snapshot_detail(&self) -> EnvSnapshotDetail {
+        if self.session.messages.is_empty() {
+            EnvSnapshotDetail::Minimal
         } else {
-            (None, None)
+            EnvSnapshotDetail::Full
+        }
+    }
+
+    fn build_env_snapshot(&self, reason: &str, detail: EnvSnapshotDetail) -> EnvSnapshot {
+        let (jcode_git_hash, jcode_git_dirty) = match detail {
+            EnvSnapshotDetail::Full => JCODE_REPO_SOURCE_STATE.clone(),
+            EnvSnapshotDetail::Minimal => (None, None),
         };
 
         let working_dir = self.session.working_dir.clone();
-        let working_git = working_dir
-            .as_deref()
-            .and_then(|dir| git_state_for_dir(Path::new(dir)));
+        let working_git = match detail {
+            EnvSnapshotDetail::Full => working_dir
+                .as_deref()
+                .and_then(|dir| cached_git_state_for_dir(Path::new(dir))),
+            EnvSnapshotDetail::Minimal => None,
+        };
 
         EnvSnapshot {
             captured_at: Utc::now(),
@@ -4268,5 +4310,36 @@ mod tests {
         assert_eq!(agent.last_usage.input_tokens, 0);
         assert_eq!(agent.last_usage.output_tokens, 0);
         assert!(agent.locked_tools.is_none());
+    }
+
+    #[tokio::test]
+    async fn env_snapshot_detail_is_minimal_for_empty_sessions_and_full_after_history() {
+        let _guard = crate::storage::lock_test_env();
+        let provider: Arc<dyn Provider> = Arc::new(NativeAutoCompactionProvider);
+        let registry = Registry::new(provider.clone()).await;
+        let mut agent = Agent::new(provider, registry);
+
+        assert_eq!(agent.env_snapshot_detail(), EnvSnapshotDetail::Minimal);
+        let minimal = agent.build_env_snapshot("create", agent.env_snapshot_detail());
+        assert!(minimal.jcode_git_hash.is_none());
+        assert!(minimal.jcode_git_dirty.is_none());
+        assert!(minimal.working_git.is_none());
+
+        agent
+            .session
+            .append_stored_message(crate::session::StoredMessage {
+                id: "msg_env_snapshot_detail".to_string(),
+                role: crate::message::Role::User,
+                content: vec![ContentBlock::Text {
+                    text: "hello".to_string(),
+                    cache_control: None,
+                }],
+                display_role: None,
+                timestamp: None,
+                tool_duration_ms: None,
+                token_usage: None,
+            });
+
+        assert_eq!(agent.env_snapshot_detail(), EnvSnapshotDetail::Full);
     }
 }

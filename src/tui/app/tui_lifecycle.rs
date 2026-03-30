@@ -659,7 +659,7 @@ impl App {
         let registry = Registry::empty();
         let session = resume_session
             .as_ref()
-            .and_then(|session_id| Session::load(session_id).ok())
+            .and_then(|session_id| Session::load_startup_stub(session_id).ok())
             .unwrap_or_else(|| Session::create(None, None));
         let mut app = Self::new_minimal_with_session(provider, registry, session);
         app.is_remote = true;
