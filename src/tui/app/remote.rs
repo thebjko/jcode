@@ -3033,10 +3033,11 @@ fn handle_disconnected_local_command(app: &mut App, trimmed: &str) -> bool {
         || super::commands::handle_session_command(app, trimmed)
         || super::commands::handle_goals_command(app, trimmed)
         || super::commands::handle_config_command(app, trimmed)
+        || super::commands::handle_debug_command(app, trimmed)
         || super::commands::handle_model_command(app, trimmed)
         || super::state_ui::handle_info_command(app, trimmed)
         || super::auth::handle_auth_command(app, trimmed)
-        || (trimmed == "/restart" && super::tui_lifecycle::handle_dev_command(app, trimmed));
+        || super::commands::handle_dev_command(app, trimmed);
 
     if handled {
         app.input.clear();

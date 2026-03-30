@@ -9313,6 +9313,58 @@ fn test_disconnected_key_handler_runs_model_picker_locally() {
 }
 
 #[test]
+fn test_disconnected_key_handler_runs_reload_locally() {
+    use std::time::SystemTime;
+
+    let mut app = create_test_app();
+    let exe = crate::build::launcher_binary_path().expect("launcher binary path");
+    let mut created = false;
+    if !exe.exists() {
+        if let Some(parent) = exe.parent() {
+            std::fs::create_dir_all(parent).expect("create launcher dir");
+        }
+        std::fs::write(&exe, "test").expect("write launcher binary fixture");
+        created = true;
+    }
+
+    app.client_binary_mtime = Some(SystemTime::UNIX_EPOCH);
+    app.input = "/reload".to_string();
+    app.cursor_pos = app.input.len();
+
+    remote::handle_disconnected_key(&mut app, KeyCode::Enter, KeyModifiers::empty()).unwrap();
+
+    assert!(app.input.is_empty());
+    assert!(app.queued_messages().is_empty());
+    assert!(app.reload_requested.is_some());
+    assert!(app.should_quit);
+
+    if created {
+        let _ = std::fs::remove_file(&exe);
+    }
+}
+
+#[test]
+fn test_disconnected_key_handler_runs_debug_command_locally() {
+    crate::tui::visual_debug::disable();
+
+    let mut app = create_test_app();
+    app.input = "/debug-visual off".to_string();
+    app.cursor_pos = app.input.len();
+
+    remote::handle_disconnected_key(&mut app, KeyCode::Enter, KeyModifiers::empty()).unwrap();
+
+    assert!(app.input.is_empty());
+    assert!(app.queued_messages().is_empty());
+    assert_eq!(app.status_notice(), Some("Visual debug: OFF".to_string()));
+    let last = app
+        .display_messages()
+        .last()
+        .expect("missing debug message");
+    assert_eq!(last.role, "system");
+    assert_eq!(last.content, "Visual debugging disabled.");
+}
+
+#[test]
 fn test_disconnected_key_handler_does_not_queue_server_commands() {
     let mut app = create_test_app();
     app.input = "/server-reload".to_string();
