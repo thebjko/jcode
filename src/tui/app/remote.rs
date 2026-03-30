@@ -2691,9 +2691,9 @@ pub(super) fn handle_server_event(
                 app.follow_chat_bottom();
                 if prev_session_id.is_some() {
                     app.queued_messages.clear();
+                    app.interleave_message = None;
+                    app.pending_soft_interrupts.clear();
                 }
-                app.interleave_message = None;
-                app.pending_soft_interrupts.clear();
                 app.remote_total_tokens = None;
                 app.remote_side_pane_images.clear();
                 app.remote_swarm_members.clear();
