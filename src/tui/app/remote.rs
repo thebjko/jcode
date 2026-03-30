@@ -25,6 +25,8 @@ struct SwarmNotificationPresentation {
     status_notice: String,
 }
 
+const CONNECTION_MESSAGE_TITLE: &str = "Connection";
+
 #[derive(Default)]
 pub(super) struct RemoteRunState {
     pub reconnect_attempts: u32,
@@ -1788,7 +1790,7 @@ pub(super) fn handle_disconnect(
         content: reconnect_status_message(app, state, &detail),
         tool_calls: Vec::new(),
         duration_secs: None,
-        title: None,
+        title: Some(CONNECTION_MESSAGE_TITLE.to_string()),
         tool_data: None,
     });
     state.disconnect_msg_idx = Some(app.display_messages.len() - 1);

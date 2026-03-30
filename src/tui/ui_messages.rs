@@ -213,9 +213,34 @@ pub(crate) fn render_system_message(
     width: u16,
     _diff_mode: crate::config::DiffDisplayMode,
 ) -> Vec<Line<'static>> {
+    if let Some(title) = msg.title.as_deref() {
+        if title == "Reload" {
+            return render_reload_system_message(msg, width);
+        }
+        if title == "Connection" {
+            return render_connection_system_message(msg, width);
+        }
+    }
+
     let centered = markdown::center_code_blocks();
     let wrap_width = centered_wrap_width(width.saturating_sub(4), centered, 96);
     let mut lines = markdown::render_markdown_with_width(&msg.content, Some(wrap_width));
+    if lines.iter().any(|line| line.width() > wrap_width) {
+        lines = msg
+            .content
+            .lines()
+            .flat_map(|line| {
+                if line.is_empty() {
+                    vec![Line::from("")]
+                } else {
+                    split_by_display_width(line, wrap_width)
+                        .into_iter()
+                        .map(Line::from)
+                        .collect::<Vec<_>>()
+                }
+            })
+            .collect();
+    }
     if centered {
         left_pad_lines_for_centered_mode(&mut lines, width);
     }
@@ -223,6 +248,161 @@ pub(crate) fn render_system_message(
         for span in &mut line.spans {
             span.style.fg = Some(system_message_color());
         }
+    }
+    lines
+}
+
+fn render_reload_system_message(msg: &DisplayMessage, width: u16) -> Vec<Line<'static>> {
+    let centered = markdown::center_code_blocks();
+    let border_style = Style::default().fg(rgb(120, 180, 255));
+    let label_style = Style::default().fg(dim_color());
+    let text_style = Style::default().fg(rgb(220, 236, 255));
+    let max_box_width = if centered {
+        (width.saturating_sub(4) as usize).min(96)
+    } else {
+        (width.saturating_sub(2) as usize).min(88)
+    }
+    .max(20);
+    let inner_width = max_box_width.saturating_sub(4).max(1);
+
+    let mut box_content = Vec::new();
+    let mut non_empty_lines = msg
+        .content
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .peekable();
+
+    if non_empty_lines.peek().is_none() {
+        box_content.push(Line::from(Span::styled("No reload details.", label_style)));
+    } else {
+        for (idx, line) in non_empty_lines.enumerate() {
+            if idx > 0 {
+                box_content.push(Line::from(""));
+            }
+            for chunk in split_by_display_width(line, inner_width) {
+                box_content.push(Line::from(Span::styled(chunk, text_style)));
+            }
+        }
+    }
+
+    let mut lines = render_rounded_box("⚡ reload", box_content, max_box_width, border_style);
+    if centered {
+        left_pad_lines_for_centered_mode(&mut lines, width);
+    }
+    lines
+}
+
+fn split_resume_hint(detail: &str) -> (&str, Option<&str>) {
+    if let Some((main, hint)) = detail.split_once(" · resume: ") {
+        (main.trim(), Some(hint.trim()))
+    } else {
+        (detail.trim(), None)
+    }
+}
+
+fn parse_connection_retry_message(content: &str) -> Option<(String, String, Option<String>)> {
+    let rest = content.strip_prefix("⚡ Connection lost — retrying (attempt ")?;
+    let (attempt_and_elapsed, detail) = rest.split_once(") — ")?;
+    let (attempt, elapsed) = attempt_and_elapsed.split_once(", ")?;
+    let (detail, hint) = split_resume_hint(detail);
+    Some((
+        format!("Retrying · attempt {} · {}", attempt.trim(), elapsed.trim()),
+        detail.to_string(),
+        hint.map(str::to_string),
+    ))
+}
+
+fn parse_connection_waiting_message(content: &str) -> Option<(String, String, Option<String>)> {
+    let rest = content.strip_prefix("⚡ Server reload in progress — waiting for handoff (")?;
+    let (elapsed, detail) = rest.split_once(") — ")?;
+    let (detail, hint) = split_resume_hint(detail);
+    Some((
+        format!("Waiting for handoff · {}", elapsed.trim()),
+        detail.to_string(),
+        hint.map(str::to_string),
+    ))
+}
+
+fn render_connection_system_message(msg: &DisplayMessage, width: u16) -> Vec<Line<'static>> {
+    let centered = markdown::center_code_blocks();
+    let content = msg.content.trim();
+    let max_box_width = if centered {
+        (width.saturating_sub(4) as usize).min(96)
+    } else {
+        (width.saturating_sub(2) as usize).min(88)
+    }
+    .max(20);
+    let inner_width = max_box_width.saturating_sub(4).max(1);
+
+    let (title, border_color, status_color, status_line, detail, hint) =
+        if let Some((status_line, detail, hint)) = parse_connection_retry_message(content) {
+            (
+                "⚡ reconnecting",
+                rgb(255, 193, 94),
+                rgb(255, 220, 140),
+                status_line,
+                Some(detail),
+                hint,
+            )
+        } else if let Some((status_line, detail, hint)) = parse_connection_waiting_message(content)
+        {
+            (
+                "⚡ waiting for reload",
+                rgb(120, 180, 255),
+                rgb(180, 215, 255),
+                status_line,
+                Some(detail),
+                hint,
+            )
+        } else if content.starts_with("⏳ Starting server") {
+            (
+                "⏳ starting server",
+                rgb(255, 193, 94),
+                rgb(255, 220, 140),
+                "Starting shared server".to_string(),
+                None,
+                None,
+            )
+        } else {
+            let mut lines = markdown::render_markdown_with_width(content, Some(inner_width));
+            if centered {
+                left_pad_lines_for_centered_mode(&mut lines, width);
+            }
+            for line in &mut lines {
+                for span in &mut line.spans {
+                    span.style.fg = Some(system_message_color());
+                }
+            }
+            return lines;
+        };
+
+    let border_style = Style::default().fg(border_color);
+    let status_style = Style::default().fg(status_color).bold();
+    let label_style = Style::default().fg(dim_color());
+    let body_style = Style::default().fg(rgb(225, 232, 245));
+    let hint_style = Style::default().fg(rgb(170, 200, 255));
+    let mut box_content = vec![Line::from(Span::styled(status_line, status_style))];
+
+    if let Some(detail) = detail.filter(|detail| !detail.is_empty()) {
+        box_content.push(Line::from(""));
+        box_content.push(Line::from(Span::styled("Detail", label_style)));
+        for chunk in split_by_display_width(&detail, inner_width) {
+            box_content.push(Line::from(Span::styled(chunk, body_style)));
+        }
+    }
+
+    if let Some(hint) = hint.filter(|hint| !hint.is_empty()) {
+        box_content.push(Line::from(""));
+        box_content.push(Line::from(Span::styled("Resume", label_style)));
+        for chunk in split_by_display_width(&hint, inner_width) {
+            box_content.push(Line::from(Span::styled(chunk, hint_style)));
+        }
+    }
+
+    let mut lines = render_rounded_box(title, box_content, max_box_width, border_style);
+    if centered {
+        left_pad_lines_for_centered_mode(&mut lines, width);
     }
     lines
 }
@@ -951,6 +1131,48 @@ mod tests {
         );
 
         crate::tui::markdown::set_center_code_blocks(saved);
+    }
+
+    #[test]
+    fn render_system_message_uses_reload_card_for_reload_title() {
+        let msg =
+            DisplayMessage::system("Reloading server with newer binary...").with_title("Reload");
+
+        let lines = render_system_message(&msg, 80, crate::config::DiffDisplayMode::Off);
+        let plain = lines
+            .iter()
+            .map(extract_line_text)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(
+            plain.contains("reload"),
+            "expected reload card title: {plain}"
+        );
+        assert!(plain.contains("Reloading server with newer binary"));
+    }
+
+    #[test]
+    fn render_system_message_uses_connection_card_for_reconnect_status() {
+        let msg = DisplayMessage::system(
+            "⚡ Connection lost — retrying (attempt 2, 7s) — connection reset by server · resume: jcode --resume koala",
+        )
+        .with_title("Connection");
+
+        let lines = render_system_message(&msg, 80, crate::config::DiffDisplayMode::Off);
+        let plain = lines
+            .iter()
+            .map(extract_line_text)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(
+            plain.contains("reconnecting"),
+            "expected reconnect card title: {plain}"
+        );
+        assert!(plain.contains("Retrying · attempt 2 · 7s"));
+        assert!(plain.contains("connection reset by server"));
+        assert!(plain.contains("jcode --resume koala"));
     }
 
     #[test]

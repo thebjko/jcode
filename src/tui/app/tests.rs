@@ -6219,6 +6219,7 @@ fn test_handle_remote_disconnect_flushes_streaming_text_and_sets_reconnect_state
         .last()
         .expect("missing reconnect status message");
     assert_eq!(last.role, "system");
+    assert_eq!(last.title.as_deref(), Some("Connection"));
     assert!(last.content.contains("⚡ Connection lost — retrying"));
     assert!(last.content.contains("connection to server dropped"));
     assert!(

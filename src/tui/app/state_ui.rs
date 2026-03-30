@@ -337,6 +337,24 @@ impl App {
         }
     }
 
+    pub(super) fn replace_display_message_title_and_content(
+        &mut self,
+        idx: usize,
+        title: Option<String>,
+        content: String,
+    ) -> bool {
+        if let Some(message) = self.display_messages.get_mut(idx) {
+            if message.title != title || message.content != content {
+                message.title = title;
+                message.content = content;
+                self.bump_display_messages_version();
+            }
+            true
+        } else {
+            false
+        }
+    }
+
     pub(super) fn remove_display_message(&mut self, idx: usize) -> Option<DisplayMessage> {
         if idx < self.display_messages.len() {
             let removed = self.display_messages.remove(idx);
