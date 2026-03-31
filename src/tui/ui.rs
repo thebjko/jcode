@@ -479,18 +479,10 @@ pub(crate) fn align_if_unset(line: Line<'static>, align: Alignment) -> Line<'sta
     }
 }
 
-/// Extract semantic version from full version string (e.g., "v0.1.0-dev (abc123)" -> "v0.1.0")
+/// Extract semantic version for UI display/grouping.
 fn semver() -> &'static str {
     static SEMVER: OnceLock<String> = OnceLock::new();
-    SEMVER.get_or_init(|| {
-        let full = env!("JCODE_VERSION");
-        // Extract just the version part (before any space or -dev suffix for display)
-        if let Some(space_pos) = full.find(' ') {
-            full[..space_pos].trim_end_matches("-dev").to_string()
-        } else {
-            full.trim_end_matches("-dev").to_string()
-        }
-    })
+    SEMVER.get_or_init(|| format!("v{}", env!("JCODE_SEMVER")))
 }
 
 /// True when this process is running from the stable release binary path.

@@ -72,6 +72,10 @@ pub fn is_release_build() -> bool {
     option_env!("JCODE_RELEASE_BUILD").is_some()
 }
 
+fn current_update_semver() -> &'static str {
+    env!("JCODE_UPDATE_SEMVER")
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct GitHubRelease {
     pub tag_name: String,
@@ -452,11 +456,15 @@ fn install_main_source_update_blocking(latest_sha: &str) -> Result<PathBuf> {
 
 fn prepare_stable_update_blocking() -> Result<PreparedUpdate> {
     let current_version = env!("JCODE_VERSION");
+    let current_update_version = current_update_semver();
     let release = fetch_latest_release_blocking()?;
     let release_version = release.tag_name.trim_start_matches('v');
 
-    if release_version == current_version.trim_start_matches('v')
-        || !version_is_newer(release_version, current_version.trim_start_matches('v'))
+    if release_version == current_update_version.trim_start_matches('v')
+        || !version_is_newer(
+            release_version,
+            current_update_version.trim_start_matches('v'),
+        )
     {
         return Ok(PreparedUpdate::None {
             current: current_version.to_string(),
@@ -660,7 +668,7 @@ pub fn check_for_update_blocking() -> Result<Option<GitHubRelease>> {
 }
 
 fn check_for_stable_update_blocking() -> Result<Option<GitHubRelease>> {
-    let current_version = env!("JCODE_VERSION");
+    let current_version = current_update_semver();
     let release = fetch_latest_release_blocking()?;
 
     let release_version = release.tag_name.trim_start_matches('v');
@@ -743,7 +751,7 @@ fn check_for_main_update_blocking() -> Result<Option<GitHubRelease>> {
             .any(|a| a.name.starts_with(asset_name));
         if has_asset {
             let release_version = release.tag_name.trim_start_matches('v');
-            let current_version = env!("JCODE_VERSION").trim_start_matches('v');
+            let current_version = current_update_semver().trim_start_matches('v');
             if version_is_newer(release_version, current_version) {
                 return Ok(Some(release));
             }
