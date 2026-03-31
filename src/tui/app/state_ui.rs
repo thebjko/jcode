@@ -1412,6 +1412,7 @@ impl App {
                 | "/account claude remove"
                 | "/account openai switch"
                 | "/account openai remove"
+                | "/usage"
                 | "/subscription"
                 | "/memory"
                 | "/goals"

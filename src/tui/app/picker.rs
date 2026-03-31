@@ -12,6 +12,9 @@ enum InlinePickerPreviewRequest {
     Login {
         filter: String,
     },
+    Usage {
+        filter: String,
+    },
     Account {
         provider_filter: Option<String>,
         filter: String,
@@ -197,6 +200,23 @@ impl App {
         None
     }
 
+    pub(super) fn usage_picker_preview_filter(input: &str) -> Option<String> {
+        let trimmed = input.trim_start();
+        let rest = trimmed.strip_prefix("/usage")?;
+        if rest.is_empty() {
+            return Some(String::new());
+        }
+        if rest
+            .chars()
+            .next()
+            .map(|c| c.is_whitespace())
+            .unwrap_or(false)
+        {
+            return Some(rest.trim_start().to_string());
+        }
+        None
+    }
+
     fn account_picker_preview_request(&self, input: &str) -> Option<InlinePickerPreviewRequest> {
         let trimmed = input.trim_start();
         let rest = trimmed
@@ -286,6 +306,10 @@ impl App {
         Self::model_picker_preview_filter(input)
             .map(|filter| InlinePickerPreviewRequest::Model { filter })
             .or_else(|| {
+                Self::usage_picker_preview_filter(input)
+                    .map(|filter| InlinePickerPreviewRequest::Usage { filter })
+            })
+            .or_else(|| {
                 Self::login_picker_preview_filter(input)
                     .map(|filter| InlinePickerPreviewRequest::Login { filter })
             })
@@ -309,6 +333,9 @@ impl App {
             (_, None) => true,
             (InlinePickerPreviewRequest::Model { .. }, Some(picker)) => {
                 picker.preview && picker.kind != PickerKind::Model
+            }
+            (InlinePickerPreviewRequest::Usage { .. }, Some(picker)) => {
+                !picker.preview || picker.kind != PickerKind::Usage
             }
             (InlinePickerPreviewRequest::Login { .. }, Some(picker)) => {
                 !picker.preview || picker.kind != PickerKind::Login
@@ -342,6 +369,7 @@ impl App {
                                 }) => Some(provider_id.as_str()),
                                 PickerSelection::Model
                                 | PickerSelection::Login(_)
+                                | PickerSelection::Usage { .. }
                                 | PickerSelection::AgentTarget(_)
                                 | PickerSelection::AgentModelChoice { .. } => None,
                                 PickerSelection::Account(AccountPickerSelection::OpenCenter {
@@ -356,6 +384,7 @@ impl App {
             let saved_cursor = self.cursor_pos;
             match &request {
                 InlinePickerPreviewRequest::Model { .. } => self.open_model_picker(),
+                InlinePickerPreviewRequest::Usage { .. } => self.open_usage_picker_loading(),
                 InlinePickerPreviewRequest::Login { .. } => self.open_login_picker_inline(),
                 InlinePickerPreviewRequest::Account {
                     provider_filter, ..
@@ -373,6 +402,7 @@ impl App {
             if picker.preview {
                 picker.filter = match request {
                     InlinePickerPreviewRequest::Model { filter }
+                    | InlinePickerPreviewRequest::Usage { filter }
                     | InlinePickerPreviewRequest::Login { filter }
                     | InlinePickerPreviewRequest::Account { filter, .. } => filter,
                 };
@@ -393,6 +423,19 @@ impl App {
 
         if let Some(ref mut picker) = self.picker_state {
             picker.preview = false;
+        }
+        if self
+            .picker_state
+            .as_ref()
+            .map(|picker| picker.kind == PickerKind::Usage)
+            .unwrap_or(false)
+        {
+            if let Some(ref mut picker) = self.picker_state {
+                picker.column = 0;
+            }
+            self.input.clear();
+            self.cursor_pos = 0;
+            return true;
         }
         self.input.clear();
         self.cursor_pos = 0;
@@ -1062,7 +1105,8 @@ impl App {
                         return Ok(true);
                     }
                     picker.preview = false;
-                    picker.column = if picker.kind == PickerKind::Account {
+                    picker.column = if matches!(picker.kind, PickerKind::Account | PickerKind::Usage)
+                    {
                         0
                     } else {
                         2
@@ -1612,6 +1656,29 @@ impl App {
                         self.picker_state = None;
                         self.start_login_provider(provider);
                     }
+                    PickerSelection::Usage {
+                        id,
+                        title,
+                        subtitle,
+                        status,
+                        detail_lines,
+                    } => {
+                        self.picker_state = None;
+                        self.usage_overlay = Some(std::cell::RefCell::new(
+                            crate::tui::usage_overlay::UsageOverlay::new(
+                                "Usage",
+                                vec![crate::tui::usage_overlay::UsageOverlayItem::new(
+                                    id,
+                                    title.clone(),
+                                    subtitle,
+                                    status,
+                                    detail_lines,
+                                )],
+                                crate::tui::usage_overlay::UsageOverlaySummary::default(),
+                            ),
+                        ));
+                        self.set_status_notice(format!("Usage → {}", title));
+                    }
                     PickerSelection::AgentTarget(target) => {
                         self.open_agent_model_picker(target);
                     }
@@ -1816,6 +1883,7 @@ impl App {
                                 ..
                             }) => "manage",
                             PickerSelection::Model
+                            | PickerSelection::Usage { .. }
                             | PickerSelection::Login(_)
                             | PickerSelection::AgentTarget(_)
                             | PickerSelection::AgentModelChoice { .. } => "",
@@ -1838,6 +1906,23 @@ impl App {
                             .map(|route| route.detail.as_str())
                             .unwrap_or("");
                         format!("{} {} {} {}", m.name, auth_kind, state, detail)
+                    } else if picker.kind == PickerKind::Usage {
+                        let status = m
+                            .routes
+                            .get(m.selected_route)
+                            .map(|route| route.provider.as_str())
+                            .unwrap_or("");
+                        let window = m
+                            .routes
+                            .get(m.selected_route)
+                            .map(|route| route.api_method.as_str())
+                            .unwrap_or("");
+                        let detail = m
+                            .routes
+                            .get(m.selected_route)
+                            .map(|route| route.detail.as_str())
+                            .unwrap_or("");
+                        format!("{} {} {} {}", m.name, status, window, detail)
                     } else {
                         m.name.clone()
                     };

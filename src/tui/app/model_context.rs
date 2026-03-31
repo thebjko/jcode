@@ -654,6 +654,57 @@ impl App {
         use crate::tui::usage_overlay::{
             UsageOverlay, UsageOverlayItem, UsageOverlayStatus, UsageOverlaySummary,
         };
+        use crate::tui::{ModelEntry, PickerKind, PickerSelection, PickerState, RouteOption};
+
+        #[derive(Clone)]
+        struct UsageViewRow {
+            id: String,
+            title: String,
+            subtitle: String,
+            status: UsageOverlayStatus,
+            window_summary: String,
+            detail_lines: Vec<String>,
+        }
+
+        impl UsageViewRow {
+            fn overlay_item(&self) -> UsageOverlayItem {
+                UsageOverlayItem::new(
+                    self.id.clone(),
+                    self.title.clone(),
+                    self.subtitle.clone(),
+                    self.status,
+                    self.detail_lines.clone(),
+                )
+            }
+
+            fn picker_entry(&self) -> ModelEntry {
+                ModelEntry {
+                    name: self.title.clone(),
+                    routes: vec![RouteOption {
+                        provider: status_label(self.status).to_string(),
+                        api_method: self.window_summary.clone(),
+                        available: true,
+                        detail: self.subtitle.clone(),
+                        estimated_reference_cost_micros: None,
+                    }],
+                    selection: PickerSelection::Usage {
+                        id: self.id.clone(),
+                        title: self.title.clone(),
+                        subtitle: self.subtitle.clone(),
+                        status: self.status,
+                        detail_lines: self.detail_lines.clone(),
+                    },
+                    selected_route: 0,
+                    is_current: false,
+                    is_default: false,
+                    recommended: false,
+                    recommendation_rank: usize::MAX,
+                    old: false,
+                    created_date: None,
+                    effort: None,
+                }
+            }
+        }
 
         fn format_token_count(tokens: u64) -> String {
             if tokens >= 1_000_000 {
@@ -687,17 +738,46 @@ impl App {
             }
         }
 
+        fn status_label(status: UsageOverlayStatus) -> &'static str {
+            match status {
+                UsageOverlayStatus::Loading => "loading",
+                UsageOverlayStatus::Good => "healthy",
+                UsageOverlayStatus::Warning => "watch",
+                UsageOverlayStatus::Critical => "high",
+                UsageOverlayStatus::Error => "error",
+                UsageOverlayStatus::Info => "info",
+            }
+        }
+
+        let existing_usage_picker = self.picker_state.as_ref().and_then(|picker| {
+            (picker.kind == PickerKind::Usage).then(|| {
+                let selected_id = picker.filtered.get(picker.selected).and_then(|idx| {
+                    picker.models.get(*idx).and_then(|entry| match &entry.selection {
+                        PickerSelection::Usage { id, .. } => Some(id.clone()),
+                        _ => None,
+                    })
+                });
+                (
+                    picker.preview,
+                    picker.filter.clone(),
+                    picker.column,
+                    selected_id,
+                )
+            })
+        });
+
         let jcode_runtime = crate::subscription_catalog::is_runtime_mode_enabled();
-        let mut items = Vec::new();
+        let mut rows = Vec::new();
         let mut summary = UsageOverlaySummary::default();
 
         if jcode_runtime {
-            items.push(UsageOverlayItem::new(
-                "jcode",
-                "Jcode Subscription",
-                "Scaffold only · curated router status",
-                UsageOverlayStatus::Info,
-                vec![
+            rows.push(UsageViewRow {
+                id: "jcode".to_string(),
+                title: "Jcode Subscription".to_string(),
+                subtitle: "Scaffold only · curated router status".to_string(),
+                status: UsageOverlayStatus::Info,
+                window_summary: "scaffold".to_string(),
+                detail_lines: vec![
                     "## Jcode Subscription".to_string(),
                     "Live billing/usage reporting is not connected yet for the curated jcode-managed subscription path.".to_string(),
                     "".to_string(),
@@ -736,7 +816,7 @@ impl App {
                     "• Use `/subscription` for the full curated subscription status scaffold."
                         .to_string(),
                 ],
-            ));
+            });
         }
 
         for provider in &results {
@@ -749,13 +829,14 @@ impl App {
                 _ => {}
             }
 
-            let subtitle = if let Some(err) = &provider.error {
-                crate::util::truncate_str(err, 56).to_string()
-            } else if let Some(limit) = provider
+            let highest_limit = provider
                 .limits
                 .iter()
-                .max_by(|left, right| left.usage_percent.total_cmp(&right.usage_percent))
-            {
+                .max_by(|left, right| left.usage_percent.total_cmp(&right.usage_percent));
+
+            let subtitle = if let Some(err) = &provider.error {
+                crate::util::truncate_str(err, 56).to_string()
+            } else if let Some(limit) = highest_limit {
                 format!(
                     "{} window{} · highest {} {:.0}%",
                     provider.limits.len(),
@@ -767,11 +848,7 @@ impl App {
                 format!(
                     "{} detail field{}",
                     provider.extra_info.len(),
-                    if provider.extra_info.len() == 1 {
-                        ""
-                    } else {
-                        "s"
-                    }
+                    if provider.extra_info.len() == 1 { "" } else { "s" }
                 )
             } else {
                 "No usage data returned".to_string()
@@ -813,22 +890,32 @@ impl App {
                 }
             }
 
-            items.push(UsageOverlayItem::new(
-                provider.provider_name.to_lowercase(),
-                provider.provider_name.clone(),
+            rows.push(UsageViewRow {
+                id: provider.provider_name.to_lowercase(),
+                title: provider.provider_name.clone(),
                 subtitle,
                 status,
+                window_summary: if let Some(limit) = highest_limit {
+                    format!("{:.0}%", limit.usage_percent)
+                } else if provider.error.is_some() {
+                    "error".to_string()
+                } else if !provider.extra_info.is_empty() {
+                    format!("{} info", provider.extra_info.len())
+                } else {
+                    "setup".to_string()
+                },
                 detail_lines,
-            ));
+            });
         }
 
         if results.is_empty() && !jcode_runtime {
-            items.push(UsageOverlayItem::new(
-                "setup",
-                "No connected providers",
-                "Add Claude or OpenAI OAuth to inspect subscription usage",
-                UsageOverlayStatus::Info,
-                vec![
+            rows.push(UsageViewRow {
+                id: "setup".to_string(),
+                title: "No connected providers".to_string(),
+                subtitle: "Add Claude or OpenAI OAuth to inspect subscription usage".to_string(),
+                status: UsageOverlayStatus::Info,
+                window_summary: "setup".to_string(),
+                detail_lines: vec![
                     "## No connected providers".to_string(),
                     "No providers with OAuth credentials found.".to_string(),
                     "".to_string(),
@@ -836,7 +923,7 @@ impl App {
                     "• Use `/login anthropic` to connect Claude OAuth.".to_string(),
                     "• Use `/login openai` to connect ChatGPT / Codex OAuth.".to_string(),
                 ],
-            ));
+            });
         }
 
         if self.total_input_tokens > 0 || self.total_output_tokens > 0 {
@@ -859,19 +946,64 @@ impl App {
                 detail_lines.push(format!("• Estimated cost: ${:.4}", self.total_cost));
             }
 
-            items.push(UsageOverlayItem::new(
-                "session",
-                "Session Usage",
+            rows.push(UsageViewRow {
+                id: "session".to_string(),
+                title: "Session Usage".to_string(),
                 subtitle,
-                UsageOverlayStatus::Info,
+                status: UsageOverlayStatus::Info,
+                window_summary: format_token_count(
+                    self.total_input_tokens + self.total_output_tokens,
+                ),
                 detail_lines,
-            ));
+            });
         }
 
-        self.usage_overlay = Some(std::cell::RefCell::new(UsageOverlay::new(
-            "Usage", items, summary,
-        )));
-        self.set_status_notice("Usage → updated");
+        let overlay_items = rows.iter().map(UsageViewRow::overlay_item).collect::<Vec<_>>();
+        let picker_models = rows.iter().map(UsageViewRow::picker_entry).collect::<Vec<_>>();
+
+        let mut updated_ui = false;
+
+        if self.usage_overlay.is_some() {
+            self.usage_overlay = Some(std::cell::RefCell::new(UsageOverlay::new(
+                "Usage",
+                overlay_items,
+                summary.clone(),
+            )));
+            updated_ui = true;
+        }
+
+        if let Some((preview, filter, column, selected_id)) = existing_usage_picker {
+            let mut picker = PickerState {
+                kind: PickerKind::Usage,
+                filtered: Vec::new(),
+                models: picker_models,
+                selected: 0,
+                column: column.min(2),
+                filter,
+                preview,
+            };
+            Self::apply_picker_filter(&mut picker);
+            if let Some(selected_id) = selected_id {
+                if let Some(position) = picker.filtered.iter().position(|idx| {
+                    picker
+                        .models
+                        .get(*idx)
+                        .and_then(|entry| match &entry.selection {
+                            PickerSelection::Usage { id, .. } => Some(id == &selected_id),
+                            _ => None,
+                        })
+                        .unwrap_or(false)
+                }) {
+                    picker.selected = position;
+                }
+            }
+            self.picker_state = Some(picker);
+            updated_ui = true;
+        }
+
+        if updated_ui {
+            self.set_status_notice("Usage → updated");
+        }
     }
 
     pub(super) fn run_fix_command(&mut self) {

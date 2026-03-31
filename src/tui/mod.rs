@@ -364,6 +364,7 @@ pub enum PickerKind {
     Model,
     Account,
     Login,
+    Usage,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -388,6 +389,13 @@ pub enum PickerSelection {
     Model,
     Account(AccountPickerSelection),
     Login(crate::provider_catalog::LoginProviderDescriptor),
+    Usage {
+        id: String,
+        title: String,
+        subtitle: String,
+        status: crate::tui::usage_overlay::UsageOverlayStatus,
+        detail_lines: Vec<String>,
+    },
     AgentTarget(AgentModelTarget),
     AgentModelChoice {
         target: AgentModelTarget,

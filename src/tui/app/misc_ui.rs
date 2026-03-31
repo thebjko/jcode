@@ -9,6 +9,75 @@ impl App {
         self.set_status_notice("Usage → refreshing");
     }
 
+    pub(super) fn open_usage_picker_loading(&mut self) {
+        use crate::tui::usage_overlay::UsageOverlayStatus;
+        use crate::tui::{ModelEntry, PickerKind, PickerSelection, PickerState, RouteOption};
+
+        let detail_lines = vec![
+            "## Refreshing usage".to_string(),
+            "Fetching usage limits from all connected providers...".to_string(),
+            "".to_string(),
+            "This picker will update automatically when the usage report returns.".to_string(),
+        ];
+
+        self.usage_overlay = None;
+        self.picker_state = Some(PickerState {
+            kind: PickerKind::Usage,
+            models: vec![ModelEntry {
+                name: "Refreshing usage".to_string(),
+                routes: vec![RouteOption {
+                    provider: "loading".to_string(),
+                    api_method: "wait".to_string(),
+                    available: true,
+                    detail: "Fetching limits from connected providers".to_string(),
+                    estimated_reference_cost_micros: None,
+                }],
+                selection: PickerSelection::Usage {
+                    id: "loading".to_string(),
+                    title: "Refreshing usage".to_string(),
+                    subtitle: "Fetching limits from connected providers".to_string(),
+                    status: UsageOverlayStatus::Loading,
+                    detail_lines,
+                },
+                selected_route: 0,
+                is_current: false,
+                is_default: false,
+                recommended: false,
+                recommendation_rank: usize::MAX,
+                old: false,
+                created_date: None,
+                effort: None,
+            }],
+            filtered: vec![0],
+            selected: 0,
+            column: 0,
+            filter: String::new(),
+            preview: false,
+        });
+        self.input.clear();
+        self.cursor_pos = 0;
+        self.set_status_notice("Usage → refreshing");
+    }
+
+    pub(super) fn request_usage_report(&self) {
+        use crate::bus::{Bus, BusEvent};
+
+        let publish = || async move {
+            let results = crate::usage::fetch_all_provider_usage().await;
+            Bus::global().publish(BusEvent::UsageReport(results));
+        };
+
+        if tokio::runtime::Handle::try_current().is_ok() {
+            tokio::spawn(publish());
+        } else {
+            std::thread::spawn(move || {
+                if let Ok(runtime) = tokio::runtime::Runtime::new() {
+                    runtime.block_on(publish());
+                }
+            });
+        }
+    }
+
     pub(super) fn handle_usage_overlay_key(
         &mut self,
         code: KeyCode,

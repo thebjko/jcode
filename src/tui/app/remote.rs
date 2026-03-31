@@ -2315,6 +2315,7 @@ fn handle_disconnected_local_command(app: &mut App, trimmed: &str) -> bool {
         || super::commands::handle_config_command(app, trimmed)
         || super::commands::handle_debug_command(app, trimmed)
         || super::commands::handle_model_command(app, trimmed)
+        || super::commands::handle_usage_command(app, trimmed)
         || super::state_ui::handle_info_command(app, trimmed)
         || super::auth::handle_auth_command(app, trimmed)
         || super::commands::handle_dev_command(app, trimmed);
@@ -3128,6 +3129,10 @@ async fn handle_remote_key_internal(
 
                 if trimmed == "/model" || trimmed == "/models" {
                     app.open_model_picker();
+                    return Ok(());
+                }
+
+                if super::commands::handle_usage_command(app, trimmed) {
                     return Ok(());
                 }
 

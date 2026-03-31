@@ -2509,8 +2509,6 @@ fn handle_alignment_command(app: &mut App, trimmed: &str) -> bool {
 }
 
 pub(super) fn handle_config_command(app: &mut App, trimmed: &str) -> bool {
-    use crate::bus::{Bus, BusEvent};
-
     if handle_alignment_command(app, trimmed) {
         return true;
     }
@@ -2644,12 +2642,7 @@ pub(super) fn handle_config_command(app: &mut App, trimmed: &str) -> bool {
         return true;
     }
 
-    if trimmed == "/usage" {
-        app.open_usage_overlay_loading();
-        tokio::spawn(async move {
-            let results = crate::usage::fetch_all_provider_usage().await;
-            Bus::global().publish(BusEvent::UsageReport(results));
-        });
+    if handle_usage_command(app, trimmed) {
         return true;
     }
 
@@ -2754,6 +2747,30 @@ pub(super) fn handle_debug_command(app: &mut App, trimmed: &str) -> bool {
 
 pub(super) fn handle_model_command(app: &mut App, trimmed: &str) -> bool {
     super::model_context::handle_model_command(app, trimmed)
+}
+
+pub(super) fn handle_usage_command(app: &mut App, trimmed: &str) -> bool {
+    let Some(rest) = trimmed.strip_prefix("/usage") else {
+        return false;
+    };
+
+    if !rest.is_empty()
+        && !rest
+            .chars()
+            .next()
+            .map(|c| c.is_whitespace())
+            .unwrap_or(false)
+    {
+        return false;
+    }
+
+    app.open_usage_picker_loading();
+    if let Some(ref mut picker) = app.picker_state {
+        picker.filter = rest.trim().to_string();
+        App::apply_picker_filter(picker);
+    }
+    app.request_usage_report();
+    true
 }
 
 pub(super) fn handle_info_command(app: &mut App, trimmed: &str) -> bool {

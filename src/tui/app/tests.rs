@@ -1183,6 +1183,72 @@ fn test_usage_overlay_esc_closes_modal() {
 }
 
 #[test]
+fn test_usage_command_opens_usage_picker_loading() {
+    let mut app = create_test_app();
+
+    assert!(super::commands::handle_usage_command(&mut app, "/usage"));
+
+    let picker = app.picker_state.as_ref().expect("missing usage picker");
+    assert_eq!(picker.kind, crate::tui::PickerKind::Usage);
+    assert!(!picker.preview);
+    assert_eq!(picker.models[0].name, "Refreshing usage");
+}
+
+#[test]
+fn test_usage_report_updates_usage_picker_rows() {
+    let mut app = create_test_app();
+    app.open_usage_picker_loading();
+    app.handle_usage_report(vec![crate::usage::ProviderUsage {
+        provider_name: "OpenAI (ChatGPT)".to_string(),
+        limits: vec![crate::usage::UsageLimit {
+            name: "5h".to_string(),
+            usage_percent: 82.0,
+            resets_at: None,
+        }],
+        extra_info: vec![("plan".to_string(), "pro".to_string())],
+        error: None,
+    }]);
+
+    let picker = app.picker_state.as_ref().expect("missing usage picker");
+    assert_eq!(picker.kind, crate::tui::PickerKind::Usage);
+    assert!(picker.models.iter().any(|entry| entry.name == "OpenAI (ChatGPT)"));
+}
+
+#[test]
+fn test_usage_picker_preview_stays_open_and_updates_filter() {
+    let mut app = create_test_app();
+
+    for c in "/usage open".chars() {
+        app.handle_key(KeyCode::Char(c), KeyModifiers::empty())
+            .unwrap();
+    }
+
+    app.handle_usage_report(vec![crate::usage::ProviderUsage {
+        provider_name: "OpenAI (ChatGPT)".to_string(),
+        limits: vec![crate::usage::UsageLimit {
+            name: "7d".to_string(),
+            usage_percent: 35.0,
+            resets_at: None,
+        }],
+        extra_info: Vec::new(),
+        error: None,
+    }]);
+
+    let picker = app
+        .picker_state
+        .as_ref()
+        .expect("usage picker preview should be open");
+    assert!(picker.preview);
+    assert_eq!(picker.kind, crate::tui::PickerKind::Usage);
+    assert_eq!(picker.filter, "open");
+    assert!(picker
+        .filtered
+        .iter()
+        .any(|&i| picker.models[i].name == "OpenAI (ChatGPT)"));
+    assert_eq!(app.input(), "/usage open");
+}
+
+#[test]
 fn test_show_accounts_includes_masked_email_column() {
     let now_ms = chrono::Utc::now().timestamp_millis();
     let accounts = vec![crate::auth::claude::AnthropicAccount {

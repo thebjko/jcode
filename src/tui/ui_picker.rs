@@ -134,6 +134,7 @@ fn account_picker_state_label(entry: &crate::tui::ModelEntry) -> &'static str {
             ..
         }) => "manage",
         crate::tui::PickerSelection::Model
+        | crate::tui::PickerSelection::Usage { .. }
         | crate::tui::PickerSelection::Login(_)
         | crate::tui::PickerSelection::AgentTarget(_)
         | crate::tui::PickerSelection::AgentModelChoice { .. } => "—",
@@ -285,6 +286,7 @@ pub(super) fn draw_picker_line(frame: &mut Frame, app: &dyn TuiState, area: Rect
     let col = picker.column;
     let is_preview = picker.preview;
     let is_account_picker = picker.kind == crate::tui::PickerKind::Account;
+    let is_usage_picker = picker.kind == crate::tui::PickerKind::Usage;
 
     let col_focus_style = Style::default().fg(Color::White).bold().underlined();
     let col_dim_style = Style::default().fg(dim_color());
@@ -358,13 +360,21 @@ pub(super) fn draw_picker_line(frame: &mut Frame, app: &dyn TuiState, area: Rect
         } else if is_preview {
             (
                 [provider_width, model_width, via_width],
-                ["PROVIDER", "MODEL", "VIA"],
+                if is_usage_picker {
+                    ["STATUS", "PROVIDER", "WINDOW"]
+                } else {
+                    ["PROVIDER", "MODEL", "VIA"]
+                },
                 [1, 0, 2],
             )
         } else {
             (
                 [model_width, provider_width, via_width],
-                ["MODEL", "PROVIDER", "VIA"],
+                if is_usage_picker {
+                    ["PROVIDER", "STATUS", "WINDOW"]
+                } else {
+                    ["MODEL", "PROVIDER", "VIA"]
+                },
                 [0, 1, 2],
             )
         };
@@ -425,6 +435,8 @@ pub(super) fn draw_picker_line(frame: &mut Frame, app: &dyn TuiState, area: Rect
         header_spans.push(Span::styled(
             if is_account_picker {
                 "  ↵ select"
+            } else if is_usage_picker {
+                "  ↵ inspect"
             } else {
                 "  ↵ open"
             },
@@ -439,7 +451,7 @@ pub(super) fn draw_picker_line(frame: &mut Frame, app: &dyn TuiState, area: Rect
             },
             Style::default().fg(rgb(60, 60, 80)),
         ));
-        if !is_account_picker {
+        if !is_account_picker && !is_usage_picker {
             header_spans.push(Span::styled(
                 "  ^D=default",
                 Style::default().fg(rgb(60, 60, 80)).italic(),
@@ -681,6 +693,8 @@ pub(super) fn draw_picker_line(frame: &mut Frame, app: &dyn TuiState, area: Rect
             Style::default().fg(rgb(80, 80, 80))
         } else if is_row_selected && col == 2 {
             Style::default().fg(Color::White).bg(rgb(60, 60, 80)).bold()
+        } else if is_usage_picker {
+            Style::default().fg(rgb(196, 170, 255))
         } else {
             Style::default().fg(rgb(220, 190, 120))
         };
