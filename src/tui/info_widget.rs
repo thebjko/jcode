@@ -7,6 +7,8 @@
 use super::color_support::rgb;
 #[path = "info_widget_graph.rs"]
 mod graph;
+#[path = "info_widget_text.rs"]
+mod text;
 #[path = "info_widget_tips.rs"]
 mod tips;
 use super::info_widget_overview::{InfoPageKind, MAX_TODO_LINES, compute_page_layout};
@@ -27,6 +29,7 @@ use unicode_width::UnicodeWidthStr;
 
 pub use graph::build_graph_topology;
 use graph::graph_node_score;
+use text::{truncate_chars, truncate_smart, truncate_with_ellipsis};
 pub(crate) use tips::occasional_status_tip;
 use tips::{render_tips_widget, tips_widget_height};
 
@@ -2941,53 +2944,6 @@ fn render_todos_expanded(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static
     }
 
     lines
-}
-
-/// Truncate string smartly, trying to break at word boundaries
-fn truncate_smart(s: &str, max_len: usize) -> String {
-    let char_len = s.chars().count();
-    if char_len <= max_len {
-        return s.to_string();
-    }
-    if max_len <= 3 {
-        return "...".to_string();
-    }
-
-    let target = max_len - 3;
-    let prefix = truncate_chars(s, target);
-
-    // Try to find a word boundary
-    if let Some(pos) = prefix.rfind(' ') {
-        let before = &prefix[..pos];
-        let pos_chars = before.chars().count();
-        if pos_chars > target / 2 {
-            return format!("{}...", before);
-        }
-    }
-    format!("{}...", prefix)
-}
-
-/// Truncate to a maximum character count without splitting UTF-8 codepoints.
-fn truncate_chars(s: &str, max_chars: usize) -> &str {
-    match s.char_indices().nth(max_chars) {
-        Some((idx, _)) => &s[..idx],
-        None => s,
-    }
-}
-
-/// Truncate to a maximum character count and append an ellipsis if needed.
-fn truncate_with_ellipsis(s: &str, max_chars: usize) -> String {
-    if max_chars == 0 {
-        return String::new();
-    }
-    if s.chars().count() <= max_chars {
-        return s.to_string();
-    }
-    if max_chars == 1 {
-        return "…".to_string();
-    }
-    let truncated = truncate_chars(s, max_chars.saturating_sub(1));
-    format!("{}…", truncated)
 }
 
 // ---------------------------------------------------------------------------
