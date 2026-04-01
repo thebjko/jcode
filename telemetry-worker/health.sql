@@ -38,6 +38,17 @@ meaningful AS (
         OR assistant_responses > 0
         OR tool_calls > 0
         OR tool_failures > 0
+        OR executed_tool_calls > 0
+        OR feature_memory_used > 0
+        OR feature_swarm_used > 0
+        OR feature_web_used > 0
+        OR feature_email_used > 0
+        OR feature_mcp_used > 0
+        OR feature_side_panel_used > 0
+        OR feature_goal_used > 0
+        OR feature_selfdev_used > 0
+        OR feature_background_used > 0
+        OR feature_subagent_used > 0
       )
 ),
 outliers AS (

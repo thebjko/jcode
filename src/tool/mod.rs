@@ -419,7 +419,18 @@ impl Registry {
         // Drop the lock before executing
         drop(tools);
 
-        let mut output = tool.execute(input, ctx).await?;
+        let started_at = std::time::Instant::now();
+        let result = tool.execute(input.clone(), ctx).await;
+        let latency_ms = started_at.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+
+        crate::telemetry::record_tool_execution(
+            resolved_name,
+            &input,
+            result.is_ok(),
+            latency_ms,
+        );
+
+        let mut output = result?;
 
         // Context overflow guard: check if this output would push us over the limit
         output = self.guard_context_overflow(name, output).await;

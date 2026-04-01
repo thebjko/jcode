@@ -21,11 +21,12 @@ Cloudflare Worker that receives anonymous telemetry events from jcode.
 ### Migrating an existing database
 
 If your production database was created before the latest telemetry fields were added,
-apply both remote migrations:
+apply all remote migrations:
 
 ```bash
 wrangler d1 execute jcode-telemetry --remote --file=migrations/0001_expand_events.sql
 wrangler d1 execute jcode-telemetry --remote --file=migrations/0002_transport_metrics.sql
+wrangler d1 execute jcode-telemetry --remote --file=migrations/0003_usage_expansion.sql
 ```
 
 Then redeploy the worker:
@@ -47,6 +48,7 @@ npm run deploy
 # Apply schema catch-up migrations
 npm run migrate:expand
 npm run migrate:transport
+npm run migrate:usage
 
 # Run the health dashboard query
 npm run health
@@ -87,6 +89,21 @@ wrangler d1 execute jcode-telemetry --command "SELECT SUM(transport_https) AS ht
 
 # Telemetry health dashboard
 wrangler d1 execute jcode-telemetry --file=health.sql
+
+# Auth activation funnel by provider
+wrangler d1 execute jcode-telemetry --command "SELECT auth_provider, COUNT(DISTINCT telemetry_id) AS users FROM events WHERE event = 'auth_success' GROUP BY auth_provider ORDER BY users DESC"
+
+# D7 retention for users who installed 8-14 days ago
+wrangler d1 execute jcode-telemetry --command "WITH cohort AS (SELECT DISTINCT telemetry_id FROM events WHERE event = 'install' AND created_at >= datetime('now', '-14 days') AND created_at < datetime('now', '-7 days')), retained AS (SELECT DISTINCT telemetry_id FROM events WHERE event IN ('session_end', 'session_crash') AND created_at >= datetime('now', '-7 days')) SELECT COUNT(*) AS cohort_users, (SELECT COUNT(*) FROM cohort WHERE telemetry_id IN retained) AS retained_users FROM cohort"
+
+# Feature adoption (last 30d)
+wrangler d1 execute jcode-telemetry --command "SELECT SUM(feature_memory_used) AS memory_sessions, SUM(feature_swarm_used) AS swarm_sessions, SUM(feature_web_used) AS web_sessions, SUM(feature_email_used) AS email_sessions, SUM(feature_mcp_used) AS mcp_sessions, SUM(feature_side_panel_used) AS side_panel_sessions, SUM(feature_goal_used) AS goal_sessions, SUM(feature_selfdev_used) AS selfdev_sessions, SUM(feature_background_used) AS background_sessions, SUM(feature_subagent_used) AS subagent_sessions FROM events WHERE event IN ('session_end', 'session_crash') AND created_at > datetime('now', '-30 days')"
+
+# Session success rate + abandonment rate (last 30d)
+wrangler d1 execute jcode-telemetry --command "SELECT AVG(CASE WHEN session_success > 0 THEN 1.0 ELSE 0.0 END) AS success_rate, AVG(CASE WHEN abandoned_before_response > 0 THEN 1.0 ELSE 0.0 END) AS abandoned_before_response_rate FROM events WHERE event IN ('session_end', 'session_crash') AND created_at > datetime('now', '-30 days')"
+
+# Tool and response latency (last 30d)
+wrangler d1 execute jcode-telemetry --command "SELECT AVG(first_assistant_response_ms) AS avg_first_response_ms, AVG(first_tool_success_ms) AS avg_first_tool_success_ms, AVG(CASE WHEN executed_tool_calls > 0 THEN CAST(tool_latency_total_ms AS REAL) / executed_tool_calls END) AS avg_tool_latency_ms FROM events WHERE event IN ('session_end', 'session_crash') AND created_at > datetime('now', '-30 days')"
 ```
 
 ## What to watch for

@@ -1,6 +1,6 @@
 # jcode Telemetry
 
-jcode collects **anonymous, minimal usage statistics** to help understand how many people use jcode, what providers/models are popular, and whether sessions are succeeding or crashing. This data helps prioritize development without collecting prompts or code.
+jcode collects **anonymous, minimal usage statistics** to help understand how many people use jcode, what providers/models are popular, whether onboarding works, which feature families are used, how often sessions succeed, and whether performance/regressions are improving. This data helps prioritize development without collecting prompts or code.
 
 ## What We Collect
 
@@ -13,6 +13,26 @@ jcode collects **anonymous, minimal usage statistics** to help understand how ma
 | `version` | `"0.6.0"` | jcode version |
 | `os` | `"linux"` | Operating system |
 | `arch` | `"x86_64"` | CPU architecture |
+
+### Upgrade Event
+
+| Field | Example | Purpose |
+|-------|---------|----------|
+| `id` | `a1b2c3d4-...` | Same random UUID |
+| `event` | `"upgrade"` | Event type |
+| `version` | `"0.8.2"` | Current jcode version |
+| `from_version` | `"0.8.1"` | Previously recorded jcode version |
+| `os` / `arch` | `"linux"` / `"x86_64"` | Environment breakdown |
+
+### Auth Success Event
+
+| Field | Example | Purpose |
+|-------|---------|----------|
+| `id` | `a1b2c3d4-...` | Same random UUID |
+| `event` | `"auth_success"` | Event type |
+| `auth_provider` | `"claude"` | Which provider/account system was configured |
+| `auth_method` | `"oauth"` | Coarse auth method only |
+| `version` / `os` / `arch` | `"0.8.2"` / `"linux"` / `"x86_64"` | Activation funnel dimensions |
 
 ### Session Start Event
 
@@ -43,12 +63,28 @@ jcode collects **anonymous, minimal usage statistics** to help understand how ma
 | `provider_switches` | `0` | How many times you switched providers |
 | `model_switches` | `1` | How many times you switched models |
 | `duration_mins` | `45` | Session length in minutes |
+| `duration_secs` | `2700` | Finer-grained session length |
 | `turns` | `23` | Number of user prompts sent |
 | `had_user_prompt` | `true` | Whether any real prompt was submitted |
 | `had_assistant_response` | `true` | Whether the assistant produced a response |
 | `assistant_responses` | `6` | Number of assistant responses |
+| `first_assistant_response_ms` | `1200` | Time to first assistant response |
+| `first_tool_call_ms` | `900` | Time to first tool invocation |
+| `first_tool_success_ms` | `1500` | Time to first successful tool execution |
 | `tool_calls` | `8` | Number of tool executions |
 | `tool_failures` | `1` | Number of tool execution failures |
+| `executed_tool_calls` | `10` | Centralized count of actual registry tool executions |
+| `executed_tool_successes` | `9` | Successful registry tool executions |
+| `executed_tool_failures` | `1` | Failed registry tool executions |
+| `tool_latency_total_ms` | `4200` | Aggregate tool execution latency |
+| `tool_latency_max_ms` | `1800` | Slowest single tool call |
+| `file_write_calls` | `2` | Count of write/edit/patch style tool uses |
+| `tests_run` | `1` | Coarse count of test runs triggered |
+| `tests_passed` | `1` | Coarse count of successful test runs |
+| `feature_*_used` | `true/false` | Whether a feature family was used (memory, swarm, web, email, MCP, side panel, goals, selfdev, background, subagents) |
+| `unique_mcp_servers` | `2` | Count of distinct MCP servers touched in-session |
+| `session_success` | `true` | Coarse success proxy based on outcomes like responses, successful tools, tests, or edits |
+| `abandoned_before_response` | `false` | Whether the user engaged but got no successful outcome before ending |
 | `transport_https` | `2` | Number of provider requests sent over HTTPS/SSE |
 | `transport_persistent_ws_fresh` | `1` | Number of fresh persistent WebSocket requests |
 | `transport_persistent_ws_reuse` | `5` | Number of turns that reused an existing persistent WebSocket |
@@ -76,9 +112,11 @@ The UUID is randomly generated on first run and stored at `~/.jcode/telemetry_id
 1. On first launch, jcode generates a random UUID and sends an `install` event
 2. When a session begins, jcode sends a `session_start` event
 3. When a session ends normally, jcode sends a `session_end` event with coarse session metrics
-4. On best-effort crash/signal handling, jcode sends a `session_crash` event
-5. Requests are fire-and-forget HTTP POSTs that don't block startup or shutdown
-6. If a request fails (offline, firewall, etc.), jcode silently continues - no retries, no queuing
+4. When auth succeeds, jcode sends a coarse `auth_success` event for activation-funnel analysis
+5. When jcode detects a version change, it sends an `upgrade` event
+6. On best-effort crash/signal handling, jcode sends a `session_crash` event
+7. Requests are fire-and-forget HTTP POSTs that don't block normal usage (install/session shutdown have short bounded blocking timeouts)
+8. If a request fails (offline, firewall, etc.), jcode silently continues - no retries, no queuing
 
 The telemetry endpoint is a Cloudflare Worker that stores events in a D1 database. The source code for the worker is in [`telemetry-worker/`](./telemetry-worker/).
 

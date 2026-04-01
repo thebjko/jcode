@@ -1,5 +1,7 @@
 use crate::storage;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -30,6 +32,27 @@ struct InstallEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+struct UpgradeEvent {
+    id: String,
+    event: &'static str,
+    version: String,
+    os: &'static str,
+    arch: &'static str,
+    from_version: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AuthEvent {
+    id: String,
+    event: &'static str,
+    version: String,
+    os: &'static str,
+    arch: &'static str,
+    auth_provider: String,
+    auth_method: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct SessionStartEvent {
     id: String,
     event: &'static str,
@@ -55,12 +78,37 @@ struct SessionLifecycleEvent {
     provider_switches: u32,
     model_switches: u32,
     duration_mins: u64,
+    duration_secs: u64,
     turns: u32,
     had_user_prompt: bool,
     had_assistant_response: bool,
     assistant_responses: u32,
+    first_assistant_response_ms: Option<u64>,
+    first_tool_call_ms: Option<u64>,
+    first_tool_success_ms: Option<u64>,
     tool_calls: u32,
     tool_failures: u32,
+    executed_tool_calls: u32,
+    executed_tool_successes: u32,
+    executed_tool_failures: u32,
+    tool_latency_total_ms: u64,
+    tool_latency_max_ms: u64,
+    file_write_calls: u32,
+    tests_run: u32,
+    tests_passed: u32,
+    feature_memory_used: bool,
+    feature_swarm_used: bool,
+    feature_web_used: bool,
+    feature_email_used: bool,
+    feature_mcp_used: bool,
+    feature_side_panel_used: bool,
+    feature_goal_used: bool,
+    feature_selfdev_used: bool,
+    feature_background_used: bool,
+    feature_subagent_used: bool,
+    unique_mcp_servers: u32,
+    session_success: bool,
+    abandoned_before_response: bool,
     transport_https: u32,
     transport_persistent_ws_fresh: u32,
     transport_persistent_ws_reuse: u32,
@@ -89,8 +137,30 @@ struct SessionTelemetry {
     had_user_prompt: bool,
     had_assistant_response: bool,
     assistant_responses: u32,
+    first_assistant_response_ms: Option<u64>,
+    first_tool_call_ms: Option<u64>,
+    first_tool_success_ms: Option<u64>,
     tool_calls: u32,
     tool_failures: u32,
+    executed_tool_calls: u32,
+    executed_tool_successes: u32,
+    executed_tool_failures: u32,
+    tool_latency_total_ms: u64,
+    tool_latency_max_ms: u64,
+    file_write_calls: u32,
+    tests_run: u32,
+    tests_passed: u32,
+    feature_memory_used: bool,
+    feature_swarm_used: bool,
+    feature_web_used: bool,
+    feature_email_used: bool,
+    feature_mcp_used: bool,
+    feature_side_panel_used: bool,
+    feature_goal_used: bool,
+    feature_selfdev_used: bool,
+    feature_background_used: bool,
+    feature_subagent_used: bool,
+    unique_mcp_servers: HashSet<String>,
     transport_https: u32,
     transport_persistent_ws_fresh: u32,
     transport_persistent_ws_reuse: u32,
@@ -152,6 +222,10 @@ fn install_recorded_path() -> Option<PathBuf> {
         .map(|d| d.join("telemetry_install_sent"))
 }
 
+fn version_recorded_path() -> Option<PathBuf> {
+    storage::jcode_dir().ok().map(|d| d.join("telemetry_version_sent"))
+}
+
 fn write_private_file(path: &PathBuf, value: &str) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
@@ -196,6 +270,109 @@ fn mark_install_recorded(id: &str) {
     if let Some(path) = install_recorded_path() {
         write_private_file(&path, id);
     }
+}
+
+fn previously_recorded_version() -> Option<String> {
+    version_recorded_path()
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn mark_current_version_recorded() {
+    if let Some(path) = version_recorded_path() {
+        write_private_file(&path, &version());
+    }
+}
+
+fn now_ms_since(started_at: Instant) -> u64 {
+    started_at.elapsed().as_millis().min(u128::from(u64::MAX)) as u64
+}
+
+fn mark_tool_feature_usage(state: &mut SessionTelemetry, name: &str, input: &Value) {
+    match name {
+        "memory" => state.feature_memory_used = true,
+        "communicate" => state.feature_swarm_used = true,
+        "webfetch" | "websearch" | "codesearch" => state.feature_web_used = true,
+        "gmail" => state.feature_email_used = true,
+        "side_panel" => state.feature_side_panel_used = true,
+        "goal" => state.feature_goal_used = true,
+        "selfdev" => state.feature_selfdev_used = true,
+        "bg" | "schedule" => state.feature_background_used = true,
+        "subagent" => state.feature_subagent_used = true,
+        _ => {}
+    }
+
+    if matches!(name, "write" | "edit" | "multiedit" | "patch" | "apply_patch") {
+        state.file_write_calls += 1;
+    }
+
+    if name == "mcp" || name.starts_with("mcp__") {
+        state.feature_mcp_used = true;
+        if let Some(server) = mcp_server_name(name, input) {
+            state.unique_mcp_servers.insert(server);
+        }
+    }
+
+    if looks_like_test_run(name, input) {
+        state.tests_run += 1;
+    }
+}
+
+fn mark_tool_success_side_effects(state: &mut SessionTelemetry, name: &str, input: &Value) {
+    if looks_like_test_run(name, input) {
+        state.tests_passed += 1;
+    }
+
+    if state.first_tool_success_ms.is_none() {
+        state.first_tool_success_ms = Some(now_ms_since(state.started_at));
+    }
+
+    if name == "memory" {
+        state.feature_memory_used = true;
+    }
+}
+
+fn looks_like_test_run(name: &str, input: &Value) -> bool {
+    let mut haystacks = Vec::new();
+    haystacks.push(name.to_ascii_lowercase());
+
+    if let Some(command) = input.get("command").and_then(Value::as_str) {
+        haystacks.push(command.to_ascii_lowercase());
+    }
+    if let Some(description) = input.get("description").and_then(Value::as_str) {
+        haystacks.push(description.to_ascii_lowercase());
+    }
+    if let Some(task) = input.get("task").and_then(Value::as_str) {
+        haystacks.push(task.to_ascii_lowercase());
+    }
+
+    haystacks.into_iter().any(|value| {
+        value.contains("cargo test")
+            || value.contains("npm test")
+            || value.contains("pnpm test")
+            || value.contains("pytest")
+            || value.contains("jest")
+            || value.contains("vitest")
+            || value.contains("go test")
+            || value.contains("rspec")
+            || value.contains("bun test")
+            || value.contains(" test")
+    })
+}
+
+fn mcp_server_name(name: &str, input: &Value) -> Option<String> {
+    if let Some(rest) = name.strip_prefix("mcp__") {
+        return rest.split("__").next().map(|value| value.to_string());
+    }
+    if name == "mcp" {
+        return input
+            .get("server")
+            .and_then(Value::as_str)
+            .map(sanitize_telemetry_label)
+            .filter(|value| !value.is_empty());
+    }
+    None
 }
 
 fn post_payload(payload: serde_json::Value, timeout: Duration) -> bool {
@@ -282,6 +459,17 @@ fn session_has_meaningful_activity(state: &SessionTelemetry, errors: &ErrorCount
         || state.assistant_responses > 0
         || state.tool_calls > 0
         || state.tool_failures > 0
+        || state.executed_tool_calls > 0
+        || state.feature_memory_used
+        || state.feature_swarm_used
+        || state.feature_web_used
+        || state.feature_email_used
+        || state.feature_mcp_used
+        || state.feature_side_panel_used
+        || state.feature_goal_used
+        || state.feature_selfdev_used
+        || state.feature_background_used
+        || state.feature_subagent_used
         || PROVIDER_SWITCHES.load(Ordering::Relaxed) > 0
         || MODEL_SWITCHES.load(Ordering::Relaxed) > 0
         || has_any_errors(errors)
@@ -367,6 +555,57 @@ pub fn record_install_if_first_run() {
     if first_run {
         show_first_run_notice();
     }
+    mark_current_version_recorded();
+}
+
+pub fn record_upgrade_if_needed() {
+    if !is_enabled() {
+        return;
+    }
+    let current = version();
+    let Some(previous) = previously_recorded_version() else {
+        mark_current_version_recorded();
+        return;
+    };
+    if previous == current {
+        return;
+    }
+    let Some(id) = get_or_create_id() else {
+        return;
+    };
+    let event = UpgradeEvent {
+        id,
+        event: "upgrade",
+        version: current,
+        os: std::env::consts::OS,
+        arch: std::env::consts::ARCH,
+        from_version: previous,
+    };
+    if let Ok(payload) = serde_json::to_value(&event) {
+        let _ = send_payload(payload, DeliveryMode::Background);
+    }
+    mark_current_version_recorded();
+}
+
+pub fn record_auth_success(provider: &str, method: &str) {
+    if !is_enabled() {
+        return;
+    }
+    let Some(id) = get_or_create_id() else {
+        return;
+    };
+    let event = AuthEvent {
+        id,
+        event: "auth_success",
+        version: version(),
+        os: std::env::consts::OS,
+        arch: std::env::consts::ARCH,
+        auth_provider: sanitize_telemetry_label(provider),
+        auth_method: sanitize_telemetry_label(method),
+    };
+    if let Ok(payload) = serde_json::to_value(&event) {
+        let _ = send_payload(payload, DeliveryMode::Background);
+    }
 }
 
 pub fn begin_session(provider: &str, model: &str) {
@@ -389,8 +628,30 @@ fn begin_session_with_mode(provider: &str, model: &str, resumed_session: bool) {
         had_user_prompt: false,
         had_assistant_response: false,
         assistant_responses: 0,
+        first_assistant_response_ms: None,
+        first_tool_call_ms: None,
+        first_tool_success_ms: None,
         tool_calls: 0,
         tool_failures: 0,
+        executed_tool_calls: 0,
+        executed_tool_successes: 0,
+        executed_tool_failures: 0,
+        tool_latency_total_ms: 0,
+        tool_latency_max_ms: 0,
+        file_write_calls: 0,
+        tests_run: 0,
+        tests_passed: 0,
+        feature_memory_used: false,
+        feature_swarm_used: false,
+        feature_web_used: false,
+        feature_email_used: false,
+        feature_mcp_used: false,
+        feature_side_panel_used: false,
+        feature_goal_used: false,
+        feature_selfdev_used: false,
+        feature_background_used: false,
+        feature_subagent_used: false,
+        unique_mcp_servers: HashSet::new(),
         transport_https: 0,
         transport_persistent_ws_fresh: 0,
         transport_persistent_ws_reuse: 0,
@@ -419,8 +680,20 @@ pub fn record_turn() {
 pub fn record_assistant_response() {
     if let Ok(mut guard) = SESSION_STATE.lock() {
         if let Some(ref mut state) = *guard {
+            if state.first_assistant_response_ms.is_none() {
+                state.first_assistant_response_ms = Some(now_ms_since(state.started_at));
+            }
             state.had_assistant_response = true;
             state.assistant_responses += 1;
+        }
+    }
+    maybe_emit_session_start();
+}
+
+pub fn record_memory_injected(_count: usize, _age_ms: u64) {
+    if let Ok(mut guard) = SESSION_STATE.lock() {
+        if let Some(ref mut state) = *guard {
+            state.feature_memory_used = true;
         }
     }
     maybe_emit_session_start();
@@ -430,6 +703,9 @@ pub fn record_tool_call() {
     if let Ok(mut guard) = SESSION_STATE.lock() {
         if let Some(ref mut state) = *guard {
             state.tool_calls += 1;
+            if state.first_tool_call_ms.is_none() {
+                state.first_tool_call_ms = Some(now_ms_since(state.started_at));
+            }
         }
     }
     maybe_emit_session_start();
@@ -499,6 +775,24 @@ pub fn record_model_switch() {
     maybe_emit_session_start();
 }
 
+pub fn record_tool_execution(name: &str, input: &Value, succeeded: bool, latency_ms: u64) {
+    if let Ok(mut guard) = SESSION_STATE.lock() {
+        if let Some(ref mut state) = *guard {
+            state.executed_tool_calls += 1;
+            state.tool_latency_total_ms = state.tool_latency_total_ms.saturating_add(latency_ms);
+            state.tool_latency_max_ms = state.tool_latency_max_ms.max(latency_ms);
+            mark_tool_feature_usage(state, name, input);
+            if succeeded {
+                state.executed_tool_successes += 1;
+                mark_tool_success_side_effects(state, name, input);
+            } else {
+                state.executed_tool_failures += 1;
+            }
+        }
+    }
+    maybe_emit_session_start();
+}
+
 pub fn end_session(provider_end: &str, model_end: &str) {
     end_session_with_reason(provider_end, model_end, SessionEndReason::NormalExit);
 }
@@ -547,8 +841,30 @@ fn emit_lifecycle_event(
                 had_user_prompt: s.had_user_prompt,
                 had_assistant_response: s.had_assistant_response,
                 assistant_responses: s.assistant_responses,
+                first_assistant_response_ms: s.first_assistant_response_ms,
+                first_tool_call_ms: s.first_tool_call_ms,
+                first_tool_success_ms: s.first_tool_success_ms,
                 tool_calls: s.tool_calls,
                 tool_failures: s.tool_failures,
+                executed_tool_calls: s.executed_tool_calls,
+                executed_tool_successes: s.executed_tool_successes,
+                executed_tool_failures: s.executed_tool_failures,
+                tool_latency_total_ms: s.tool_latency_total_ms,
+                tool_latency_max_ms: s.tool_latency_max_ms,
+                file_write_calls: s.file_write_calls,
+                tests_run: s.tests_run,
+                tests_passed: s.tests_passed,
+                feature_memory_used: s.feature_memory_used,
+                feature_swarm_used: s.feature_swarm_used,
+                feature_web_used: s.feature_web_used,
+                feature_email_used: s.feature_email_used,
+                feature_mcp_used: s.feature_mcp_used,
+                feature_side_panel_used: s.feature_side_panel_used,
+                feature_goal_used: s.feature_goal_used,
+                feature_selfdev_used: s.feature_selfdev_used,
+                feature_background_used: s.feature_background_used,
+                feature_subagent_used: s.feature_subagent_used,
+                unique_mcp_servers: s.unique_mcp_servers.clone(),
                 transport_https: s.transport_https,
                 transport_persistent_ws_fresh: s.transport_persistent_ws_fresh,
                 transport_persistent_ws_reuse: s.transport_persistent_ws_reuse,
@@ -578,6 +894,13 @@ fn emit_lifecycle_event(
         );
     }
     let duration = state.started_at.elapsed();
+    let session_success = state.had_assistant_response
+        || state.executed_tool_successes > 0
+        || state.tests_passed > 0
+        || state.file_write_calls > 0;
+    let abandoned_before_response = state.had_user_prompt
+        && !state.had_assistant_response
+        && state.executed_tool_successes == 0;
     let event = SessionLifecycleEvent {
         id,
         event: event_name,
@@ -591,12 +914,37 @@ fn emit_lifecycle_event(
         provider_switches: PROVIDER_SWITCHES.load(Ordering::Relaxed),
         model_switches: MODEL_SWITCHES.load(Ordering::Relaxed),
         duration_mins: duration.as_secs() / 60,
+        duration_secs: duration.as_secs(),
         turns: state.turns,
         had_user_prompt: state.had_user_prompt,
         had_assistant_response: state.had_assistant_response,
         assistant_responses: state.assistant_responses,
+        first_assistant_response_ms: state.first_assistant_response_ms,
+        first_tool_call_ms: state.first_tool_call_ms,
+        first_tool_success_ms: state.first_tool_success_ms,
         tool_calls: state.tool_calls,
         tool_failures: state.tool_failures,
+        executed_tool_calls: state.executed_tool_calls,
+        executed_tool_successes: state.executed_tool_successes,
+        executed_tool_failures: state.executed_tool_failures,
+        tool_latency_total_ms: state.tool_latency_total_ms,
+        tool_latency_max_ms: state.tool_latency_max_ms,
+        file_write_calls: state.file_write_calls,
+        tests_run: state.tests_run,
+        tests_passed: state.tests_passed,
+        feature_memory_used: state.feature_memory_used,
+        feature_swarm_used: state.feature_swarm_used,
+        feature_web_used: state.feature_web_used,
+        feature_email_used: state.feature_email_used,
+        feature_mcp_used: state.feature_mcp_used,
+        feature_side_panel_used: state.feature_side_panel_used,
+        feature_goal_used: state.feature_goal_used,
+        feature_selfdev_used: state.feature_selfdev_used,
+        feature_background_used: state.feature_background_used,
+        feature_subagent_used: state.feature_subagent_used,
+        unique_mcp_servers: state.unique_mcp_servers.len() as u32,
+        session_success,
+        abandoned_before_response,
         transport_https: state.transport_https,
         transport_persistent_ws_fresh: state.transport_persistent_ws_fresh,
         transport_persistent_ws_reuse: state.transport_persistent_ws_reuse,
@@ -712,12 +1060,37 @@ mod tests {
             provider_switches: 1,
             model_switches: 2,
             duration_mins: 45,
+            duration_secs: 2700,
             turns: 23,
             had_user_prompt: true,
             had_assistant_response: true,
             assistant_responses: 3,
+            first_assistant_response_ms: Some(1200),
+            first_tool_call_ms: Some(900),
+            first_tool_success_ms: Some(1500),
             tool_calls: 4,
             tool_failures: 1,
+            executed_tool_calls: 5,
+            executed_tool_successes: 4,
+            executed_tool_failures: 1,
+            tool_latency_total_ms: 3200,
+            tool_latency_max_ms: 1400,
+            file_write_calls: 2,
+            tests_run: 1,
+            tests_passed: 1,
+            feature_memory_used: true,
+            feature_swarm_used: false,
+            feature_web_used: true,
+            feature_email_used: false,
+            feature_mcp_used: true,
+            feature_side_panel_used: true,
+            feature_goal_used: false,
+            feature_selfdev_used: false,
+            feature_background_used: false,
+            feature_subagent_used: true,
+            unique_mcp_servers: 2,
+            session_success: true,
+            abandoned_before_response: false,
             transport_https: 2,
             transport_persistent_ws_fresh: 1,
             transport_persistent_ws_reuse: 5,
@@ -737,6 +1110,8 @@ mod tests {
         let json = serde_json::to_value(&event).unwrap();
         assert_eq!(json["event"], "session_end");
         assert_eq!(json["assistant_responses"], 3);
+        assert_eq!(json["duration_secs"], 2700);
+        assert_eq!(json["executed_tool_calls"], 5);
         assert_eq!(json["transport_https"], 2);
         assert_eq!(json["transport_persistent_ws_reuse"], 5);
         assert_eq!(json["end_reason"], "normal_exit");

@@ -7,6 +7,7 @@
     "deploy": "npx wrangler deploy",
     "migrate:expand": "npx wrangler d1 execute jcode-telemetry --remote --file=migrations/0001_expand_events.sql",
     "migrate:transport": "npx wrangler d1 execute jcode-telemetry --remote --file=migrations/0002_transport_metrics.sql",
+    "migrate:usage": "npx wrangler d1 execute jcode-telemetry --remote --file=migrations/0003_usage_expansion.sql",
     "health": "npx wrangler d1 execute jcode-telemetry --remote --file=health.sql"
   },
   "devDependencies": {
