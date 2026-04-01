@@ -7,8 +7,8 @@ use super::ui_diff::{
     diff_del_color, generate_diff_lines_from_tool_input, tint_span_with_diff_color,
 };
 use super::visual_debug::{
-    self, FrameCaptureBuilder, ImageRegionCapture, InfoWidgetCapture, InfoWidgetSummary,
-    MarginsCapture, MessageCapture, RenderTimingCapture, WidgetPlacementCapture,
+    self, FrameCaptureBuilder, ImageRegionCapture, InfoWidgetCapture, MarginsCapture,
+    MessageCapture, RenderTimingCapture,
 };
 use super::{DisplayMessage, ProcessingStatus, TuiState, is_unexpected_cache_miss};
 use crate::message::ToolCall;
@@ -25,6 +25,10 @@ use unicode_width::UnicodeWidthStr;
 
 #[path = "ui_animations.rs"]
 mod animations;
+#[path = "ui_changelog.rs"]
+mod changelog;
+#[path = "ui_debug_capture.rs"]
+mod debug_capture;
 #[path = "ui_diagram_pane.rs"]
 mod diagram_pane;
 #[path = "ui_file_diff.rs"]
@@ -58,6 +62,9 @@ use diagram_pane::{
 use diagram_pane::{
     draw_pinned_diagram, estimate_pinned_diagram_pane_height, estimate_pinned_diagram_pane_width,
 };
+use debug_capture::{
+    build_info_widget_summary, capture_widget_placements, rect_within_bounds, rects_overlap,
+};
 use file_diff_ui::active_file_diff_context;
 use file_diff_ui::draw_file_diff_view;
 #[cfg(test)]
@@ -65,6 +72,9 @@ use file_diff_ui::{
     FileDiffCacheKey, FileDiffViewCacheEntry, file_content_signature, file_diff_cache,
 };
 pub(crate) use header::capitalize;
+use changelog::{get_grouped_changelog, get_unseen_changelog_entries};
+#[cfg(test)]
+use changelog::{ChangelogEntry, group_changelog_entries, parse_changelog_from};
 #[cfg(test)]
 use memory_ui::{
     MemoryTileItem, choose_memory_tile_span, parse_memory_display_entries, plan_memory_tile,
@@ -1070,185 +1080,6 @@ fn binary_age() -> Option<String> {
     }
 
     Some(build_age)
-}
-
-/// A changelog entry: hash, optional version tag, and commit subject.
-struct ChangelogEntry<'a> {
-    hash: &'a str,
-    tag: &'a str,
-    timestamp: Option<i64>,
-    subject: &'a str,
-}
-
-/// Parse changelog entries from the embedded changelog string.
-///
-/// Current format per entry:
-///   "hash<RS>tag<RS>timestamp<RS>subject"
-/// where tag is either a version like "v0.4.2" or empty, timestamp is a
-/// Unix epoch seconds string, and entries are separated by ASCII unit
-/// separator (0x1F).
-///
-/// Older binaries used "hash:tag:subject"; we keep parsing that format too.
-fn parse_changelog_from(changelog: &str) -> Vec<ChangelogEntry<'_>> {
-    if changelog.is_empty() {
-        return Vec::new();
-    }
-    changelog
-        .split('\x1f')
-        .filter_map(|entry| {
-            if entry.contains('\x1e') {
-                let mut parts = entry.splitn(4, '\x1e');
-                let hash = parts.next()?;
-                let tag = parts.next().unwrap_or("");
-                let timestamp = parts.next().and_then(|raw| raw.parse::<i64>().ok());
-                let subject = parts.next()?;
-                Some(ChangelogEntry {
-                    hash,
-                    tag,
-                    timestamp,
-                    subject,
-                })
-            } else {
-                let (hash, rest) = entry.split_once(':')?;
-                let (tag, subject) = rest.split_once(':')?;
-                Some(ChangelogEntry {
-                    hash,
-                    tag,
-                    timestamp: None,
-                    subject,
-                })
-            }
-        })
-        .collect()
-}
-
-/// Parse the embedded changelog from the build-time environment.
-fn parse_changelog() -> Vec<ChangelogEntry<'static>> {
-    let changelog: &'static str = env!("JCODE_CHANGELOG");
-    parse_changelog_from(changelog)
-}
-
-/// A group of changelog entries under a version heading.
-#[derive(Clone)]
-pub struct ChangelogGroup {
-    pub version: String,
-    pub released_at: Option<String>,
-    pub entries: Vec<String>,
-}
-
-fn format_changelog_timestamp(timestamp: i64) -> Option<String> {
-    chrono::DateTime::<chrono::Utc>::from_timestamp(timestamp, 0)
-        .map(|dt| dt.format("%Y-%m-%d %H:%M UTC").to_string())
-}
-
-fn group_changelog_entries(
-    entries: &[ChangelogEntry<'_>],
-    current_version: &str,
-    current_git_date: &str,
-) -> Vec<ChangelogGroup> {
-    if entries.is_empty() {
-        return Vec::new();
-    }
-
-    let version_label = current_version
-        .split_whitespace()
-        .next()
-        .unwrap_or(current_version);
-    let unreleased_time =
-        chrono::DateTime::parse_from_str(current_git_date, "%Y-%m-%d %H:%M:%S %z")
-            .ok()
-            .map(|dt| {
-                dt.with_timezone(&chrono::Utc)
-                    .format("%Y-%m-%d %H:%M UTC")
-                    .to_string()
-            });
-
-    let mut groups: Vec<ChangelogGroup> = Vec::new();
-    let mut current_group = ChangelogGroup {
-        version: format!("{} (unreleased)", version_label),
-        released_at: unreleased_time,
-        entries: Vec::new(),
-    };
-
-    for entry in entries {
-        if !entry.tag.is_empty() {
-            if !current_group.entries.is_empty() {
-                groups.push(current_group);
-            }
-            current_group = ChangelogGroup {
-                version: entry.tag.to_string(),
-                released_at: entry.timestamp.and_then(format_changelog_timestamp),
-                entries: vec![entry.subject.to_string()],
-            };
-        } else {
-            current_group.entries.push(entry.subject.to_string());
-        }
-    }
-    if !current_group.entries.is_empty() {
-        groups.push(current_group);
-    }
-
-    groups
-}
-
-/// Return all embedded changelog entries grouped by release version.
-/// Each group has a version label (e.g. "v0.4.2") and the commit subjects
-/// that belong to that release. Commits before any tag are grouped under
-/// the current build version.
-pub fn get_grouped_changelog() -> Vec<ChangelogGroup> {
-    static GROUPS: OnceLock<Vec<ChangelogGroup>> = OnceLock::new();
-    GROUPS
-        .get_or_init(|| {
-            let entries = parse_changelog();
-            group_changelog_entries(&entries, env!("JCODE_VERSION"), env!("JCODE_GIT_DATE"))
-        })
-        .clone()
-}
-
-/// Get changelog entries the user hasn't seen yet.
-/// Reads the last-seen commit hash from ~/.jcode/last_seen_changelog,
-/// filters the embedded changelog to only new entries, then saves the latest hash.
-/// Returns just the commit subjects (not the hashes).
-pub(super) fn get_unseen_changelog_entries() -> &'static Vec<String> {
-    static ENTRIES: OnceLock<Vec<String>> = OnceLock::new();
-    ENTRIES.get_or_init(|| {
-        let all_entries = parse_changelog();
-        if all_entries.is_empty() {
-            return Vec::new();
-        }
-
-        let state_file = dirs::home_dir()
-            .map(|h| h.join(".jcode").join("last_seen_changelog"))
-            .unwrap_or_else(|| std::path::PathBuf::from(".jcode/last_seen_changelog"));
-
-        let last_seen_hash = std::fs::read_to_string(&state_file)
-            .ok()
-            .map(|s| s.trim().to_string())
-            .unwrap_or_default();
-
-        let new_entries: Vec<String> = if last_seen_hash.is_empty() {
-            all_entries
-                .iter()
-                .take(5)
-                .map(|e| e.subject.to_string())
-                .collect()
-        } else {
-            all_entries
-                .iter()
-                .take_while(|e| e.hash != last_seen_hash)
-                .map(|e| e.subject.to_string())
-                .collect()
-        };
-
-        if let Some(first) = all_entries.first() {
-            if let Some(parent) = state_file.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            let _ = std::fs::write(&state_file, first.hash);
-        }
-
-        new_entries
-    })
 }
 
 /// Shorten model name for display (e.g., "claude-opus-4-5-20251101" -> "claude4.5opus")
@@ -3401,97 +3232,6 @@ fn lerp_style(from: Style, to: Style, t: f32) -> Style {
     let mut s = to;
     s.fg = fg;
     s
-}
-
-fn capture_widget_placements(
-    placements: &[info_widget::WidgetPlacement],
-) -> Vec<WidgetPlacementCapture> {
-    placements
-        .iter()
-        .map(|p| WidgetPlacementCapture {
-            kind: p.kind.as_str().to_string(),
-            side: p.side.as_str().to_string(),
-            rect: p.rect.into(),
-        })
-        .collect()
-}
-
-fn build_info_widget_summary(data: &info_widget::InfoWidgetData) -> InfoWidgetSummary {
-    let todos_total = data.todos.len();
-    let todos_done = data
-        .todos
-        .iter()
-        .filter(|t| t.status == "completed")
-        .count();
-
-    let context_total_chars = data.context_info.as_ref().map(|c| c.total_chars);
-    let context_limit = data.context_limit;
-
-    let memory_total = data.memory_info.as_ref().map(|m| m.total_count);
-    let memory_project = data.memory_info.as_ref().map(|m| m.project_count);
-    let memory_global = data.memory_info.as_ref().map(|m| m.global_count);
-    let memory_activity = data.memory_info.as_ref().map(|m| m.activity.is_some());
-
-    let swarm_session_count = data.swarm_info.as_ref().map(|s| s.session_count);
-    let swarm_member_count = data.swarm_info.as_ref().map(|s| s.members.len());
-    let swarm_subagent_status = data
-        .swarm_info
-        .as_ref()
-        .and_then(|s| s.subagent_status.clone());
-
-    let background_running = data.background_info.as_ref().map(|b| b.running_count);
-    let background_tasks = data.background_info.as_ref().map(|b| b.running_tasks.len());
-
-    let usage_available = data.usage_info.as_ref().map(|u| u.available);
-    let usage_provider = data
-        .usage_info
-        .as_ref()
-        .map(|u| format!("{:?}", u.provider));
-
-    InfoWidgetSummary {
-        todos_total,
-        todos_done,
-        context_total_chars,
-        context_limit,
-        queue_mode: data.queue_mode,
-        model: data.model.clone(),
-        reasoning_effort: data.reasoning_effort.clone(),
-        session_count: data.session_count,
-        client_count: data.client_count,
-        memory_total,
-        memory_project,
-        memory_global,
-        memory_activity,
-        swarm_session_count,
-        swarm_member_count,
-        swarm_subagent_status,
-        background_running,
-        background_tasks,
-        usage_available,
-        usage_provider,
-        tokens_per_second: data.tokens_per_second,
-        auth_method: Some(format!("{:?}", data.auth_method)),
-        upstream_provider: data.upstream_provider.clone(),
-    }
-}
-
-fn rects_overlap(a: Rect, b: Rect) -> bool {
-    if a.width == 0 || a.height == 0 || b.width == 0 || b.height == 0 {
-        return false;
-    }
-    let a_right = a.x.saturating_add(a.width);
-    let a_bottom = a.y.saturating_add(a.height);
-    let b_right = b.x.saturating_add(b.width);
-    let b_bottom = b.y.saturating_add(b.height);
-    a.x < b_right && a_right > b.x && a.y < b_bottom && a_bottom > b.y
-}
-
-fn rect_within_bounds(rect: Rect, bounds: Rect) -> bool {
-    let right = rect.x.saturating_add(rect.width);
-    let bottom = rect.y.saturating_add(rect.height);
-    let bounds_right = bounds.x.saturating_add(bounds.width);
-    let bounds_bottom = bounds.y.saturating_add(bounds.height);
-    rect.x >= bounds.x && rect.y >= bounds.y && right <= bounds_right && bottom <= bounds_bottom
 }
 
 pub(crate) fn split_native_scrollbar_area(area: Rect, enabled: bool) -> (Rect, Option<Rect>) {
