@@ -39,6 +39,15 @@ pub fn format_error_chain(err: &anyhow::Error) -> String {
     }
 }
 
+/// Extract the payload from an SSE `data:` line.
+///
+/// The SSE spec allows an optional single space after the colon, so both
+/// `data:{...}` and `data: {...}` are valid and should parse identically.
+pub fn sse_data_line(line: &str) -> Option<&str> {
+    line.strip_prefix("data:")
+        .map(|rest| rest.strip_prefix(' ').unwrap_or(rest))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -89,5 +98,12 @@ mod tests {
     fn test_truncate_empty() {
         assert_eq!(truncate_str("", 10), "");
         assert_eq!(truncate_str("hello", 0), "");
+    }
+
+    #[test]
+    fn test_sse_data_line_accepts_optional_space() {
+        assert_eq!(sse_data_line("data: {\"ok\":true}"), Some("{\"ok\":true}"));
+        assert_eq!(sse_data_line("data:{\"ok\":true}"), Some("{\"ok\":true}"));
+        assert_eq!(sse_data_line("event: message"), None);
     }
 }

@@ -725,7 +725,7 @@ impl CopilotApiProvider {
                     continue;
                 }
 
-                if let Some(data) = line.strip_prefix("data: ") {
+                if let Some(data) = crate::util::sse_data_line(&line) {
                     if data.trim() == "[DONE]" {
                         // Send usage info before done
                         if input_tokens > 0 || output_tokens > 0 {

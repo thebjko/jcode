@@ -55,6 +55,8 @@ const RETRY_BASE_DELAY_MS: u64 = 1000;
 const DEFAULT_API_BASE: &str = "https://openrouter.ai/api/v1";
 const DEFAULT_API_KEY_NAME: &str = "OPENROUTER_API_KEY";
 const DEFAULT_ENV_FILE: &str = "openrouter.env";
+const KIMI_CODING_USER_AGENT: &str = "claude-cli/1.0.0";
+const KIMI_CODING_X_APP: &str = "cli";
 
 /// Default model (Claude Sonnet via OpenRouter)
 const DEFAULT_MODEL: &str = "anthropic/claude-sonnet-4";
@@ -256,6 +258,35 @@ fn configured_allow_no_auth() -> bool {
         .unwrap_or(false)
 }
 
+fn is_kimi_coding_api_base(api_base: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(api_base) else {
+        return false;
+    };
+    matches!(url.host_str(), Some("api.kimi.com"))
+        && url.path().trim_end_matches('/').starts_with("/coding")
+}
+
+fn is_kimi_for_coding_model(model: &str) -> bool {
+    model.trim().eq_ignore_ascii_case("kimi-for-coding")
+}
+
+fn should_send_kimi_coding_agent_headers(api_base: &str, model: Option<&str>) -> bool {
+    is_kimi_coding_api_base(api_base) || model.map(is_kimi_for_coding_model).unwrap_or(false)
+}
+
+fn apply_kimi_coding_agent_headers(
+    req: reqwest::RequestBuilder,
+    api_base: &str,
+    model: Option<&str>,
+) -> reqwest::RequestBuilder {
+    if should_send_kimi_coding_agent_headers(api_base, model) {
+        req.header("User-Agent", KIMI_CODING_USER_AGENT)
+            .header("x-app", KIMI_CODING_X_APP)
+    } else {
+        req
+    }
+}
+
 #[derive(Debug, Clone)]
 enum ProviderAuth {
     AuthorizationBearer {
@@ -339,12 +370,11 @@ async fn fetch_models_from_api(
     models_cache: Arc<RwLock<ModelsCache>>,
 ) -> Result<Vec<ModelInfo>> {
     let url = format!("{}/models", api_base);
-    let response = auth
-        .apply(client.get(&url))
-        .await?
-        .send()
-        .await
-        .with_context(|| format!("Failed to fetch models from {}", api_base))?;
+    let response =
+        apply_kimi_coding_agent_headers(auth.apply(client.get(&url)).await?, &api_base, None)
+            .send()
+            .await
+            .with_context(|| format!("Failed to fetch models from {}", api_base))?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -1240,7 +1270,7 @@ impl Provider for OpenRouterProvider {
                 }
                 Role::Assistant => {
                     let mut text_content = String::new();
-                    let reasoning_content = String::new();
+                    let mut reasoning_content = String::new();
                     let mut tool_calls = Vec::new();
                     let mut post_tool_outputs: Vec<(String, String)> = Vec::new();
                     let mut missing_tool_outputs: Vec<String> = Vec::new();
@@ -1249,6 +1279,9 @@ impl Provider for OpenRouterProvider {
                         match block {
                             ContentBlock::Text { text, .. } => {
                                 text_content.push_str(text);
+                            }
+                            ContentBlock::Reasoning { text } => {
+                                reasoning_content.push_str(text);
                             }
                             ContentBlock::ToolUse { id, name, input } => {
                                 let args = if input.is_object() {
@@ -1295,20 +1328,20 @@ impl Provider for OpenRouterProvider {
                         assistant_msg["tool_calls"] = serde_json::json!(tool_calls);
                     }
 
+                    let has_reasoning_content = !reasoning_content.is_empty();
                     if allow_reasoning
-                        && (include_reasoning_content || !reasoning_content.is_empty())
-                        && (!reasoning_content.is_empty() || !tool_calls.is_empty())
+                        && (include_reasoning_content || has_reasoning_content)
+                        && (has_reasoning_content || !tool_calls.is_empty())
                     {
-                        let reasoning_payload =
-                            if reasoning_content.is_empty() && !tool_calls.is_empty() {
-                                " ".to_string()
-                            } else {
-                                reasoning_content
-                            };
+                        let reasoning_payload = if has_reasoning_content {
+                            reasoning_content.clone()
+                        } else {
+                            " ".to_string()
+                        };
                         assistant_msg["reasoning_content"] = serde_json::json!(reasoning_payload);
                     }
 
-                    if !text_content.is_empty() || !tool_calls.is_empty() {
+                    if !text_content.is_empty() || !tool_calls.is_empty() || has_reasoning_content {
                         api_messages.push(assistant_msg);
 
                         for (tool_call_id, output) in post_tool_outputs {
@@ -1928,14 +1961,17 @@ async fn stream_response(
     let connect_start = std::time::Instant::now();
 
     let url = format!("{}/chat/completions", api_base);
-    let mut req = auth
-        .apply(
+    let mut req = apply_kimi_coding_agent_headers(
+        auth.apply(
             client
                 .post(&url)
                 .header("Content-Type", "application/json")
                 .header("Accept-Encoding", "identity"),
         )
-        .await?;
+        .await?,
+        &api_base,
+        Some(&model),
+    );
 
     if send_openrouter_headers {
         req = req
@@ -2089,7 +2125,7 @@ impl OpenRouterStream {
             // Parse SSE event
             let mut data = None;
             for line in event_str.lines() {
-                if let Some(d) = line.strip_prefix("data: ") {
+                if let Some(d) = crate::util::sse_data_line(line) {
                     data = Some(d);
                 }
             }
@@ -2136,15 +2172,26 @@ impl OpenRouterStream {
             // Parse choices
             if let Some(choices) = parsed.get("choices").and_then(|c| c.as_array()) {
                 for choice in choices {
-                    let delta = match choice.get("delta") {
+                    let delta = match choice.get("delta").or_else(|| choice.get("message")) {
                         Some(d) => d,
                         None => continue,
                     };
 
+                    if let Some(reasoning_content) =
+                        delta.get("reasoning_content").and_then(|c| c.as_str())
+                    {
+                        if !reasoning_content.is_empty() {
+                            self.pending.push_back(StreamEvent::ThinkingDelta(
+                                reasoning_content.to_string(),
+                            ));
+                        }
+                    }
+
                     // Text content
                     if let Some(content) = delta.get("content").and_then(|c| c.as_str()) {
                         if !content.is_empty() {
-                            return Some(StreamEvent::TextDelta(content.to_string()));
+                            self.pending
+                                .push_back(StreamEvent::TextDelta(content.to_string()));
                         }
                     }
 
@@ -2701,6 +2748,38 @@ mod tests {
             !order.is_empty(),
             "Kimi routing should always produce a provider order"
         );
+    }
+
+    #[test]
+    fn test_kimi_coding_header_detection_matches_endpoint_and_model() {
+        assert!(should_send_kimi_coding_agent_headers(
+            "https://api.kimi.com/coding/v1",
+            None,
+        ));
+        assert!(should_send_kimi_coding_agent_headers(
+            "https://example.com/v1",
+            Some("kimi-for-coding"),
+        ));
+        assert!(!should_send_kimi_coding_agent_headers(
+            "https://api.openrouter.ai/api/v1",
+            Some("anthropic/claude-sonnet-4"),
+        ));
+    }
+
+    #[test]
+    fn test_parse_next_event_accepts_compact_sse_data_and_reasoning_content() {
+        let mut stream = OpenRouterStream::new(
+            futures::stream::empty::<Result<Bytes, reqwest::Error>>(),
+            "kimi-for-coding".to_string(),
+            Arc::new(Mutex::new(None)),
+        );
+        stream.buffer =
+            "data:{\"choices\":[{\"delta\":{\"reasoning_content\":\"thinking\"}}]}\n\n".to_string();
+
+        match stream.parse_next_event() {
+            Some(StreamEvent::ThinkingDelta(text)) => assert_eq!(text, "thinking"),
+            other => panic!("expected ThinkingDelta, got {:?}", other),
+        }
     }
 
     #[test]

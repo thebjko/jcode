@@ -599,7 +599,7 @@ async fn collect_openai_sse_text(response: reqwest::Response) -> Result<String> 
             let line = buf[..newline_pos].trim_end_matches('\r').to_string();
             buf = buf[newline_pos + 1..].to_string();
 
-            if let Some(data) = line.strip_prefix("data: ") {
+            if let Some(data) = crate::util::sse_data_line(&line) {
                 if data == "[DONE]" {
                     return Ok(text);
                 }

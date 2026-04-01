@@ -116,7 +116,7 @@ impl Tool for CodeSearchTool {
 
         let response_text = response.text().await?;
         for line in response_text.lines() {
-            if let Some(data) = line.strip_prefix("data: ") {
+            if let Some(data) = crate::util::sse_data_line(line) {
                 if let Ok(parsed) = serde_json::from_str::<McpResponse>(data) {
                     if let Some(result) = parsed.result {
                         if let Some(first) = result.content.first() {

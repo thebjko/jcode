@@ -1100,7 +1100,7 @@ fn parse_sse_event(buffer: &mut String) -> Option<SseEvent> {
     for line in event_str.lines() {
         if let Some(rest) = line.strip_prefix("event: ") {
             event_type = rest.to_string();
-        } else if let Some(rest) = line.strip_prefix("data: ") {
+        } else if let Some(rest) = crate::util::sse_data_line(line) {
             data = rest.to_string();
         }
     }

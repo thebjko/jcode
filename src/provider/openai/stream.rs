@@ -542,7 +542,7 @@ impl OpenAIResponsesStream {
 
             let mut data_lines = Vec::new();
             for line in event_str.lines() {
-                if let Some(data) = line.strip_prefix("data: ") {
+                if let Some(data) = crate::util::sse_data_line(line) {
                     data_lines.push(data);
                 }
             }
