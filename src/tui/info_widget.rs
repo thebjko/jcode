@@ -3090,7 +3090,8 @@ mod tests {
         BackgroundInfo, GraphEdge, GraphNode, InfoWidgetData, Margins, MemoryActivity, MemoryEvent,
         MemoryEventKind, MemoryInfo, MemoryState, PipelineState, StepStatus, SwarmInfo, UsageInfo,
         UsageProvider, WidgetKind, calculate_placements, occasional_status_tip,
-        render_memory_topology_lines, render_memory_widget, render_model_widget, truncate_smart,
+        render_memory_compact, render_memory_topology_lines, render_memory_widget,
+        render_model_widget, truncate_smart,
     };
     use ratatui::layout::Rect;
     use std::time::{Duration, Instant};
@@ -3352,6 +3353,29 @@ mod tests {
 
         assert_eq!(text.matches("last:").count(), 1, "{text}");
         assert!(text.contains("trace:"), "{text}");
+    }
+
+    #[test]
+    fn memory_compact_shows_short_model_only() {
+        let lines = render_memory_compact(
+            &MemoryInfo {
+                sidecar_model: Some("openai · gpt-5.3-codex-spark".to_string()),
+                ..Default::default()
+            },
+            30,
+        );
+
+        let text = lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.as_ref())
+            .collect::<Vec<_>>()
+            .join("\n")
+            .to_lowercase();
+
+        assert!(text.contains("gpt-5.3"), "{text}");
+        assert!(!text.contains("openai"), "{text}");
+        assert!(!text.contains("codex-spark"), "{text}");
     }
 
     #[test]
@@ -3810,7 +3834,7 @@ fn render_memory_compact(info: &MemoryInfo, inner_width: u16) -> Vec<Line<'stati
                 .or_else(|| memory_active_summary(&activity.state))
                 .or_else(|| memory_last_trace_summary(activity))
         })
-        .or_else(|| info.sidecar_model.clone())
+        .or_else(|| info.sidecar_model.as_deref().map(compact_memory_model_label))
         .unwrap_or_else(|| "idle".to_string());
 
     let title_width = UnicodeWidthStr::width(title.as_str());
@@ -3835,6 +3859,16 @@ fn render_memory_compact(info: &MemoryInfo, inner_width: u16) -> Vec<Line<'stati
             Style::default().fg(accent),
         ),
     ])]
+}
+
+fn compact_memory_model_label(model: &str) -> String {
+    let trimmed = model.trim();
+    let model_name = trimmed
+        .rsplit_once('·')
+        .map(|(_, model)| model.trim())
+        .filter(|model| !model.is_empty())
+        .unwrap_or(trimmed);
+    shorten_model_name(model_name)
 }
 
 fn memory_active_summary(state: &MemoryState) -> Option<String> {

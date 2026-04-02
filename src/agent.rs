@@ -1421,6 +1421,11 @@ impl Agent {
             transcript.push('\n');
         }
 
+        if !crate::memory::memory_sidecar_enabled() {
+            logging::info("Memory extraction skipped: memory sidecar disabled");
+            return 0;
+        }
+
         // Extract using sidecar
         let sidecar = crate::sidecar::Sidecar::new();
         match sidecar.extract_memories(&transcript).await {

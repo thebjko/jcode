@@ -43,6 +43,10 @@ use pending::{begin_memory_check, finish_memory_check};
 
 const LEGACY_NOTE_CATEGORY: &str = "note";
 
+pub fn memory_sidecar_enabled() -> bool {
+    crate::config::config().agents.memory_sidecar_enabled
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryScope {
     Project,
@@ -1711,6 +1715,11 @@ impl MemoryManager {
         transcript: &str,
         session_id: &str,
     ) -> Result<Vec<String>> {
+        if !memory_sidecar_enabled() {
+            crate::logging::info("Memory transcript extraction skipped: memory sidecar disabled");
+            return Ok(Vec::new());
+        }
+
         let sidecar = Sidecar::new();
         let extracted = sidecar.extract_memories(transcript).await?;
 
@@ -1904,7 +1913,9 @@ impl MemoryManager {
                         memory_ids,
                         display_prompt,
                     );
-                    add_event(MemoryEventKind::SidecarComplete { latency_ms: 0 });
+                    if memory_sidecar_enabled() {
+                        add_event(MemoryEventKind::SidecarComplete { latency_ms: 0 });
+                    }
                 }
                 Ok((None, _, _)) => {
                     set_state(MemoryState::Idle);
@@ -2033,6 +2044,57 @@ impl MemoryManager {
             });
             set_state(MemoryState::Idle);
             return Ok((None, Vec::new(), None));
+        }
+
+        if !memory_sidecar_enabled() {
+            let relevant: Vec<_> = candidates
+                .into_iter()
+                .take(MEMORY_RELEVANCE_MAX_RESULTS)
+                .map(|(entry, _)| entry)
+                .collect();
+            let relevant_ids: Vec<String> = relevant.iter().map(|entry| entry.id.clone()).collect();
+            let _ = self.touch_entries(&relevant_ids);
+
+            if relevant.is_empty() {
+                pipeline_update(|p| {
+                    p.verify = StepStatus::Skipped;
+                    p.verify_result = Some(StepResult {
+                        summary: "semantic only".to_string(),
+                        latency_ms: 0,
+                    });
+                    p.inject = StepStatus::Skipped;
+                    p.maintain = StepStatus::Skipped;
+                });
+                set_state(MemoryState::Idle);
+                return Ok((None, Vec::new(), None));
+            }
+
+            pipeline_update(|p| {
+                p.verify = StepStatus::Skipped;
+                p.verify_result = Some(StepResult {
+                    summary: format!("semantic {}", relevant.len()),
+                    latency_ms: 0,
+                });
+                p.inject = StepStatus::Running;
+            });
+
+            set_state(MemoryState::FoundRelevant {
+                count: relevant.len(),
+            });
+
+            let prompt = format_relevant_prompt(&relevant, MEMORY_RELEVANCE_MAX_RESULTS);
+            let display_prompt =
+                format_relevant_display_prompt(&relevant, MEMORY_RELEVANCE_MAX_RESULTS);
+
+            pipeline_update(|p| {
+                p.inject = StepStatus::Done;
+                p.inject_result = Some(StepResult {
+                    summary: format!("{} memories", relevant.len()),
+                    latency_ms: 0,
+                });
+            });
+
+            return Ok((prompt, relevant_ids, display_prompt));
         }
 
         // Step 2: Sidecar verification (only for embedding hits - much fewer calls!)

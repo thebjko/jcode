@@ -1745,6 +1745,11 @@ impl App {
             transcript.push('\n');
         }
 
+        if !crate::memory::memory_sidecar_enabled() {
+            crate::logging::info("Memory extraction skipped: memory sidecar disabled");
+            return;
+        }
+
         // Extract memories using sidecar (with existing context for dedup)
         let manager = self
             .session

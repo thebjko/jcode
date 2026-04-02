@@ -162,6 +162,8 @@ pub struct AgentsConfig {
     pub swarm_model: Option<String>,
     /// Optional default model override for the memory sidecar.
     pub memory_model: Option<String>,
+    /// Whether memory should use the sidecar for relevance/extraction.
+    pub memory_sidecar_enabled: bool,
 }
 
 impl Default for AgentsConfig {
@@ -169,6 +171,7 @@ impl Default for AgentsConfig {
         Self {
             swarm_model: None,
             memory_model: None,
+            memory_sidecar_enabled: false,
         }
     }
 }

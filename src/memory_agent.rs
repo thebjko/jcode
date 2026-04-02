@@ -280,8 +280,8 @@ pub struct MemoryAgent {
     /// Channel to receive messages
     rx: mpsc::Receiver<AgentMessage>,
 
-    /// Haiku sidecar for LLM decisions
-    sidecar: Sidecar,
+    /// Optional sidecar for LLM-backed memory decisions.
+    sidecar: Option<Sidecar>,
 
     /// Per-session state keyed by session ID
     sessions: HashMap<String, SessionState>,
@@ -292,7 +292,7 @@ impl MemoryAgent {
     fn new(rx: mpsc::Receiver<AgentMessage>) -> Self {
         Self {
             rx,
-            sidecar: Sidecar::new(),
+            sidecar: memory::memory_sidecar_enabled().then(Sidecar::new),
             sessions: HashMap::new(),
         }
     }
@@ -595,6 +595,26 @@ impl MemoryAgent {
         context: &str,
         candidates: Vec<(MemoryEntry, f32)>,
     ) -> Result<Vec<MemoryEntry>> {
+        if !memory::memory_sidecar_enabled() {
+            return Ok(candidates
+                .into_iter()
+                .take(MAX_MEMORIES_PER_TURN)
+                .map(|(entry, sim)| {
+                    crate::logging::info(&format!(
+                        "[{}] Memory relevant (semantic sim={:.2}): {}",
+                        session_id,
+                        sim,
+                        &entry.content[..entry.content.len().min(40)]
+                    ));
+                    entry
+                })
+                .collect());
+        }
+
+        let Some(sidecar) = self.sidecar.clone() else {
+            return Ok(Vec::new());
+        };
+
         let mut relevant = Vec::new();
 
         // Process in parallel
@@ -602,7 +622,7 @@ impl MemoryAgent {
             .iter()
             .take(MAX_MEMORIES_PER_TURN)
             .map(|(entry, sim)| {
-                let sidecar = self.sidecar.clone();
+                let sidecar = sidecar.clone();
                 let content = entry.content.clone();
                 let ctx = context.to_string();
                 let similarity = *sim;
@@ -660,6 +680,14 @@ impl MemoryAgent {
     /// This is an incremental extraction - we extract from a portion of the
     /// conversation (on topic change or periodically) rather than waiting for session end.
     async fn extract_from_context(&self, session_id: &str, context: &str, reason: &str) {
+        if !memory::memory_sidecar_enabled() {
+            crate::logging::info(&format!(
+                "Incremental extraction skipped for session {}: memory sidecar disabled",
+                session_id
+            ));
+            return;
+        }
+
         // Don't extract from very short contexts
         if context.len() < 200 {
             return;
@@ -673,7 +701,13 @@ impl MemoryAgent {
             reason: reason.to_string(),
         });
 
-        let sidecar = self.sidecar.clone();
+        let Some(sidecar) = self.sidecar.clone() else {
+            crate::logging::info(&format!(
+                "Incremental extraction skipped for session {}: sidecar unavailable",
+                session_id
+            ));
+            return;
+        };
         let memory_manager = self.manager_for_session(session_id);
         let context_owned = context.to_string();
 
@@ -1112,6 +1146,12 @@ async fn refine_clusters(
 }
 
 async fn name_cluster_with_sidecar(member_contents: &[String]) -> Result<String> {
+    if !memory::memory_sidecar_enabled() {
+        let fallback = infer_candidate_tag(&member_contents.join(" "))
+            .unwrap_or_else(|| "shared context".to_string());
+        return Ok(fallback);
+    }
+
     let sidecar = Sidecar::new();
     let mut prompt = String::from(
         "These memories were retrieved together. Give this cluster a short descriptive name (2-4 words, no quotes):\n",
