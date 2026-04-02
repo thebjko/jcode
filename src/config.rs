@@ -1320,13 +1320,20 @@ impl Config {
         source_id.trim().to_ascii_lowercase()
     }
 
-    fn trusted_external_auth_path_entry(source_id: &str, path: &std::path::Path) -> anyhow::Result<String> {
+    fn trusted_external_auth_path_entry(
+        source_id: &str,
+        path: &std::path::Path,
+    ) -> anyhow::Result<String> {
         let source_id = Self::normalize_external_auth_source_id(source_id);
         if source_id.is_empty() {
             anyhow::bail!("External auth source id cannot be empty");
         }
         let canonical = crate::storage::validate_external_auth_file(path)?;
-        Ok(format!("{}|{}", source_id, canonical.to_string_lossy().to_ascii_lowercase()))
+        Ok(format!(
+            "{}|{}",
+            source_id,
+            canonical.to_string_lossy().to_ascii_lowercase()
+        ))
     }
 
     pub fn external_auth_source_allowed(source_id: &str) -> bool {
@@ -1397,7 +1404,30 @@ impl Config {
             cfg.auth.trusted_external_source_paths.dedup();
             cfg.save()?;
         }
-        crate::logging::info(&format!("Saved trusted external auth source path: {}", entry));
+        crate::logging::info(&format!(
+            "Saved trusted external auth source path: {}",
+            entry
+        ));
+        Ok(())
+    }
+
+    pub fn revoke_external_auth_source_for_path(
+        source_id: &str,
+        path: &std::path::Path,
+    ) -> anyhow::Result<()> {
+        let entry = Self::trusted_external_auth_path_entry(source_id, path)?;
+        let mut cfg = Self::load();
+        let before = cfg.auth.trusted_external_source_paths.len();
+        cfg.auth
+            .trusted_external_source_paths
+            .retain(|value| !value.trim().eq_ignore_ascii_case(&entry));
+        if cfg.auth.trusted_external_source_paths.len() != before {
+            cfg.save()?;
+            crate::logging::info(&format!(
+                "Removed trusted external auth source path: {}",
+                entry
+            ));
+        }
         Ok(())
     }
 

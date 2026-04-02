@@ -247,6 +247,12 @@ impl App {
         provider: crate::provider_catalog::LoginProviderDescriptor,
     ) {
         match provider.target {
+            crate::provider_catalog::LoginProviderTarget::AutoImport => {
+                self.push_display_message(DisplayMessage::error(
+                    "Auto Import is currently available from the CLI login flow. Run `jcode login --provider auto-import`."
+                        .to_string(),
+                ));
+            }
             crate::provider_catalog::LoginProviderTarget::Jcode => self.start_jcode_login(),
             crate::provider_catalog::LoginProviderTarget::Claude => self.start_claude_login(),
             crate::provider_catalog::LoginProviderTarget::OpenAi => self.start_openai_login(),
@@ -2644,7 +2650,6 @@ impl App {
         }
         Ok(msg)
     }
-
 
     pub(super) fn handle_login_input(&mut self, pending: PendingLogin, input: String) {
         let trimmed = input.trim();

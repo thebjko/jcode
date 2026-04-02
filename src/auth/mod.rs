@@ -1,5 +1,5 @@
-pub mod antigravity;
 pub mod account_store;
+pub mod antigravity;
 pub mod azure;
 pub mod claude;
 pub mod codex;
@@ -148,6 +148,13 @@ impl AuthStatus {
 
     pub fn state_for_key(&self, key: LoginProviderAuthStateKey) -> AuthState {
         match key {
+            LoginProviderAuthStateKey::ExternalImport => {
+                if Self::has_any_untrusted_external_auth() {
+                    AuthState::Available
+                } else {
+                    AuthState::NotConfigured
+                }
+            }
             LoginProviderAuthStateKey::Jcode => self.jcode,
             LoginProviderAuthStateKey::Anthropic => self.anthropic.state,
             LoginProviderAuthStateKey::OpenAi => self.openai,
@@ -163,6 +170,13 @@ impl AuthStatus {
 
     pub fn state_for_provider(&self, provider: LoginProviderDescriptor) -> AuthState {
         match provider.target {
+            crate::provider_catalog::LoginProviderTarget::AutoImport => {
+                if Self::has_any_untrusted_external_auth() {
+                    AuthState::Available
+                } else {
+                    AuthState::NotConfigured
+                }
+            }
             crate::provider_catalog::LoginProviderTarget::Jcode => {
                 if crate::subscription_catalog::has_credentials() {
                     AuthState::Available
@@ -197,6 +211,13 @@ impl AuthStatus {
 
     pub fn method_detail_for_provider(&self, provider: LoginProviderDescriptor) -> String {
         match provider.target {
+            crate::provider_catalog::LoginProviderTarget::AutoImport => {
+                if Self::has_any_untrusted_external_auth() {
+                    "Existing external logins detected".to_string()
+                } else {
+                    "No importable external logins found".to_string()
+                }
+            }
             crate::provider_catalog::LoginProviderTarget::Jcode => {
                 if self.state_for_provider(provider) == AuthState::Available {
                     if crate::subscription_catalog::has_router_base() {
