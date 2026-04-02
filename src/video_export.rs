@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use base64::Engine;
 use ratatui::buffer::Buffer;
 use ratatui::style::Color;
+use unicode_width::UnicodeWidthStr;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -636,10 +637,19 @@ fn buffer_to_svg(
     ));
 
     let font_px = font_size * 96.0 / 72.0;
+    let primary_font = xml_escape(font_family);
     svg.push_str(&format!(
-        r##"<style>text {{ font-family: "{}", monospace; font-size: {:.1}px; dominant-baseline: text-before-edge; }}</style>"##,
-        xml_escape(font_family),
-        font_px
+        r##"<style>
+text.main {{ font-family: "{}", monospace; font-size: {:.1}px; dominant-baseline: text-before-edge; font-variant-ligatures: none; }}
+text.symbol {{ font-family: "Symbols Nerd Font", "{}", monospace; font-size: {:.1}px; dominant-baseline: text-before-edge; font-variant-ligatures: none; }}
+text.emoji {{ font-family: "Noto Color Emoji", "Symbols Nerd Font", "{}", sans-serif; font-size: {:.1}px; dominant-baseline: text-before-edge; font-variant-ligatures: none; }}
+</style>"##,
+        primary_font,
+        font_px,
+        primary_font,
+        font_px,
+        primary_font,
+        font_px,
     ));
 
     // Render cells: batch adjacent cells with same bg color into rectangles,
@@ -696,6 +706,22 @@ fn buffer_to_svg(
                 continue;
             }
             if sym.contains('\x00') {
+                x += 1;
+                continue;
+            }
+
+            if needs_special_cell_render(sym) {
+                let fg = color_to_hex(cell.fg);
+                let bold = cell.modifier.contains(ratatui::style::Modifier::BOLD);
+                let text_y = y as u32 * cell_h + (cell_h as f64 * 0.15) as u32;
+                svg.push_str(&render_special_text_cell(
+                    sym,
+                    x as u32 * cell_w,
+                    text_y,
+                    cell_w,
+                    &fg,
+                    bold,
+                ));
                 x += 1;
                 continue;
             }
@@ -779,7 +805,7 @@ fn buffer_to_svg(
             let text_y = y as u32 * cell_h + (cell_h as f64 * 0.15) as u32;
 
             svg.push_str(&format!(
-                r#"<text x="{}" y="{}" fill="{}"{} xml:space="preserve">{}</text>"#,
+                r#"<text class="main" x="{}" y="{}" fill="{}"{} xml:space="preserve">{}</text>"#,
                 start_x as u32 * cell_w,
                 text_y,
                 fg,
@@ -835,6 +861,55 @@ fn xml_escape(s: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&apos;")
+}
+
+fn is_private_use(ch: char) -> bool {
+    ('\u{E000}'..='\u{F8FF}').contains(&ch)
+        || ('\u{F0000}'..='\u{FFFFD}').contains(&ch)
+        || ('\u{100000}'..='\u{10FFFD}').contains(&ch)
+}
+
+fn looks_like_emoji(sym: &str) -> bool {
+    sym.chars().any(|ch| {
+        ch == '\u{FE0F}'
+            || ('\u{1F000}'..='\u{1FAFF}').contains(&ch)
+            || ('\u{2600}'..='\u{27BF}').contains(&ch)
+    })
+}
+
+fn special_text_class(sym: &str) -> &'static str {
+    if looks_like_emoji(sym) {
+        "emoji"
+    } else {
+        "symbol"
+    }
+}
+
+fn needs_special_cell_render(sym: &str) -> bool {
+    looks_like_emoji(sym) || sym.chars().any(is_private_use)
+}
+
+fn render_special_text_cell(
+    sym: &str,
+    x: u32,
+    y: u32,
+    cell_w: u32,
+    fg: &str,
+    bold: bool,
+) -> String {
+    let font_weight = if bold { r#" font-weight="bold""# } else { "" };
+    let display_width = UnicodeWidthStr::width(sym).max(1) as u32;
+    let text_len = display_width * cell_w;
+    format!(
+        r#"<text class="{}" x="{}" y="{}" fill="{}"{} xml:space="preserve" textLength="{}" lengthAdjust="spacingAndGlyphs">{}</text>"#,
+        special_text_class(sym),
+        x,
+        y,
+        fg,
+        font_weight,
+        text_len,
+        xml_escape(sym)
+    )
 }
 
 fn is_box_drawing(ch: char) -> bool {

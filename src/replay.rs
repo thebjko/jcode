@@ -115,6 +115,21 @@ fn default_stream_speed() -> u64 {
     80
 }
 
+const MAX_INITIAL_REPLAY_IDLE_MS: u64 = 500;
+
+fn cap_initial_replay_idle(events: &mut [TimelineEvent]) {
+    let Some(first_t) = events.first().map(|event| event.t) else {
+        return;
+    };
+    let shift = first_t.saturating_sub(MAX_INITIAL_REPLAY_IDLE_MS);
+    if shift == 0 {
+        return;
+    }
+    for event in events {
+        event.t = event.t.saturating_sub(shift);
+    }
+}
+
 /// Export a session to a replay timeline.
 ///
 /// Uses stored timestamps for real pacing, falls back to estimates.
@@ -336,6 +351,7 @@ pub fn export_timeline(session: &Session) -> Vec<TimelineEvent> {
     }
 
     events.sort_by_key(|event| event.t);
+    cap_initial_replay_idle(&mut events);
 
     events
 }
@@ -384,6 +400,11 @@ pub fn timeline_to_replay_events(timeline: &[TimelineEvent]) -> Vec<(u64, Replay
 
     for event in timeline {
         let delay = event.t.saturating_sub(prev_t);
+        let delay = if out.is_empty() {
+            delay.min(MAX_INITIAL_REPLAY_IDLE_MS)
+        } else {
+            delay
+        };
         prev_t = event.t;
 
         match &event.kind {
@@ -1051,6 +1072,46 @@ mod tests {
             ReplayEvent::Server(ServerEvent::Done { .. }) => {}
             _ => panic!("Expected Server(Done)"),
         }
+    }
+
+    #[test]
+    fn test_timeline_to_replay_events_caps_initial_idle() {
+        let events = vec![
+            TimelineEvent {
+                t: 8_000,
+                kind: TimelineEventKind::UserMessage {
+                    text: "hello".to_string(),
+                },
+            },
+            TimelineEvent {
+                t: 8_500,
+                kind: TimelineEventKind::Thinking { duration: 800 },
+            },
+        ];
+
+        let replay_events = timeline_to_replay_events(&events);
+        assert_eq!(replay_events[0].0, 500);
+        assert!(matches!(replay_events[0].1, ReplayEvent::UserMessage { .. }));
+    }
+
+    #[test]
+    fn test_cap_initial_replay_idle_shifts_timeline_start() {
+        let mut events = vec![
+            TimelineEvent {
+                t: 8_000,
+                kind: TimelineEventKind::UserMessage {
+                    text: "hello".to_string(),
+                },
+            },
+            TimelineEvent {
+                t: 8_750,
+                kind: TimelineEventKind::Thinking { duration: 800 },
+            },
+        ];
+
+        cap_initial_replay_idle(&mut events);
+        assert_eq!(events[0].t, 500);
+        assert_eq!(events[1].t, 1_250);
     }
 
     #[test]
