@@ -115,7 +115,7 @@ fn default_stream_speed() -> u64 {
     80
 }
 
-const MAX_INITIAL_REPLAY_IDLE_MS: u64 = 500;
+const MAX_INITIAL_REPLAY_IDLE_MS: u64 = 0;
 
 fn cap_initial_replay_idle(events: &mut [TimelineEvent]) {
     let Some(first_t) = events.first().map(|event| event.t) else {
@@ -1090,8 +1090,11 @@ mod tests {
         ];
 
         let replay_events = timeline_to_replay_events(&events);
-        assert_eq!(replay_events[0].0, 500);
-        assert!(matches!(replay_events[0].1, ReplayEvent::UserMessage { .. }));
+        assert_eq!(replay_events[0].0, 0);
+        assert!(matches!(
+            replay_events[0].1,
+            ReplayEvent::UserMessage { .. }
+        ));
     }
 
     #[test]
@@ -1110,8 +1113,8 @@ mod tests {
         ];
 
         cap_initial_replay_idle(&mut events);
-        assert_eq!(events[0].t, 500);
-        assert_eq!(events[1].t, 1_250);
+        assert_eq!(events[0].t, 0);
+        assert_eq!(events[1].t, 750);
     }
 
     #[test]

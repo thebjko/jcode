@@ -3163,6 +3163,7 @@ fn test_handterm_native_scroll_command_updates_chat_offset() {
     assert_eq!(app.scroll_offset, 7);
 }
 
+#[cfg(unix)]
 #[test]
 fn test_handterm_native_scroll_client_roundtrips_over_socket() {
     use std::io::{Read, Write};
