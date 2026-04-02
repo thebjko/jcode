@@ -147,7 +147,11 @@ impl SessionPicker {
         }
     }
 
-    pub(super) fn handle_focus_navigation_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> bool {
+    pub(super) fn handle_focus_navigation_key(
+        &mut self,
+        code: KeyCode,
+        modifiers: KeyModifiers,
+    ) -> bool {
         match code {
             KeyCode::Char('h') | KeyCode::Left => {
                 self.focus = PaneFocus::Sessions;

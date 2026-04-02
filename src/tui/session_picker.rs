@@ -19,8 +19,8 @@ use std::collections::HashSet;
 use std::io::IsTerminal;
 use std::time::Duration;
 
-mod loading;
 mod filter;
+mod loading;
 mod navigation;
 mod render;
 
@@ -87,7 +87,6 @@ const DEFAULT_SESSION_SCAN_LIMIT: usize = 300;
 const MIN_SESSION_SCAN_LIMIT: usize = 50;
 const MAX_SESSION_SCAN_LIMIT: usize = 10_000;
 
-
 #[derive(Clone, Debug)]
 pub enum PickerResult {
     Selected(Vec<String>),
@@ -100,7 +99,6 @@ pub enum OverlayAction {
     Close,
     Selected(PickerResult),
 }
-
 
 /// Safely truncate a string at a character boundary
 fn safe_truncate(s: &str, max_chars: usize) -> &str {

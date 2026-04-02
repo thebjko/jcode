@@ -15,9 +15,7 @@ pub(super) fn capture_widget_placements(
         .collect()
 }
 
-pub(super) fn build_info_widget_summary(
-    data: &info_widget::InfoWidgetData,
-) -> InfoWidgetSummary {
+pub(super) fn build_info_widget_summary(data: &info_widget::InfoWidgetData) -> InfoWidgetSummary {
     let todos_total = data.todos.len();
     let todos_done = data
         .todos
@@ -44,7 +42,10 @@ pub(super) fn build_info_widget_summary(
     let background_tasks = data.background_info.as_ref().map(|b| b.running_tasks.len());
 
     let usage_available = data.usage_info.as_ref().map(|u| u.available);
-    let usage_provider = data.usage_info.as_ref().map(|u| format!("{:?}", u.provider));
+    let usage_provider = data
+        .usage_info
+        .as_ref()
+        .map(|u| format!("{:?}", u.provider));
 
     InfoWidgetSummary {
         todos_total,

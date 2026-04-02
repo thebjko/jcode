@@ -31,14 +31,14 @@ pub use activity::{
     add_event, check_staleness, clear_activity, get_activity, pipeline_start, pipeline_update,
     record_injected_prompt, set_state,
 };
-pub use pending::{
-    PendingMemory, clear_all_injected_memories, clear_all_pending_memory,
-    clear_injected_memories, clear_pending_memory, has_any_pending_memory, has_pending_memory,
-    is_memory_injected, is_memory_injected_any, mark_memories_injected, set_pending_memory,
-    set_pending_memory_with_ids, set_pending_memory_with_ids_and_display, take_pending_memory,
-};
 #[cfg(test)]
 use pending::insert_pending_memory_for_test;
+pub use pending::{
+    PendingMemory, clear_all_injected_memories, clear_all_pending_memory, clear_injected_memories,
+    clear_pending_memory, has_any_pending_memory, has_pending_memory, is_memory_injected,
+    is_memory_injected_any, mark_memories_injected, set_pending_memory,
+    set_pending_memory_with_ids, set_pending_memory_with_ids_and_display, take_pending_memory,
+};
 use pending::{begin_memory_check, finish_memory_check};
 
 const LEGACY_NOTE_CATEGORY: &str = "note";

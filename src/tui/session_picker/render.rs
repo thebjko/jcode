@@ -345,12 +345,10 @@ impl SessionPicker {
                 Span::styled("💥 ", Style::default().fg(rgb(255, 140, 140))),
                 Span::styled(names, Style::default().fg(Color::White)),
             ]),
-            Line::from(vec![
-                Span::styled(
-                    "Press B to restore all from the last crash window.",
-                    Style::default().fg(rgb(180, 180, 180)),
-                ),
-            ]),
+            Line::from(vec![Span::styled(
+                "Press B to restore all from the last crash window.",
+                Style::default().fg(rgb(180, 180, 180)),
+            )]),
         ];
 
         let block = Paragraph::new(body)

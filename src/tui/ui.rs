@@ -57,15 +57,21 @@ mod tools_ui;
 mod viewport;
 
 #[cfg(test)]
+use box_utils::truncate_line_to_width;
+use box_utils::{line_plain_text, render_rounded_box, truncate_line_with_ellipsis_to_width};
+#[cfg(test)]
+use changelog::{ChangelogEntry, group_changelog_entries, parse_changelog_from};
+use changelog::{get_grouped_changelog, get_unseen_changelog_entries};
+use debug_capture::{
+    build_info_widget_summary, capture_widget_placements, rect_within_bounds, rects_overlap,
+};
+#[cfg(test)]
 use diagram_pane::{
     div_ceil_u32, estimate_pinned_diagram_pane_width_with_font, is_diagram_poor_fit,
     vcenter_fitted_image_with_font,
 };
 use diagram_pane::{
     draw_pinned_diagram, estimate_pinned_diagram_pane_height, estimate_pinned_diagram_pane_width,
-};
-use debug_capture::{
-    build_info_widget_summary, capture_widget_placements, rect_within_bounds, rects_overlap,
 };
 use file_diff_ui::active_file_diff_context;
 use file_diff_ui::draw_file_diff_view;
@@ -74,12 +80,6 @@ use file_diff_ui::{
     FileDiffCacheKey, FileDiffViewCacheEntry, file_content_signature, file_diff_cache,
 };
 pub(crate) use header::capitalize;
-use box_utils::{line_plain_text, render_rounded_box, truncate_line_with_ellipsis_to_width};
-#[cfg(test)]
-use box_utils::truncate_line_to_width;
-use changelog::{get_grouped_changelog, get_unseen_changelog_entries};
-#[cfg(test)]
-use changelog::{ChangelogEntry, group_changelog_entries, parse_changelog_from};
 #[cfg(test)]
 use memory_ui::{
     MemoryTileItem, choose_memory_tile_span, parse_memory_display_entries, plan_memory_tile,

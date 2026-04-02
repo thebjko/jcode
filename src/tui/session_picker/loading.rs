@@ -418,7 +418,10 @@ pub(super) fn crashed_sessions_from_all_sessions(
 
     let crash_timestamp =
         |session: &SessionInfo| session.last_active_at.unwrap_or(session.last_message_time);
-    let most_recent = crashed.iter().map(|session| crash_timestamp(session)).max()?;
+    let most_recent = crashed
+        .iter()
+        .map(|session| crash_timestamp(session))
+        .max()?;
     let crash_window = chrono::Duration::seconds(60);
     crashed.retain(|s| {
         let delta = most_recent.signed_duration_since(crash_timestamp(s));
