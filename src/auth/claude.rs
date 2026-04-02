@@ -360,22 +360,23 @@ pub fn has_unconsented_external_auth() -> Option<ExternalClaudeAuthSource> {
         .ok()
         .map(|path| match source {
             ExternalClaudeAuthSource::OpenCode => {
-                crate::config::Config::external_auth_source_allowed_for_path(source.source_id(), &path)
-                    || crate::config::Config::external_auth_source_allowed_for_path(
-                        crate::auth::external::OPENCODE_AUTH_JSON_SOURCE_ID,
-                        &path,
-                    )
+                crate::config::Config::external_auth_source_allowed_for_path(
+                    source.source_id(),
+                    &path,
+                ) || crate::config::Config::external_auth_source_allowed_for_path(
+                    crate::auth::external::OPENCODE_AUTH_JSON_SOURCE_ID,
+                    &path,
+                )
             }
             ExternalClaudeAuthSource::ClaudeCode => {
-                crate::config::Config::external_auth_source_allowed_for_path(source.source_id(), &path)
+                crate::config::Config::external_auth_source_allowed_for_path(
+                    source.source_id(),
+                    &path,
+                )
             }
         })
         .unwrap_or(false);
-    if allowed {
-        None
-    } else {
-        Some(source)
-    }
+    if allowed { None } else { Some(source) }
 }
 
 pub fn trust_external_auth_source(source: ExternalClaudeAuthSource) -> Result<()> {
@@ -421,7 +422,12 @@ pub fn load_credentials() -> Result<ClaudeCredentials> {
 
     if claude_code_path()
         .ok()
-        .map(|path| crate::config::Config::external_auth_source_allowed_for_path(CLAUDE_CODE_AUTH_SOURCE_ID, &path))
+        .map(|path| {
+            crate::config::Config::external_auth_source_allowed_for_path(
+                CLAUDE_CODE_AUTH_SOURCE_ID,
+                &path,
+            )
+        })
         .unwrap_or(false)
         && let Ok(creds) = load_claude_code_credentials()
     {
@@ -434,11 +440,13 @@ pub fn load_credentials() -> Result<ClaudeCredentials> {
     if opencode_path()
         .ok()
         .map(|path| {
-            crate::config::Config::external_auth_source_allowed_for_path(OPENCODE_AUTH_SOURCE_ID, &path)
-                || crate::config::Config::external_auth_source_allowed_for_path(
-                    crate::auth::external::OPENCODE_AUTH_JSON_SOURCE_ID,
-                    &path,
-                )
+            crate::config::Config::external_auth_source_allowed_for_path(
+                OPENCODE_AUTH_SOURCE_ID,
+                &path,
+            ) || crate::config::Config::external_auth_source_allowed_for_path(
+                crate::auth::external::OPENCODE_AUTH_JSON_SOURCE_ID,
+                &path,
+            )
         })
         .unwrap_or(false)
         && let Ok(creds) = load_opencode_credentials()
@@ -913,8 +921,11 @@ mod tests {
             r#"{"claudeAiOauth":{"accessToken":"at","refreshToken":"rt","expiresAt":4102444800000}}"#,
         )
         .expect("write file");
-        std::fs::set_permissions(path.parent().unwrap(), std::fs::Permissions::from_mode(0o755))
-            .expect("set dir perms");
+        std::fs::set_permissions(
+            path.parent().unwrap(),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .expect("set dir perms");
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))
             .expect("set file perms");
 

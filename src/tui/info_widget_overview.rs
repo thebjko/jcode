@@ -1,6 +1,4 @@
-use super::info_widget::{
-    AuthMethod, InfoWidgetData, UsageProvider, is_traceworthy_memory_event,
-};
+use super::info_widget::{AuthMethod, InfoWidgetData, UsageProvider, is_traceworthy_memory_event};
 
 pub(crate) const MAX_TODO_LINES: usize = 12;
 

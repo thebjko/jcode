@@ -112,17 +112,18 @@ pub fn has_unconsented_external_auth() -> Option<ExternalCursorAuthSource> {
     let allowed = source
         .path()
         .ok()
-        .map(|path| crate::config::Config::external_auth_source_allowed_for_path(source.source_id(), &path))
+        .map(|path| {
+            crate::config::Config::external_auth_source_allowed_for_path(source.source_id(), &path)
+        })
         .unwrap_or(false);
-    if allowed {
-        None
-    } else {
-        Some(source)
-    }
+    if allowed { None } else { Some(source) }
 }
 
 pub fn trust_external_auth_source(source: ExternalCursorAuthSource) -> Result<()> {
-    crate::config::Config::allow_external_auth_source_for_path(source.source_id(), &source.path()?)?;
+    crate::config::Config::allow_external_auth_source_for_path(
+        source.source_id(),
+        &source.path()?,
+    )?;
     super::AuthStatus::invalidate_cache();
     Ok(())
 }
@@ -167,7 +168,12 @@ pub fn has_cursor_agent_auth() -> bool {
 pub fn has_cursor_vscdb_token() -> bool {
     find_cursor_vscdb()
         .ok()
-        .map(|path| crate::config::Config::external_auth_source_allowed_for_path(CURSOR_VSCDB_SOURCE_ID, &path))
+        .map(|path| {
+            crate::config::Config::external_auth_source_allowed_for_path(
+                CURSOR_VSCDB_SOURCE_ID,
+                &path,
+            )
+        })
         .unwrap_or(false)
         && read_vscdb_token().is_ok()
 }
@@ -340,7 +346,10 @@ pub fn load_access_token_from_env_or_file() -> Result<CursorDirectTokens> {
 
     let file_path = cursor_auth_file_path()?;
     if file_path.exists()
-        && crate::config::Config::external_auth_source_allowed_for_path(CURSOR_AUTH_FILE_SOURCE_ID, &file_path)
+        && crate::config::Config::external_auth_source_allowed_for_path(
+            CURSOR_AUTH_FILE_SOURCE_ID,
+            &file_path,
+        )
     {
         let safe_path = crate::storage::validate_external_auth_file(&file_path)?;
         let raw = std::fs::read_to_string(&safe_path)
@@ -386,7 +395,12 @@ pub async fn resolve_direct_tokens(client: &Client) -> Result<CursorDirectTokens
 
     if find_cursor_vscdb()
         .ok()
-        .map(|path| crate::config::Config::external_auth_source_allowed_for_path(CURSOR_VSCDB_SOURCE_ID, &path))
+        .map(|path| {
+            crate::config::Config::external_auth_source_allowed_for_path(
+                CURSOR_VSCDB_SOURCE_ID,
+                &path,
+            )
+        })
         .unwrap_or(false)
         && let Ok(access_token) = read_vscdb_token()
     {
@@ -729,11 +743,17 @@ mod tests {
             r#"{"accessToken":"at-test","refreshToken":"rt-test"}"#,
         )
         .unwrap();
-        std::fs::set_permissions(path.parent().unwrap(), std::fs::Permissions::from_mode(0o755))
-            .unwrap();
+        std::fs::set_permissions(
+            path.parent().unwrap(),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
-        crate::config::Config::allow_external_auth_source_for_path(CURSOR_AUTH_FILE_SOURCE_ID, &path)
-            .expect("trust cursor auth path");
+        crate::config::Config::allow_external_auth_source_for_path(
+            CURSOR_AUTH_FILE_SOURCE_ID,
+            &path,
+        )
+        .expect("trust cursor auth path");
 
         let tokens = load_access_token_from_env_or_file().expect("load auth file token");
         assert_eq!(tokens.access_token, "at-test");

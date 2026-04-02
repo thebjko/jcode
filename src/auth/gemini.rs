@@ -134,7 +134,12 @@ pub fn has_unconsented_cli_auth() -> bool {
     gemini_cli_oauth_path()
         .ok()
         .filter(|path| path.exists())
-        .map(|path| !crate::config::Config::external_auth_source_allowed_for_path(GEMINI_CLI_AUTH_SOURCE_ID, &path))
+        .map(|path| {
+            !crate::config::Config::external_auth_source_allowed_for_path(
+                GEMINI_CLI_AUTH_SOURCE_ID,
+                &path,
+            )
+        })
         .unwrap_or(false)
 }
 
@@ -157,7 +162,10 @@ pub fn load_tokens() -> Result<GeminiTokens> {
 
     let cli_path = gemini_cli_oauth_path()?;
     if cli_path.exists()
-        && crate::config::Config::external_auth_source_allowed_for_path(GEMINI_CLI_AUTH_SOURCE_ID, &cli_path)
+        && crate::config::Config::external_auth_source_allowed_for_path(
+            GEMINI_CLI_AUTH_SOURCE_ID,
+            &cli_path,
+        )
     {
         let safe_path = crate::storage::validate_external_auth_file(&cli_path)?;
         let raw = std::fs::read_to_string(&safe_path)
@@ -723,8 +731,11 @@ mod tests {
             r#"{"access_token":"at-123","refresh_token":"rt-456","expiry_date":4102444800000}"#,
         )
         .expect("write cli token file");
-        crate::config::Config::allow_external_auth_source_for_path(GEMINI_CLI_AUTH_SOURCE_ID, &cli_path)
-            .expect("trust cli auth path");
+        crate::config::Config::allow_external_auth_source_for_path(
+            GEMINI_CLI_AUTH_SOURCE_ID,
+            &cli_path,
+        )
+        .expect("trust cli auth path");
 
         let tokens = load_tokens().expect("load tokens");
         assert_eq!(tokens.access_token, "at-123");
@@ -762,8 +773,11 @@ mod tests {
         .expect("set dir perms");
         std::fs::set_permissions(&cli_path, std::fs::Permissions::from_mode(0o644))
             .expect("set file perms");
-        crate::config::Config::allow_external_auth_source_for_path(GEMINI_CLI_AUTH_SOURCE_ID, &cli_path)
-            .expect("trust cli auth path");
+        crate::config::Config::allow_external_auth_source_for_path(
+            GEMINI_CLI_AUTH_SOURCE_ID,
+            &cli_path,
+        )
+        .expect("trust cli auth path");
 
         let tokens = load_tokens().expect("load tokens");
         assert_eq!(tokens.access_token, "at-123");

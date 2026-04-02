@@ -130,7 +130,9 @@ pub fn load_tokens() -> Result<AntigravityTokens> {
     if path.exists() {
         crate::storage::harden_secret_file_permissions(&path);
         return crate::storage::read_json(&path).map_err(|_| {
-            anyhow::anyhow!("No Antigravity tokens found. Run `jcode login --provider antigravity`.")
+            anyhow::anyhow!(
+                "No Antigravity tokens found. Run `jcode login --provider antigravity`."
+            )
         });
     }
 

@@ -18,15 +18,25 @@ pub fn login_target_label<T, F>(
 where
     F: Fn(&T) -> &str + Copy,
 {
-    if let Some(requested) = requested.map(str::trim).filter(|requested| !requested.is_empty()) {
-        if accounts.iter().any(|account| label_of(account) == requested) {
+    if let Some(requested) = requested
+        .map(str::trim)
+        .filter(|requested| !requested.is_empty())
+    {
+        if accounts
+            .iter()
+            .any(|account| label_of(account) == requested)
+        {
             return requested.to_string();
         }
         return next_account_label(prefix, accounts.len());
     }
 
     active_label
-        .or_else(|| accounts.first().map(|account| label_of(account).to_string()))
+        .or_else(|| {
+            accounts
+                .first()
+                .map(|account| label_of(account).to_string())
+        })
         .unwrap_or_else(|| canonical_account_label(prefix, 1))
 }
 
@@ -143,7 +153,11 @@ where
                     .find(|(original, _)| original == label)
                     .map(|(_, canonical)| canonical.clone())
             })
-            .or_else(|| accounts.first().map(|account| label_of(account).to_string()))
+            .or_else(|| {
+                accounts
+                    .first()
+                    .map(|account| label_of(account).to_string())
+            })
     };
 
     if *stored_active_label != desired_active {
@@ -155,9 +169,7 @@ where
         label_map
             .iter()
             .find(|(original, _)| original == &override_label)
-            .and_then(|(_, canonical)| {
-                (override_label != *canonical).then(|| canonical.clone())
-            })
+            .and_then(|(_, canonical)| (override_label != *canonical).then(|| canonical.clone()))
     });
 
     RelabelOutcome {
@@ -200,7 +212,10 @@ mod tests {
         assert_eq!(accounts[0].label, "openai-1");
         assert_eq!(accounts[1].label, "openai-2");
         assert_eq!(active.as_deref(), Some("openai-2"));
-        assert_eq!(outcome.canonical_override_label.as_deref(), Some("openai-1"));
+        assert_eq!(
+            outcome.canonical_override_label.as_deref(),
+            Some("openai-1")
+        );
     }
 
     #[test]

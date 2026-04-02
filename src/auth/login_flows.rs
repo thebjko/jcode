@@ -5,8 +5,8 @@ fn run_external_login_command_inner(
     args: &[String],
     suspend_raw_mode: bool,
 ) -> Result<()> {
-    let raw_was_enabled = suspend_raw_mode
-        && crossterm::terminal::is_raw_mode_enabled().unwrap_or(false);
+    let raw_was_enabled =
+        suspend_raw_mode && crossterm::terminal::is_raw_mode_enabled().unwrap_or(false);
     if raw_was_enabled {
         let _ = crossterm::terminal::disable_raw_mode();
     }
@@ -31,7 +31,10 @@ fn run_external_login_command_inner(
 }
 
 pub fn run_external_login_command(program: &str, args: &[&str]) -> Result<()> {
-    let owned = args.iter().map(|arg| (*arg).to_string()).collect::<Vec<_>>();
+    let owned = args
+        .iter()
+        .map(|arg| (*arg).to_string())
+        .collect::<Vec<_>>();
     run_external_login_command_inner(program, &owned, false)
 }
 
@@ -43,7 +46,10 @@ pub fn run_external_login_command_with_terminal_handoff(
     program: &str,
     args: &[&str],
 ) -> Result<()> {
-    let owned = args.iter().map(|arg| (*arg).to_string()).collect::<Vec<_>>();
+    let owned = args
+        .iter()
+        .map(|arg| (*arg).to_string())
+        .collect::<Vec<_>>();
     run_external_login_command_inner(program, &owned, true)
 }
 

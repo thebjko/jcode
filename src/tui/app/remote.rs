@@ -3899,12 +3899,14 @@ async fn handle_remote_key_internal(
                                 })
                                 .collect();
 
-                            let mode = app.improve_mode.or_else(|| {
-                                app.session
-                                    .improve_mode
-                                    .map(super::commands::restore_improve_mode)
-                            })
-                            .filter(|mode| mode.is_improve());
+                            let mode = app
+                                .improve_mode
+                                .or_else(|| {
+                                    app.session
+                                        .improve_mode
+                                        .map(super::commands::restore_improve_mode)
+                                })
+                                .filter(|mode| mode.is_improve());
                             let Some(mode) = mode else {
                                 app.push_display_message(DisplayMessage::system(
                                     "No saved improve run found for this session. Use `/improve` or `/improve plan` to start one."
@@ -3962,14 +3964,19 @@ async fn handle_remote_key_internal(
                                 todo.status != "completed" && todo.status != "cancelled"
                             });
 
-                            let active_improve_mode = app.improve_mode.or_else(|| {
-                                app.session
-                                    .improve_mode
-                                    .map(super::commands::restore_improve_mode)
-                            })
-                            .filter(|mode| mode.is_improve());
+                            let active_improve_mode = app
+                                .improve_mode
+                                .or_else(|| {
+                                    app.session
+                                        .improve_mode
+                                        .map(super::commands::restore_improve_mode)
+                                })
+                                .filter(|mode| mode.is_improve());
 
-                            if active_improve_mode.is_none() && !app.is_processing && !has_incomplete {
+                            if active_improve_mode.is_none()
+                                && !app.is_processing
+                                && !has_incomplete
+                            {
                                 app.push_display_message(DisplayMessage::system(
                                     "No active improve loop to stop. Use `/improve` to start one."
                                         .to_string(),
@@ -4072,12 +4079,14 @@ async fn handle_remote_key_internal(
                                 })
                                 .collect();
 
-                            let mode = app.improve_mode.or_else(|| {
-                                app.session
-                                    .improve_mode
-                                    .map(super::commands::restore_improve_mode)
-                            })
-                            .filter(|mode| mode.is_refactor());
+                            let mode = app
+                                .improve_mode
+                                .or_else(|| {
+                                    app.session
+                                        .improve_mode
+                                        .map(super::commands::restore_improve_mode)
+                                })
+                                .filter(|mode| mode.is_refactor());
                             let Some(mode) = mode else {
                                 app.push_display_message(DisplayMessage::system(
                                     "No saved refactor run found for this session. Use `/refactor` or `/refactor plan` to start one."
@@ -4135,14 +4144,19 @@ async fn handle_remote_key_internal(
                                 todo.status != "completed" && todo.status != "cancelled"
                             });
 
-                            let active_refactor_mode = app.improve_mode.or_else(|| {
-                                app.session
-                                    .improve_mode
-                                    .map(super::commands::restore_improve_mode)
-                            })
-                            .filter(|mode| mode.is_refactor());
+                            let active_refactor_mode = app
+                                .improve_mode
+                                .or_else(|| {
+                                    app.session
+                                        .improve_mode
+                                        .map(super::commands::restore_improve_mode)
+                                })
+                                .filter(|mode| mode.is_refactor());
 
-                            if active_refactor_mode.is_none() && !app.is_processing && !has_incomplete {
+                            if active_refactor_mode.is_none()
+                                && !app.is_processing
+                                && !has_incomplete
+                            {
                                 app.push_display_message(DisplayMessage::system(
                                     "No active refactor loop to stop. Use `/refactor` to start one."
                                         .to_string(),
@@ -4186,10 +4200,8 @@ async fn handle_remote_key_internal(
                                     Some(super::commands::session_improve_mode_for(mode));
                             })?;
                             app.improve_mode = Some(mode);
-                            let prompt = super::commands::build_refactor_prompt(
-                                plan_only,
-                                focus.as_deref(),
-                            );
+                            let prompt =
+                                super::commands::build_refactor_prompt(plan_only, focus.as_deref());
                             if app.is_processing {
                                 remote.cancel().await?;
                                 app.set_status_notice(if plan_only {

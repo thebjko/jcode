@@ -143,7 +143,12 @@ pub fn legacy_auth_allowed() -> bool {
         .unwrap_or(false)
         || legacy_auth_path()
             .ok()
-            .map(|path| crate::config::Config::external_auth_source_allowed_for_path(LEGACY_CODEX_AUTH_SOURCE_ID, &path))
+            .map(|path| {
+                crate::config::Config::external_auth_source_allowed_for_path(
+                    LEGACY_CODEX_AUTH_SOURCE_ID,
+                    &path,
+                )
+            })
             .unwrap_or(false)
 }
 
@@ -860,7 +865,11 @@ mod tests {
             .permissions()
             .mode()
             & 0o777;
-        let file_mode = std::fs::metadata(&legacy_path).unwrap().permissions().mode() & 0o777;
+        let file_mode = std::fs::metadata(&legacy_path)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
         assert_eq!(dir_mode, 0o755);
         assert_eq!(file_mode, 0o644);
     }

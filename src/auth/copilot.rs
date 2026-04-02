@@ -142,15 +142,19 @@ pub fn load_github_token() -> Result<String> {
     }
 
     let hosts_path = ExternalCopilotAuthSource::HostsJson.path();
-    if crate::config::Config::external_auth_source_allowed_for_path(COPILOT_HOSTS_AUTH_SOURCE_ID, &hosts_path)
-        && let Ok(token) = load_token_from_json(&hosts_path)
+    if crate::config::Config::external_auth_source_allowed_for_path(
+        COPILOT_HOSTS_AUTH_SOURCE_ID,
+        &hosts_path,
+    ) && let Ok(token) = load_token_from_json(&hosts_path)
     {
         return Ok(token);
     }
 
     let apps_path = ExternalCopilotAuthSource::AppsJson.path();
-    if crate::config::Config::external_auth_source_allowed_for_path(COPILOT_APPS_AUTH_SOURCE_ID, &apps_path)
-        && let Ok(token) = load_token_from_json(&apps_path)
+    if crate::config::Config::external_auth_source_allowed_for_path(
+        COPILOT_APPS_AUTH_SOURCE_ID,
+        &apps_path,
+    ) && let Ok(token) = load_token_from_json(&apps_path)
     {
         return Ok(token);
     }
@@ -188,7 +192,9 @@ pub fn preferred_external_auth_source() -> Option<ExternalCopilotAuthSource> {
         ExternalCopilotAuthSource::OpenCodeAuth => {
             let path = source.path();
             path.exists()
-                && !crate::auth::external::source_allowed(crate::auth::external::ExternalAuthSource::OpenCode)
+                && !crate::auth::external::source_allowed(
+                    crate::auth::external::ExternalAuthSource::OpenCode,
+                )
                 && crate::auth::external::source_has_copilot_oauth(
                     crate::auth::external::ExternalAuthSource::OpenCode,
                 )
@@ -196,7 +202,9 @@ pub fn preferred_external_auth_source() -> Option<ExternalCopilotAuthSource> {
         ExternalCopilotAuthSource::PiAuth => {
             let path = source.path();
             path.exists()
-                && !crate::auth::external::source_allowed(crate::auth::external::ExternalAuthSource::Pi)
+                && !crate::auth::external::source_allowed(
+                    crate::auth::external::ExternalAuthSource::Pi,
+                )
                 && crate::auth::external::source_has_copilot_oauth(
                     crate::auth::external::ExternalAuthSource::Pi,
                 )
@@ -208,9 +216,9 @@ pub fn preferred_external_auth_source() -> Option<ExternalCopilotAuthSource> {
 pub fn has_unconsented_external_auth() -> Option<ExternalCopilotAuthSource> {
     let source = preferred_external_auth_source()?;
     let allowed = match source {
-        ExternalCopilotAuthSource::OpenCodeAuth => {
-            crate::auth::external::source_allowed(crate::auth::external::ExternalAuthSource::OpenCode)
-        }
+        ExternalCopilotAuthSource::OpenCodeAuth => crate::auth::external::source_allowed(
+            crate::auth::external::ExternalAuthSource::OpenCode,
+        ),
         ExternalCopilotAuthSource::PiAuth => {
             crate::auth::external::source_allowed(crate::auth::external::ExternalAuthSource::Pi)
         }
@@ -219,11 +227,7 @@ pub fn has_unconsented_external_auth() -> Option<ExternalCopilotAuthSource> {
             &source.path(),
         ),
     };
-    if allowed {
-        None
-    } else {
-        Some(source)
-    }
+    if allowed { None } else { Some(source) }
 }
 
 pub fn trust_external_auth_source(source: ExternalCopilotAuthSource) -> Result<()> {
@@ -556,7 +560,10 @@ pub fn save_github_token(token: &str, username: &str) -> Result<()> {
     // usable in future sessions. Without this, later reads treat the saved
     // hosts.json as an untrusted external auth source and appear to "lose"
     // the Copilot login after restart/new session.
-    crate::config::Config::allow_external_auth_source_for_path(COPILOT_HOSTS_AUTH_SOURCE_ID, &hosts_path)?;
+    crate::config::Config::allow_external_auth_source_for_path(
+        COPILOT_HOSTS_AUTH_SOURCE_ID,
+        &hosts_path,
+    )?;
     super::AuthStatus::invalidate_cache();
 
     Ok(())
@@ -828,9 +835,18 @@ mod tests {
 
     #[test]
     fn normalize_candidate_token_rejects_empty_and_unknown_values() {
-        assert_eq!(normalize_candidate_token("gho_valid"), Some("gho_valid".to_string()));
-        assert_eq!(normalize_candidate_token("ghu_valid"), Some("ghu_valid".to_string()));
-        assert_eq!(normalize_candidate_token("github_pat_valid"), Some("github_pat_valid".to_string()));
+        assert_eq!(
+            normalize_candidate_token("gho_valid"),
+            Some("gho_valid".to_string())
+        );
+        assert_eq!(
+            normalize_candidate_token("ghu_valid"),
+            Some("ghu_valid".to_string())
+        );
+        assert_eq!(
+            normalize_candidate_token("github_pat_valid"),
+            Some("github_pat_valid".to_string())
+        );
         assert_eq!(normalize_candidate_token("ghp_classic"), None);
         assert_eq!(normalize_candidate_token("   "), None);
     }
@@ -925,10 +941,12 @@ mod tests {
         save_github_token("gho_persisted_token", "testuser").unwrap();
 
         let hosts_path = ExternalCopilotAuthSource::HostsJson.path();
-        assert!(crate::config::Config::external_auth_source_allowed_for_path(
-            COPILOT_HOSTS_AUTH_SOURCE_ID,
-            &hosts_path
-        ));
+        assert!(
+            crate::config::Config::external_auth_source_allowed_for_path(
+                COPILOT_HOSTS_AUTH_SOURCE_ID,
+                &hosts_path
+            )
+        );
         assert_eq!(load_github_token().unwrap(), "gho_persisted_token");
 
         if let Some(prev) = prev_jcode_home {

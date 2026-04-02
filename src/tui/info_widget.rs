@@ -1881,7 +1881,13 @@ fn render_memory_pipeline_display_lines(
 
 fn fallback_pipeline_statuses(
     state: &MemoryState,
-) -> (StepStatus, StepStatus, StepStatus, StepStatus, Option<(usize, usize)>) {
+) -> (
+    StepStatus,
+    StepStatus,
+    StepStatus,
+    StepStatus,
+    Option<(usize, usize)>,
+) {
     match state {
         MemoryState::Idle => (
             StepStatus::Pending,
@@ -3834,7 +3840,11 @@ fn render_memory_compact(info: &MemoryInfo, inner_width: u16) -> Vec<Line<'stati
                 .or_else(|| memory_active_summary(&activity.state))
                 .or_else(|| memory_last_trace_summary(activity))
         })
-        .or_else(|| info.sidecar_model.as_deref().map(compact_memory_model_label))
+        .or_else(|| {
+            info.sidecar_model
+                .as_deref()
+                .map(compact_memory_model_label)
+        })
         .unwrap_or_else(|| "idle".to_string());
 
     let title_width = UnicodeWidthStr::width(title.as_str());

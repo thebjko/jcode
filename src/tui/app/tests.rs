@@ -1982,7 +1982,11 @@ fn test_refactor_command_starts_refactor_loop() {
     );
     assert!(app.is_processing());
 
-    let msg = app.session.messages.last().expect("missing refactor prompt");
+    let msg = app
+        .session
+        .messages
+        .last()
+        .expect("missing refactor prompt");
     assert!(matches!(
         &msg.content[0],
         ContentBlock::Text { text, .. }
@@ -2060,7 +2064,10 @@ fn test_refactor_status_summarizes_current_todos() {
             .last()
             .expect("missing refactor status");
         assert!(msg.content.contains("Refactor status"));
-        assert!(msg.content.contains("1 incomplete · 1 completed · 0 cancelled"));
+        assert!(
+            msg.content
+                .contains("1 incomplete · 1 completed · 0 cancelled")
+        );
         assert!(msg.content.contains("Split giant module"));
     });
 }

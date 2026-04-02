@@ -118,8 +118,13 @@ pub fn harden_secret_file_permissions(path: &Path) {
 /// cases like symlinks so a remembered trust decision stays bound to a real file
 /// path rather than an arbitrary redirect.
 pub fn validate_external_auth_file(path: &Path) -> Result<PathBuf> {
-    let metadata = std::fs::symlink_metadata(path)
-        .map_err(|e| anyhow::anyhow!("Failed to inspect external auth file {}: {}", path.display(), e))?;
+    let metadata = std::fs::symlink_metadata(path).map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to inspect external auth file {}: {}",
+            path.display(),
+            e
+        )
+    })?;
     if metadata.file_type().is_symlink() {
         anyhow::bail!(
             "Refusing to read external auth file via symlink: {}",
@@ -127,10 +132,18 @@ pub fn validate_external_auth_file(path: &Path) -> Result<PathBuf> {
         );
     }
     if !metadata.is_file() {
-        anyhow::bail!("External auth path is not a regular file: {}", path.display());
+        anyhow::bail!(
+            "External auth path is not a regular file: {}",
+            path.display()
+        );
     }
-    std::fs::canonicalize(path)
-        .map_err(|e| anyhow::anyhow!("Failed to canonicalize external auth file {}: {}", path.display(), e))
+    std::fs::canonicalize(path).map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to canonicalize external auth file {}: {}",
+            path.display(),
+            e
+        )
+    })
 }
 
 #[cfg(test)]
@@ -252,8 +265,7 @@ mod tests {
         );
 
         upsert_env_file_value(&file, "OTHER", Some("two")).expect("append second value");
-        upsert_env_file_value(&file, "API_KEY", Some("updated"))
-            .expect("replace existing value");
+        upsert_env_file_value(&file, "API_KEY", Some("updated")).expect("replace existing value");
         assert_eq!(
             std::fs::read_to_string(&file).expect("read env file after replace"),
             "API_KEY=updated\nOTHER=two\n"
