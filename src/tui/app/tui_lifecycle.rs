@@ -139,8 +139,10 @@ impl App {
             .unwrap_or(config().autojudge.enabled);
         let context_limit = provider.context_window() as u64;
         let improve_mode = session.improve_mode.map(|mode| match mode {
-            crate::session::SessionImproveMode::Run => ImproveMode::Run,
-            crate::session::SessionImproveMode::Plan => ImproveMode::Plan,
+            crate::session::SessionImproveMode::ImproveRun => ImproveMode::ImproveRun,
+            crate::session::SessionImproveMode::ImprovePlan => ImproveMode::ImprovePlan,
+            crate::session::SessionImproveMode::RefactorRun => ImproveMode::RefactorRun,
+            crate::session::SessionImproveMode::RefactorPlan => ImproveMode::RefactorPlan,
         });
 
         crate::logging::info("App::new_minimal_with_session: skipping skill/prompt bootstrap");
@@ -381,8 +383,10 @@ impl App {
             .unwrap_or(config().autojudge.enabled);
         let context_limit = provider.context_window() as u64;
         let improve_mode = session.improve_mode.map(|mode| match mode {
-            crate::session::SessionImproveMode::Run => ImproveMode::Run,
-            crate::session::SessionImproveMode::Plan => ImproveMode::Plan,
+            crate::session::SessionImproveMode::ImproveRun => ImproveMode::ImproveRun,
+            crate::session::SessionImproveMode::ImprovePlan => ImproveMode::ImprovePlan,
+            crate::session::SessionImproveMode::RefactorRun => ImproveMode::RefactorRun,
+            crate::session::SessionImproveMode::RefactorPlan => ImproveMode::RefactorPlan,
         });
         let t_session = t0.elapsed();
 

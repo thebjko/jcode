@@ -296,16 +296,28 @@ enum SendAction {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ImproveMode {
-    Run,
-    Plan,
+    ImproveRun,
+    ImprovePlan,
+    RefactorRun,
+    RefactorPlan,
 }
 
 impl ImproveMode {
     pub(super) fn status_label(self) -> &'static str {
         match self {
-            Self::Run => "active improvement loop",
-            Self::Plan => "plan-only",
+            Self::ImproveRun => "active improvement loop",
+            Self::ImprovePlan => "improvement plan-only",
+            Self::RefactorRun => "active refactor loop",
+            Self::RefactorPlan => "refactor plan-only",
         }
+    }
+
+    pub(super) fn is_improve(self) -> bool {
+        matches!(self, Self::ImproveRun | Self::ImprovePlan)
+    }
+
+    pub(super) fn is_refactor(self) -> bool {
+        matches!(self, Self::RefactorRun | Self::RefactorPlan)
     }
 }
 

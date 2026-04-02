@@ -1537,6 +1537,9 @@ impl App {
             "improve" => {
                 "`/improve [focus]`\nStart an autonomous repo-improvement loop. The model inspects the project, writes a ranked todo list, implements the highest-leverage safe improvements, validates them, then keeps going until further work has diminishing returns.\n\n`/improve plan [focus]`\nGenerate a ranked improve todo list only, without editing files.\n\n`/improve resume`\nResume the last saved improve mode for this session using the current improve todos.\n\n`/improve status`\nShow the inferred status of the current improve run and todo batch.\n\n`/improve stop`\nAsk the model to stop after the next safe point, update todos, and summarize remaining work."
             }
+            "refactor" => {
+                "`/refactor [focus]`\nStart a refactor loop aimed at moving the repo toward a practical 10/10. The main agent inspects the project, writes a ranked refactor todo list, implements the best safe refactors itself, validates each batch, and asks one independent read-only subagent to review each meaningful batch before continuing.\n\n`/refactor plan [focus]`\nGenerate a ranked refactor todo list only, without editing files.\n\n`/refactor resume`\nResume the last saved refactor mode for this session using the current refactor todos.\n\n`/refactor status`\nShow the inferred status of the current refactor run and todo batch.\n\n`/refactor stop`\nAsk the model to stop after the next safe point, update todos, and summarize remaining work."
+            }
             "reload" => {
                 "`/reload`\nReload into the newest available binary if one is ready. This is fast and does not rebuild."
             }

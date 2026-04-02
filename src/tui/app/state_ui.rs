@@ -655,6 +655,10 @@ impl App {
                 "Autonomously find and implement highest-leverage improvements",
             ),
             (
+                "/refactor".into(),
+                "Run a safe refactor loop with independent review",
+            ),
+            (
                 "/compact".into(),
                 "Compact context (summarize old messages)",
             ),
@@ -1140,6 +1144,30 @@ impl App {
             );
         }
 
+        if prefix.starts_with("/refactor ") {
+            return self.rank_suggestions(
+                input,
+                vec![
+                    (
+                        "/refactor plan".into(),
+                        "Generate a ranked refactor todo list without editing",
+                    ),
+                    (
+                        "/refactor resume".into(),
+                        "Resume the last saved refactor mode for this session",
+                    ),
+                    (
+                        "/refactor status".into(),
+                        "Show current refactor batch and inferred status",
+                    ),
+                    (
+                        "/refactor stop".into(),
+                        "Stop refactor mode after the next safe point",
+                    ),
+                ],
+            );
+        }
+
         if prefix.starts_with("/swarm ") {
             return self.rank_suggestions(
                 input,
@@ -1418,6 +1446,8 @@ impl App {
                 | "/goals"
                 | "/goals show"
                 | "/swarm"
+                | "/improve"
+                | "/refactor"
                 | "/rewind"
                 | "/compact"
                 | "/compact mode"
@@ -2640,7 +2670,7 @@ pub(super) fn handle_info_command(app: &mut App, trimmed: &str) -> bool {
         context_report.push_str(&compaction_summary);
         context_report.push_str("\n\n## Session State\n");
         context_report.push_str(&format!(
-            "- queue mode: {}\n- queued messages: {}\n- interleave pending: {}\n- soft interrupts pending: {}\n- pasted snippets buffered: {}\n- pending images: {}\n- active skill: {}\n- improve mode: {}\n- subagent status: {}\n- provider session id: {}\n- status notice: {}\n- last stream error: {}\n- stashed input: {}\n",
+            "- queue mode: {}\n- queued messages: {}\n- interleave pending: {}\n- soft interrupts pending: {}\n- pasted snippets buffered: {}\n- pending images: {}\n- active skill: {}\n- autonomy mode: {}\n- subagent status: {}\n- provider session id: {}\n- status notice: {}\n- last stream error: {}\n- stashed input: {}\n",
             if app.queue_mode { "on" } else { "off" },
             queued_messages,
             if app.interleave_message.is_some() { "yes" } else { "no" },

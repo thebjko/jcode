@@ -3903,7 +3903,8 @@ async fn handle_remote_key_internal(
                                 app.session
                                     .improve_mode
                                     .map(super::commands::restore_improve_mode)
-                            });
+                            })
+                            .filter(|mode| mode.is_improve());
                             let Some(mode) = mode else {
                                 app.push_display_message(DisplayMessage::system(
                                     "No saved improve run found for this session. Use `/improve` or `/improve plan` to start one."
@@ -3961,7 +3962,14 @@ async fn handle_remote_key_internal(
                                 todo.status != "completed" && todo.status != "cancelled"
                             });
 
-                            if app.improve_mode.is_none() && !app.is_processing && !has_incomplete {
+                            let active_improve_mode = app.improve_mode.or_else(|| {
+                                app.session
+                                    .improve_mode
+                                    .map(super::commands::restore_improve_mode)
+                            })
+                            .filter(|mode| mode.is_improve());
+
+                            if active_improve_mode.is_none() && !app.is_processing && !has_incomplete {
                                 app.push_display_message(DisplayMessage::system(
                                     "No active improve loop to stop. Use `/improve` to start one."
                                         .to_string(),
@@ -4025,6 +4033,181 @@ async fn handle_remote_key_internal(
                             } else {
                                 app.push_display_message(DisplayMessage::system(
                                     super::commands::improve_launch_notice(
+                                        plan_only,
+                                        focus.as_deref(),
+                                        false,
+                                    ),
+                                ));
+
+                                let _ = super::remote::begin_remote_send(
+                                    app,
+                                    remote,
+                                    prompt,
+                                    vec![],
+                                    true,
+                                    None,
+                                    true,
+                                    0,
+                                )
+                                .await;
+                            }
+                        }
+                    }
+                    return Ok(());
+                }
+
+                if let Some(command) = super::commands::parse_refactor_command(trimmed) {
+                    match command {
+                        Err(error) => app.push_display_message(DisplayMessage::error(error)),
+                        Ok(super::commands::RefactorCommand::Resume) => {
+                            let session_id = app
+                                .remote_session_id
+                                .clone()
+                                .unwrap_or_else(|| app.session.id.clone());
+                            let todos = crate::todo::load_todos(&session_id).unwrap_or_default();
+                            let incomplete: Vec<_> = todos
+                                .iter()
+                                .filter(|todo| {
+                                    todo.status != "completed" && todo.status != "cancelled"
+                                })
+                                .collect();
+
+                            let mode = app.improve_mode.or_else(|| {
+                                app.session
+                                    .improve_mode
+                                    .map(super::commands::restore_improve_mode)
+                            })
+                            .filter(|mode| mode.is_refactor());
+                            let Some(mode) = mode else {
+                                app.push_display_message(DisplayMessage::system(
+                                    "No saved refactor run found for this session. Use `/refactor` or `/refactor plan` to start one."
+                                        .to_string(),
+                                ));
+                                return Ok(());
+                            };
+
+                            persist_remote_session_metadata(app, |session| {
+                                session.improve_mode =
+                                    Some(super::commands::session_improve_mode_for(mode));
+                            })?;
+                            app.improve_mode = Some(mode);
+                            let prompt =
+                                super::commands::build_refactor_resume_prompt(mode, &incomplete);
+
+                            if app.is_processing {
+                                remote.cancel().await?;
+                                app.set_status_notice("Interrupting for /refactor resume...");
+                                app.push_display_message(DisplayMessage::system(format!(
+                                    "♻️ Interrupting and resuming {}...",
+                                    mode.status_label()
+                                )));
+                                app.queued_messages.push(prompt);
+                            } else {
+                                app.push_display_message(DisplayMessage::system(format!(
+                                    "♻️ Resuming {}...",
+                                    mode.status_label()
+                                )));
+                                let _ = super::remote::begin_remote_send(
+                                    app,
+                                    remote,
+                                    prompt,
+                                    vec![],
+                                    true,
+                                    None,
+                                    true,
+                                    0,
+                                )
+                                .await;
+                            }
+                        }
+                        Ok(super::commands::RefactorCommand::Status) => {
+                            app.push_display_message(DisplayMessage::system(
+                                super::commands::format_refactor_status(app),
+                            ));
+                        }
+                        Ok(super::commands::RefactorCommand::Stop) => {
+                            let session_id = app
+                                .remote_session_id
+                                .clone()
+                                .unwrap_or_else(|| app.session.id.clone());
+                            let todos = crate::todo::load_todos(&session_id).unwrap_or_default();
+                            let has_incomplete = todos.iter().any(|todo| {
+                                todo.status != "completed" && todo.status != "cancelled"
+                            });
+
+                            let active_refactor_mode = app.improve_mode.or_else(|| {
+                                app.session
+                                    .improve_mode
+                                    .map(super::commands::restore_improve_mode)
+                            })
+                            .filter(|mode| mode.is_refactor());
+
+                            if active_refactor_mode.is_none() && !app.is_processing && !has_incomplete {
+                                app.push_display_message(DisplayMessage::system(
+                                    "No active refactor loop to stop. Use `/refactor` to start one."
+                                        .to_string(),
+                                ));
+                                return Ok(());
+                            }
+
+                            persist_remote_session_metadata(app, |session| {
+                                session.improve_mode = None;
+                            })?;
+                            app.improve_mode = None;
+                            let stop_prompt = super::commands::refactor_stop_prompt();
+                            if app.is_processing {
+                                remote.cancel().await?;
+                                app.set_status_notice("Interrupting for /refactor stop...");
+                                app.push_display_message(DisplayMessage::system(
+                                    super::commands::refactor_stop_notice(true),
+                                ));
+                                app.queued_messages.push(stop_prompt);
+                            } else {
+                                app.push_display_message(DisplayMessage::system(
+                                    super::commands::refactor_stop_notice(false),
+                                ));
+                                let _ = super::remote::begin_remote_send(
+                                    app,
+                                    remote,
+                                    stop_prompt,
+                                    vec![],
+                                    true,
+                                    None,
+                                    true,
+                                    0,
+                                )
+                                .await;
+                            }
+                        }
+                        Ok(super::commands::RefactorCommand::Run { plan_only, focus }) => {
+                            let mode = super::commands::refactor_mode_for(plan_only);
+                            persist_remote_session_metadata(app, |session| {
+                                session.improve_mode =
+                                    Some(super::commands::session_improve_mode_for(mode));
+                            })?;
+                            app.improve_mode = Some(mode);
+                            let prompt = super::commands::build_refactor_prompt(
+                                plan_only,
+                                focus.as_deref(),
+                            );
+                            if app.is_processing {
+                                remote.cancel().await?;
+                                app.set_status_notice(if plan_only {
+                                    "Interrupting for /refactor plan..."
+                                } else {
+                                    "Interrupting for /refactor..."
+                                });
+                                app.push_display_message(DisplayMessage::system(
+                                    super::commands::refactor_launch_notice(
+                                        plan_only,
+                                        focus.as_deref(),
+                                        true,
+                                    ),
+                                ));
+                                app.queued_messages.push(prompt);
+                            } else {
+                                app.push_display_message(DisplayMessage::system(
+                                    super::commands::refactor_launch_notice(
                                         plan_only,
                                         focus.as_deref(),
                                         false,

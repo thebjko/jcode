@@ -33,10 +33,15 @@ pub enum SessionStatus {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
 pub enum SessionImproveMode {
-    Run,
-    Plan,
+    #[serde(rename = "improve_run", alias = "run")]
+    ImproveRun,
+    #[serde(rename = "improve_plan", alias = "plan")]
+    ImprovePlan,
+    #[serde(rename = "refactor_run")]
+    RefactorRun,
+    #[serde(rename = "refactor_plan")]
+    RefactorPlan,
 }
 
 impl SessionStatus {
