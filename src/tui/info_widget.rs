@@ -1942,7 +1942,7 @@ fn render_memory_last_trace_line(
     }
 
     Some(Line::from(vec![
-        Span::styled("Last: ", Style::default().fg(rgb(120, 120, 130))),
+        Span::styled("Trace: ", Style::default().fg(rgb(120, 120, 130))),
         Span::styled(format!("{} ", icon), Style::default().fg(color)),
         Span::styled(
             truncate_with_ellipsis(&text, max_width.saturating_sub(7)),
@@ -3307,6 +3307,51 @@ mod tests {
 
         assert!(text.contains("done"));
         assert!(text.contains("last:"));
+    }
+
+    #[test]
+    fn memory_widget_uses_distinct_trace_label_when_idle() {
+        let now = Instant::now();
+        let mut pipeline = PipelineState::new();
+        pipeline.search = StepStatus::Done;
+        pipeline.verify = StepStatus::Done;
+        pipeline.inject = StepStatus::Done;
+        pipeline.maintain = StepStatus::Done;
+
+        let data = InfoWidgetData {
+            memory_info: Some(MemoryInfo {
+                sidecar_model: Some("openai · gpt-5.3-codex-spark".to_string()),
+                activity: Some(MemoryActivity {
+                    state: MemoryState::Idle,
+                    state_since: now - Duration::from_secs(4),
+                    pipeline: Some(pipeline),
+                    recent_events: vec![MemoryEvent {
+                        kind: MemoryEventKind::MemoryInjected {
+                            count: 1,
+                            prompt_chars: 42,
+                            age_ms: 12,
+                            preview: "prefers terse answers".to_string(),
+                            items: Vec::new(),
+                        },
+                        timestamp: now - Duration::from_secs(3),
+                        detail: None,
+                    }],
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let text = render_memory_widget(&data, Rect::new(0, 0, 60, 8))
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.as_ref())
+            .collect::<Vec<_>>()
+            .join("\n")
+            .to_lowercase();
+
+        assert_eq!(text.matches("last:").count(), 1, "{text}");
+        assert!(text.contains("trace:"), "{text}");
     }
 
     #[test]
