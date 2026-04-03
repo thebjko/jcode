@@ -576,29 +576,11 @@ fn render_context_bar(
             "docs",
         ));
     }
-    if info.has_project_claude_md {
-        raw.push((
-            "📝",
-            "CLAUDE.md".into(),
-            info.project_claude_md_chars / 4,
-            docs_c,
-            "docs",
-        ));
-    }
     if info.has_global_agents_md {
         raw.push((
             "📋",
             "~/.AGENTS".into(),
             info.global_agents_md_chars / 4,
-            docs_c,
-            "docs",
-        ));
-    }
-    if info.has_global_claude_md {
-        raw.push((
-            "📝",
-            "~/.CLAUDE".into(),
-            info.global_claude_md_chars / 4,
             docs_c,
             "docs",
         ));

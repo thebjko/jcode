@@ -642,9 +642,7 @@ impl crate::tui::TuiState for App {
         info.total_chars = info.system_prompt_chars
             + info.env_context_chars
             + info.project_agents_md_chars
-            + info.project_claude_md_chars
             + info.global_agents_md_chars
-            + info.global_claude_md_chars
             + info.skills_chars
             + info.selfdev_chars
             + info.memory_chars

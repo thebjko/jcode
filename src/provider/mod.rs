@@ -51,7 +51,7 @@ pub trait Provider: Send + Sync {
     ) -> Result<EventStream>;
 
     /// Send messages with split system prompt for better caching
-    /// system_static: Static content (CLAUDE.md, base prompt) - cached
+    /// system_static: Static content (instruction files, base prompt) - cached
     /// system_dynamic: Dynamic content (date, git status, memory) - not cached
     /// Default implementation combines them and calls complete()
     async fn complete_split(

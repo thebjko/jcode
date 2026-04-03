@@ -10,7 +10,7 @@ pub const DEFAULT_SYSTEM_PROMPT: &str = include_str!("prompt/system.txt");
 /// Static content is cached, dynamic content is not
 #[derive(Debug, Clone, Default)]
 pub struct SplitSystemPrompt {
-    /// Static content that should be cached (CLAUDE.md, base prompt, skills)
+    /// Static content that should be cached (instruction files, base prompt, skills)
     pub static_part: String,
     /// Dynamic content that changes frequently (date, git status, memory)
     pub dynamic_part: String,
@@ -34,18 +34,10 @@ pub struct ContextInfo {
     pub has_project_agents_md: bool,
     /// Project AGENTS.md size (chars)
     pub project_agents_md_chars: usize,
-    /// Whether project CLAUDE.md was loaded
-    pub has_project_claude_md: bool,
-    /// Project CLAUDE.md size (chars)
-    pub project_claude_md_chars: usize,
     /// Whether global ~/.AGENTS.md was loaded
     pub has_global_agents_md: bool,
     /// Global AGENTS.md size (chars)
     pub global_agents_md_chars: usize,
-    /// Whether global ~/.CLAUDE.md was loaded
-    pub has_global_claude_md: bool,
-    /// Global CLAUDE.md size (chars)
-    pub global_claude_md_chars: usize,
     /// Skills section size (chars)
     pub skills_chars: usize,
     /// Self-dev section size (chars)
@@ -96,14 +88,8 @@ impl ContextInfo {
         if self.has_project_agents_md {
             parts.push(("agents", self.project_agents_md_chars, "📋"));
         }
-        if self.has_project_claude_md {
-            parts.push(("claude", self.project_claude_md_chars, "📝"));
-        }
         if self.has_global_agents_md {
             parts.push(("~agents", self.global_agents_md_chars, "📋"));
-        }
-        if self.has_global_claude_md {
-            parts.push(("~claude", self.global_claude_md_chars, "📝"));
         }
         if self.skills_chars > 0 {
             parts.push(("skills", self.skills_chars, "🔧"));
@@ -190,20 +176,16 @@ pub fn build_system_prompt_full(
         parts.push(build_selfdev_hint_prompt());
     }
 
-    // Add AGENTS.md and CLAUDE.md instructions with tracking (from working_dir or cwd)
-    let (md_content, md_info) = load_claude_md_files_from_dir(working_dir);
+    // Add AGENTS.md instructions with tracking (from working_dir or cwd)
+    let (md_content, md_info) = load_agents_md_files_from_dir(working_dir);
     if let Some(content) = md_content {
         parts.push(content);
     }
     // Merge file info
     info.has_project_agents_md = md_info.has_project_agents_md;
     info.project_agents_md_chars = md_info.project_agents_md_chars;
-    info.has_project_claude_md = md_info.has_project_claude_md;
-    info.project_claude_md_chars = md_info.project_claude_md_chars;
     info.has_global_agents_md = md_info.has_global_agents_md;
     info.global_agents_md_chars = md_info.global_agents_md_chars;
-    info.has_global_claude_md = md_info.has_global_claude_md;
-    info.global_claude_md_chars = md_info.global_claude_md_chars;
 
     // Add optional prompt overlays from ~/.jcode/ and ./.jcode/
     let (overlay_content, overlay_chars) = load_prompt_overlay_files_from_dir(working_dir);
@@ -272,19 +254,15 @@ pub fn build_system_prompt_split(
         static_parts.push(build_selfdev_hint_prompt());
     }
 
-    // Add AGENTS.md and CLAUDE.md instructions (static per project)
-    let (md_content, md_info) = load_claude_md_files_from_dir(working_dir);
+    // Add AGENTS.md instructions (static per project)
+    let (md_content, md_info) = load_agents_md_files_from_dir(working_dir);
     if let Some(content) = md_content {
         static_parts.push(content);
     }
     info.has_project_agents_md = md_info.has_project_agents_md;
     info.project_agents_md_chars = md_info.project_agents_md_chars;
-    info.has_project_claude_md = md_info.has_project_claude_md;
-    info.project_claude_md_chars = md_info.project_claude_md_chars;
     info.has_global_agents_md = md_info.has_global_agents_md;
     info.global_agents_md_chars = md_info.global_agents_md_chars;
-    info.has_global_claude_md = md_info.has_global_claude_md;
-    info.global_claude_md_chars = md_info.global_claude_md_chars;
 
     // Add optional prompt overlays from ~/.jcode/ and ./.jcode/
     let (overlay_content, overlay_chars) = load_prompt_overlay_files_from_dir(working_dir);
@@ -531,8 +509,8 @@ fn get_git_info() -> Option<String> {
     }
 }
 
-/// Load AGENTS.md and CLAUDE.md files from a specific working directory
-pub fn load_claude_md_files_from_dir(working_dir: Option<&Path>) -> (Option<String>, ContextInfo) {
+/// Load AGENTS.md files from a specific working directory
+pub fn load_agents_md_files_from_dir(working_dir: Option<&Path>) -> (Option<String>, ContextInfo) {
     let mut contents = vec![];
     let mut info = ContextInfo::default();
 
@@ -550,7 +528,6 @@ pub fn load_claude_md_files_from_dir(working_dir: Option<&Path>) -> (Option<Stri
     };
 
     // Project-level files (from specified working directory or current directory)
-    // AGENTS.md first (generic), then CLAUDE.md (Claude-specific)
     let project_dir = working_dir.unwrap_or(Path::new("."));
     if let Some((content, size)) = load_file(
         &project_dir.join("AGENTS.md"),
@@ -558,14 +535,6 @@ pub fn load_claude_md_files_from_dir(working_dir: Option<&Path>) -> (Option<Stri
     ) {
         info.has_project_agents_md = true;
         info.project_agents_md_chars = size;
-        contents.push(content);
-    }
-    if let Some((content, size)) = load_file(
-        &project_dir.join("CLAUDE.md"),
-        "Project Instructions (CLAUDE.md)",
-    ) {
-        info.has_project_claude_md = true;
-        info.project_claude_md_chars = size;
         contents.push(content);
     }
 
@@ -576,15 +545,6 @@ pub fn load_claude_md_files_from_dir(working_dir: Option<&Path>) -> (Option<Stri
         {
             info.has_global_agents_md = true;
             info.global_agents_md_chars = size;
-            contents.push(content);
-        }
-    }
-    if let Ok(global_claude_md) = crate::storage::user_home_path("CLAUDE.md") {
-        if let Some((content, size)) =
-            load_file(&global_claude_md, "Global Instructions (~/.CLAUDE.md)")
-        {
-            info.has_global_claude_md = true;
-            info.global_claude_md_chars = size;
             contents.push(content);
         }
     }
@@ -673,8 +633,9 @@ mod tests {
         // The prompt should contain the skill prompt
         assert!(prompt.contains(skill_prompt));
 
-        // The base prompt parts (excluding user CLAUDE.md files) should NOT contain "Claude Code"
-        // We check DEFAULT_SYSTEM_PROMPT separately since user files may legitimately contain it
+        // The base prompt parts (excluding user-provided instruction files) should NOT contain
+        // "Claude Code". We check DEFAULT_SYSTEM_PROMPT separately since user files may
+        // legitimately contain it.
         let default_lower = DEFAULT_SYSTEM_PROMPT.to_lowercase();
         assert!(
             !default_lower.contains("claude code"),
@@ -683,7 +644,7 @@ mod tests {
     }
 
     #[test]
-    fn test_load_claude_md_files_uses_sandboxed_global_files() {
+    fn test_load_agents_md_files_uses_sandboxed_global_files() {
         let _guard = crate::storage::lock_test_env();
         let prev_home = std::env::var_os("JCODE_HOME");
         let temp = tempfile::TempDir::new().unwrap();
@@ -697,7 +658,7 @@ mod tests {
         .unwrap();
 
         let project_dir = tempfile::TempDir::new().unwrap();
-        let (content, info) = load_claude_md_files_from_dir(Some(project_dir.path()));
+        let (content, info) = load_agents_md_files_from_dir(Some(project_dir.path()));
 
         assert!(info.has_global_agents_md);
         let content = content.expect("global instructions content");

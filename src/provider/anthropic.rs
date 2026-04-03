@@ -1302,7 +1302,7 @@ fn build_system_param_split(
             text: CLAUDE_CODE_JCODE_NOTICE.to_string(),
             cache_control: None,
         });
-        // Static content - CACHED (CLAUDE.md, base prompt, skills)
+        // Static content - CACHED (instruction files, base prompt, skills)
         if !static_part.is_empty() {
             blocks.push(ApiSystemBlock {
                 block_type: "text",

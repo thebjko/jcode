@@ -2640,17 +2640,13 @@ pub(super) fn handle_info_command(app: &mut App, trimmed: &str) -> bool {
             context.estimated_tokens()
         ));
         context_report.push_str(&format!(
-            "- system prompt: {} chars\n- env context: {} chars\n- project AGENTS.md: {} ({})\n- project CLAUDE.md: {} ({})\n- global ~/.AGENTS.md: {} ({})\n- global ~/.CLAUDE.md: {} ({})\n- prompt overlays: {} chars\n- skills section: {} chars\n- self-dev section: {} chars\n- memory section: {} chars\n- tool definitions: {} chars across {} tools\n- user messages: {} chars across {} messages\n- assistant messages: {} chars across {} messages\n- tool calls: {} chars across {} calls\n- tool results: {} chars across {} results\n",
+            "- system prompt: {} chars\n- env context: {} chars\n- project AGENTS.md: {} ({})\n- global ~/.AGENTS.md: {} ({})\n- prompt overlays: {} chars\n- skills section: {} chars\n- self-dev section: {} chars\n- memory section: {} chars\n- tool definitions: {} chars across {} tools\n- user messages: {} chars across {} messages\n- assistant messages: {} chars across {} messages\n- tool calls: {} chars across {} calls\n- tool results: {} chars across {} results\n",
             context.system_prompt_chars,
             context.env_context_chars,
             if context.has_project_agents_md { "loaded" } else { "not loaded" },
             context.project_agents_md_chars,
-            if context.has_project_claude_md { "loaded" } else { "not loaded" },
-            context.project_claude_md_chars,
             if context.has_global_agents_md { "loaded" } else { "not loaded" },
             context.global_agents_md_chars,
-            if context.has_global_claude_md { "loaded" } else { "not loaded" },
-            context.global_claude_md_chars,
             context.prompt_overlay_chars,
             context.skills_chars,
             context.selfdev_chars,
