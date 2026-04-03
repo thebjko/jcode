@@ -144,6 +144,39 @@ pub(super) fn split_by_display_width(s: &str, max_width: usize) -> Vec<String> {
     chunks
 }
 
+fn truncate_to_display_width(s: &str, max_width: usize) -> String {
+    use unicode_width::UnicodeWidthChar;
+
+    if max_width == 0 {
+        return String::new();
+    }
+
+    let full_width = unicode_width::UnicodeWidthStr::width(s);
+    if full_width <= max_width {
+        return s.to_string();
+    }
+
+    let ellipsis = "…";
+    let ellipsis_width = unicode_width::UnicodeWidthStr::width(ellipsis);
+    if ellipsis_width >= max_width {
+        return ellipsis.to_string();
+    }
+
+    let target_width = max_width - ellipsis_width;
+    let mut truncated = String::new();
+    let mut width = 0usize;
+    for ch in s.chars() {
+        let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if width + ch_width > target_width {
+            break;
+        }
+        truncated.push(ch);
+        width += ch_width;
+    }
+    truncated.push('…');
+    truncated
+}
+
 fn format_memory_updated_age(updated_at: DateTime<Utc>) -> String {
     let age = Utc::now().signed_duration_since(updated_at);
     if age.num_seconds() < 2 {
@@ -254,16 +287,19 @@ fn memory_tile_content_lines(
 
         if let Some(updated_at) = item.updated_at {
             let meta = format_memory_updated_age(updated_at);
-            let meta_width = unicode_width::UnicodeWidthStr::width(meta.as_str());
             let indent = bullet_width;
-            let padding = inner_width.saturating_sub(indent + meta_width);
-            content_lines.push(Line::from(vec![
-                Span::styled("│ ", border_style),
-                Span::raw(" ".repeat(indent)),
-                Span::styled(meta, meta_fill_style),
-                Span::raw(" ".repeat(padding)),
-                Span::styled(" │", border_style),
-            ]));
+            let meta_width = inner_width.saturating_sub(indent).max(1);
+            for chunk in split_by_display_width(&meta, meta_width) {
+                let chunk_width = unicode_width::UnicodeWidthStr::width(chunk.as_str());
+                let padding = inner_width.saturating_sub(indent + chunk_width);
+                content_lines.push(Line::from(vec![
+                    Span::styled("│ ", border_style),
+                    Span::raw(" ".repeat(indent)),
+                    Span::styled(chunk, meta_fill_style),
+                    Span::raw(" ".repeat(padding)),
+                    Span::styled(" │", border_style),
+                ]));
+            }
         }
     }
 
@@ -289,7 +325,9 @@ fn render_memory_tile_box(
         return Vec::new();
     }
 
-    let title_text = format!(" {} ", tile.category.to_lowercase());
+    let title_max_width = box_width.saturating_sub(4);
+    let title_label = truncate_to_display_width(&tile.category.to_lowercase(), title_max_width);
+    let title_text = format!(" {} ", title_label);
     let title_len = unicode_width::UnicodeWidthStr::width(title_text.as_str());
     let border_chars = box_width.saturating_sub(title_len + 2);
     let left_border = "─".repeat(border_chars / 2);

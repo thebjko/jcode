@@ -5500,6 +5500,43 @@ mod tests {
     }
 
     #[test]
+    fn test_plan_memory_tile_wraps_long_updated_age_line() {
+        let tiles = group_into_tiles(vec![(
+            "fact".to_string(),
+            MemoryTileItem {
+                content: "The build is green".to_string(),
+                updated_at: Some(chrono::Utc::now() - chrono::Duration::days(400)),
+            },
+        )]);
+
+        let plan = plan_memory_tile(&tiles[0], 20, Style::default(), Style::default())
+            .expect("memory tile plan");
+
+        assert!(
+            plan.lines.iter().all(|line| line.width() == 20),
+            "expected wrapped updated-at lines to preserve tile width: {:?}",
+            plan.lines.iter().map(extract_line_text).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_plan_memory_tile_truncates_long_category_title() {
+        let tiles = group_into_tiles(vec![(
+            "this category title is unexpectedly very long".to_string(),
+            "The build is green".to_string(),
+        )]);
+
+        let plan = plan_memory_tile(&tiles[0], 20, Style::default(), Style::default())
+            .expect("memory tile plan");
+
+        assert!(
+            plan.lines.iter().all(|line| line.width() == 20),
+            "expected long category titles to be truncated to tile width: {:?}",
+            plan.lines.iter().map(extract_line_text).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
     fn test_truncate_line_preserves_width_for_ascii() {
         let line = Line::from(Span::raw("hello world foo bar"));
         let truncated = truncate_line_to_width(&line, 11);
