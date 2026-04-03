@@ -1,5 +1,6 @@
+use super::runtime::ServerRuntime;
 use super::socket::wait_for_existing_server;
-use super::{Server, is_server_ready};
+use super::{Client, Server, is_server_ready};
 use crate::message::{Message, ToolDefinition};
 use crate::provider::{EventStream, Provider};
 use crate::transport::Listener;
@@ -104,4 +105,30 @@ fn server_initializes_schedule_runner_even_when_ambient_disabled() {
         server.ambient_runner.is_some(),
         "schedule/session tasks need the runner even when ambient is disabled"
     );
+}
+
+#[tokio::test]
+async fn debug_accept_loop_responds_to_ping_without_affecting_client_count() {
+    let _guard = crate::storage::lock_test_env();
+    let temp = tempfile::tempdir().expect("tempdir");
+    let socket_path = temp.path().join("jcode.sock");
+    let debug_socket_path = temp.path().join("jcode-debug.sock");
+    let provider: Arc<dyn Provider> = Arc::new(TestProvider);
+    let server = Server::new_with_paths(provider, socket_path, debug_socket_path.clone());
+    let runtime = ServerRuntime::from_server(&server);
+    let debug_listener = Listener::bind(&debug_socket_path).expect("bind debug socket");
+    let debug_handle = runtime.spawn_debug_accept_loop(debug_listener, std::time::Instant::now());
+
+    let mut client = tokio::time::timeout(
+        Duration::from_secs(1),
+        Client::connect_debug_with_path(debug_socket_path),
+    )
+    .await
+    .expect("debug connect should complete")
+    .expect("debug client should connect");
+
+    assert!(client.ping().await.expect("debug ping should succeed"));
+    assert_eq!(*server.client_count.read().await, 0);
+
+    debug_handle.abort();
 }
