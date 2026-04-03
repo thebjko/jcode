@@ -9,7 +9,7 @@ use crate::protocol::{ServerEvent, TranscriptMode};
 use crate::tui::backend::{RemoteConnection, RemoteDisconnectReason, RemoteEventState, RemoteRead};
 use anyhow::Result;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent};
-use ratatui::DefaultTerminal;
+use ratatui::{DefaultTerminal, Terminal, backend::Backend};
 use std::time::{Duration, Instant};
 
 mod reconnect;
@@ -590,9 +590,9 @@ fn handle_terminal_event_while_disconnected(
     Ok(app.should_quit)
 }
 
-pub(super) async fn handle_remote_event(
+pub(super) async fn handle_remote_event<B: Backend>(
     app: &mut App,
-    terminal: &mut DefaultTerminal,
+    terminal: &mut Terminal<B>,
     remote: &mut RemoteConnection,
     state: &mut RemoteRunState,
     event: RemoteRead,
@@ -608,7 +608,11 @@ pub(super) async fn handle_remote_event(
             state.server_reload_in_progress = true;
             state.reload_recovery_attempted = false;
             state.last_disconnect_reason = Some("server reload in progress".to_string());
-            let _ = handle_server_event(app, ServerEvent::Reloading { new_socket: None }, remote);
+            let needs_redraw =
+                handle_server_event(app, ServerEvent::Reloading { new_socket: None }, remote);
+            if needs_redraw {
+                terminal.draw(|frame| crate::tui::ui::draw(frame, app))?;
+            }
             process_remote_followups(app, remote).await;
             Ok(RemoteEventOutcome::Continue)
         }
@@ -630,7 +634,10 @@ pub(super) async fn handle_remote_event(
             Ok(RemoteEventOutcome::Continue)
         }
         RemoteRead::Event(server_event) => {
-            let _ = handle_server_event(app, server_event, remote);
+            let needs_redraw = handle_server_event(app, server_event, remote);
+            if needs_redraw {
+                terminal.draw(|frame| crate::tui::ui::draw(frame, app))?;
+            }
             process_remote_followups(app, remote).await;
             Ok(RemoteEventOutcome::Continue)
         }
@@ -1312,7 +1319,7 @@ pub(super) fn handle_server_event(
             }
             remote.handle_tool_exec(&id, &name);
             app.observe_tool_call(&tool_call);
-            false
+            app.side_panel.focused_page_id.as_deref() == Some(super::observe::OBSERVE_PAGE_ID)
         }
         ServerEvent::ToolDone {
             id,

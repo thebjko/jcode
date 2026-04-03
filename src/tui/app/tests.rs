@@ -6523,6 +6523,152 @@ fn test_handle_server_event_remote_observe_tracks_tool_exec_and_done() {
 }
 
 #[test]
+fn test_handle_remote_event_redraws_observe_tool_exec_immediately() {
+    let mut app = create_test_app();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let backend = ratatui::backend::TestBackend::new(90, 20);
+    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create test terminal");
+    let mut remote = crate::tui::backend::RemoteConnection::dummy();
+    let mut state = super::remote::RemoteRunState::default();
+
+    app.input = "/observe on".to_string();
+    app.submit_input();
+
+    let outcome = rt
+        .block_on(super::remote::handle_remote_event(
+            &mut app,
+            &mut terminal,
+            &mut remote,
+            &mut state,
+            crate::tui::backend::RemoteRead::Event(crate::protocol::ServerEvent::ToolStart {
+                id: "tool_read".to_string(),
+                name: "read".to_string(),
+            }),
+        ))
+        .expect("tool start should succeed");
+    assert!(matches!(
+        outcome,
+        super::remote::RemoteEventOutcome::Continue
+    ));
+
+    let outcome = rt
+        .block_on(super::remote::handle_remote_event(
+            &mut app,
+            &mut terminal,
+            &mut remote,
+            &mut state,
+            crate::tui::backend::RemoteRead::Event(crate::protocol::ServerEvent::ToolInput {
+                delta: r#"{"file_path":"src/main.rs","start_line":1,"end_line":10}"#.to_string(),
+            }),
+        ))
+        .expect("tool input should succeed");
+    assert!(matches!(
+        outcome,
+        super::remote::RemoteEventOutcome::Continue
+    ));
+
+    let outcome = rt
+        .block_on(super::remote::handle_remote_event(
+            &mut app,
+            &mut terminal,
+            &mut remote,
+            &mut state,
+            crate::tui::backend::RemoteRead::Event(crate::protocol::ServerEvent::ToolExec {
+                id: "tool_read".to_string(),
+                name: "read".to_string(),
+            }),
+        ))
+        .expect("tool exec should succeed");
+    assert!(matches!(
+        outcome,
+        super::remote::RemoteEventOutcome::Continue
+    ));
+
+    let text = buffer_to_text(&terminal);
+    assert!(
+        text.contains("Latest tool call emitted by the"),
+        "observe tool exec should redraw immediately:\n{text}"
+    );
+    assert!(text.contains("Tool input"));
+    assert!(text.contains("src/main.rs"));
+}
+
+#[test]
+fn test_handle_remote_event_redraws_observe_tool_done_immediately() {
+    let mut app = create_test_app();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let backend = ratatui::backend::TestBackend::new(90, 20);
+    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create test terminal");
+    let mut remote = crate::tui::backend::RemoteConnection::dummy();
+    let mut state = super::remote::RemoteRunState::default();
+
+    app.input = "/observe on".to_string();
+    app.submit_input();
+
+    rt.block_on(super::remote::handle_remote_event(
+        &mut app,
+        &mut terminal,
+        &mut remote,
+        &mut state,
+        crate::tui::backend::RemoteRead::Event(crate::protocol::ServerEvent::ToolStart {
+            id: "tool_read".to_string(),
+            name: "read".to_string(),
+        }),
+    ))
+    .expect("tool start should succeed");
+    rt.block_on(super::remote::handle_remote_event(
+        &mut app,
+        &mut terminal,
+        &mut remote,
+        &mut state,
+        crate::tui::backend::RemoteRead::Event(crate::protocol::ServerEvent::ToolInput {
+            delta: r#"{"file_path":"src/main.rs","start_line":1,"end_line":10}"#.to_string(),
+        }),
+    ))
+    .expect("tool input should succeed");
+    rt.block_on(super::remote::handle_remote_event(
+        &mut app,
+        &mut terminal,
+        &mut remote,
+        &mut state,
+        crate::tui::backend::RemoteRead::Event(crate::protocol::ServerEvent::ToolExec {
+            id: "tool_read".to_string(),
+            name: "read".to_string(),
+        }),
+    ))
+    .expect("tool exec should succeed");
+
+    let outcome = rt
+        .block_on(super::remote::handle_remote_event(
+            &mut app,
+            &mut terminal,
+            &mut remote,
+            &mut state,
+            crate::tui::backend::RemoteRead::Event(crate::protocol::ServerEvent::ToolDone {
+                id: "tool_read".to_string(),
+                name: "read".to_string(),
+                output: "1 fn main() {}".to_string(),
+                error: None,
+            }),
+        ))
+        .expect("tool done should succeed");
+    assert!(matches!(
+        outcome,
+        super::remote::RemoteEventOutcome::Continue
+    ));
+
+    let text = buffer_to_text(&terminal);
+    assert!(
+        text.contains("Latest tool result added to"),
+        "observe tool done should redraw immediately:\n{text}"
+    );
+    assert!(text.contains("Status: completed"));
+    assert!(text.contains("Returned to context:"));
+}
+
+#[test]
 fn test_observe_marks_large_tool_results() {
     let mut app = create_test_app();
     app.input = "/observe on".to_string();
