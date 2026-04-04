@@ -1341,6 +1341,10 @@ impl MultiProvider {
     }
 
     fn is_openai_usage_exhausted_from_usage(usage: &crate::usage::OpenAIUsageData) -> bool {
+        if usage.hard_limit_reached {
+            return true;
+        }
+
         if !usage.has_limits() {
             return false;
         }
@@ -3561,6 +3565,21 @@ mod tests {
             usage_ratio: 1.0,
             resets_at: None,
         });
+        assert!(MultiProvider::is_openai_usage_exhausted_from_usage(&usage));
+    }
+
+    #[test]
+    fn test_openai_usage_exhaustion_honors_hard_limit_flag() {
+        let usage = crate::usage::OpenAIUsageData {
+            hard_limit_reached: true,
+            five_hour: Some(crate::usage::OpenAIUsageWindow {
+                name: "5h".to_string(),
+                usage_ratio: 1.0,
+                resets_at: None,
+            }),
+            ..Default::default()
+        };
+
         assert!(MultiProvider::is_openai_usage_exhausted_from_usage(&usage));
     }
 

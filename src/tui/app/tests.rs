@@ -1253,6 +1253,7 @@ fn test_usage_report_pushes_system_message() {
             resets_at: None,
         }],
         extra_info: vec![("plan".to_string(), "pro".to_string())],
+        hard_limit_reached: false,
         error: None,
     }]);
 

@@ -161,6 +161,7 @@ pub struct ProviderUsage {
     pub provider_name: String,
     pub limits: Vec<UsageLimit>,
     pub extra_info: Vec<(String, String)>,
+    pub hard_limit_reached: bool,
     pub error: Option<String>,
 }
 
@@ -186,6 +187,7 @@ pub struct OpenAIUsageData {
     pub five_hour: Option<OpenAIUsageWindow>,
     pub seven_day: Option<OpenAIUsageWindow>,
     pub spark: Option<OpenAIUsageWindow>,
+    pub hard_limit_reached: bool,
     pub fetched_at: Option<Instant>,
     pub last_error: Option<String>,
 }
@@ -487,6 +489,7 @@ fn provider_report_from_usage_data(display_name: String, data: &UsageData) -> Pr
         provider_name: display_name,
         limits,
         extra_info,
+        hard_limit_reached: false,
         error: None,
     }
 }
@@ -787,6 +790,7 @@ fn usage_data_from_provider_report(report: &ProviderUsage) -> UsageData {
 
 fn openai_usage_data_from_provider_report(report: &ProviderUsage) -> OpenAIUsageData {
     let mut data = classify_openai_limits(&report.limits);
+    data.hard_limit_reached = report.hard_limit_reached;
     data.fetched_at = Some(Instant::now());
     data.last_error = report.error.clone();
     data
@@ -831,6 +835,7 @@ fn provider_report_from_openai_usage_data(
         provider_name: display_name,
         limits,
         extra_info: Vec::new(),
+        hard_limit_reached: data.hard_limit_reached,
         error: None,
     }
 }
@@ -842,9 +847,10 @@ fn openai_snapshot_from_usage(
 ) -> AccountUsageSnapshot {
     let five_hour_ratio = usage.five_hour.as_ref().map(|window| window.usage_ratio);
     let seven_day_ratio = usage.seven_day.as_ref().map(|window| window.usage_ratio);
-    let exhausted = usage.has_limits()
-        && five_hour_ratio.map(|ratio| ratio >= 0.99).unwrap_or(false)
-        && seven_day_ratio.map(|ratio| ratio >= 0.99).unwrap_or(false);
+    let exhausted = usage.hard_limit_reached
+        || (usage.has_limits()
+            && five_hour_ratio.map(|ratio| ratio >= 0.99).unwrap_or(false)
+            && seven_day_ratio.map(|ratio| ratio >= 0.99).unwrap_or(false));
 
     AccountUsageSnapshot {
         label,
@@ -1064,6 +1070,43 @@ fn parse_limit_name(entry: &serde_json::Value, fallback: &str) -> String {
         .and_then(|v| v.as_str())
         .unwrap_or(fallback)
         .to_string()
+}
+
+fn parse_bool_value(value: &serde_json::Value) -> Option<bool> {
+    if let Some(b) = value.as_bool() {
+        return Some(b);
+    }
+
+    value.as_str().and_then(|s| match s.trim().to_ascii_lowercase().as_str() {
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => None,
+    })
+}
+
+fn object_contains_key_with_bool(
+    value: &serde_json::Value,
+    key: &str,
+    expected: bool,
+) -> bool {
+    match value {
+        serde_json::Value::Object(map) => {
+            map.get(key).and_then(parse_bool_value) == Some(expected)
+                || map
+                    .values()
+                    .any(|inner| object_contains_key_with_bool(inner, key, expected))
+        }
+        serde_json::Value::Array(items) => items
+            .iter()
+            .any(|inner| object_contains_key_with_bool(inner, key, expected)),
+        _ => false,
+    }
+}
+
+fn parse_openai_hard_limit_reached(json: &serde_json::Value) -> bool {
+    object_contains_key_with_bool(json, "limit_reached", true)
+        || object_contains_key_with_bool(json, "limitReached", true)
+        || object_contains_key_with_bool(json, "allowed", false)
 }
 
 async fn fetch_all_anthropic_usage_reports() -> Vec<ProviderUsage> {
@@ -1366,6 +1409,7 @@ async fn fetch_openai_usage_for_account(
 
     let mut limits = Vec::new();
     let mut extra_info = Vec::new();
+    let hard_limit_reached = parse_openai_hard_limit_reached(&json);
 
     fn parse_wham_window(window: &serde_json::Value, name: &str) -> Option<UsageLimit> {
         let obj = window.as_object()?;
@@ -1488,6 +1532,7 @@ async fn fetch_openai_usage_for_account(
         provider_name: display_name,
         limits,
         extra_info,
+        hard_limit_reached,
         error: None,
     };
     store_openai_usage(cache_key, openai_usage_data_from_provider_report(&report));
@@ -1613,6 +1658,7 @@ async fn fetch_openrouter_usage_report() -> Option<ProviderUsage> {
         provider_name: "OpenRouter".to_string(),
         limits,
         extra_info,
+        hard_limit_reached: false,
         error: None,
     })
 }
@@ -1733,6 +1779,7 @@ async fn fetch_copilot_usage_report() -> Option<ProviderUsage> {
         provider_name: "GitHub Copilot".to_string(),
         limits,
         extra_info,
+        hard_limit_reached: false,
         error: None,
     })
 }
@@ -2399,6 +2446,7 @@ mod tests {
                 "Extra usage (long context)".to_string(),
                 "enabled".to_string(),
             )],
+            hard_limit_reached: false,
             error: None,
         };
 
@@ -2430,6 +2478,64 @@ mod tests {
         );
         assert!(usage.five_hour.is_none());
         assert!(usage.seven_day.is_none());
+    }
+
+    #[test]
+    fn test_openai_usage_data_from_provider_report_preserves_hard_limit_flag() {
+        let report = ProviderUsage {
+            provider_name: "OpenAI (ChatGPT)".to_string(),
+            hard_limit_reached: true,
+            limits: vec![UsageLimit {
+                name: "5-hour window".to_string(),
+                usage_percent: 100.0,
+                resets_at: None,
+            }],
+            ..Default::default()
+        };
+
+        let usage = openai_usage_data_from_provider_report(&report);
+
+        assert!(usage.hard_limit_reached);
+    }
+
+    #[test]
+    fn test_openai_snapshot_marks_hard_limit_reached_as_exhausted() {
+        let usage = OpenAIUsageData {
+            hard_limit_reached: true,
+            five_hour: Some(OpenAIUsageWindow {
+                name: "5-hour window".to_string(),
+                usage_ratio: 1.0,
+                resets_at: Some("2026-01-01T00:00:00Z".to_string()),
+            }),
+            ..Default::default()
+        };
+
+        let snapshot = openai_snapshot_from_usage(
+            "work".to_string(),
+            Some("work@example.com".to_string()),
+            &usage,
+        );
+
+        assert!(snapshot.exhausted);
+        assert_eq!(snapshot.five_hour_ratio, Some(1.0));
+        assert_eq!(snapshot.seven_day_ratio, None);
+    }
+
+    #[test]
+    fn test_parse_openai_hard_limit_reached_detects_nested_denials() {
+        let json = serde_json::json!({
+            "plan_type": "free",
+            "rate_limit": {
+                "allowed": false,
+                "primary_window": {
+                    "used_percent": 100.0,
+                    "reset_at": 1_766_000_000
+                }
+            },
+            "limit_reached": true
+        });
+
+        assert!(parse_openai_hard_limit_reached(&json));
     }
 
     #[test]
