@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
@@ -128,8 +128,8 @@ enum ClaudeCodeContentBlock {
     Unknown,
 }
 
-/// Discover all Claude Code projects and their sessions-index.json files
-fn discover_projects() -> Result<Vec<PathBuf>> {
+/// Discover all Claude Code project directories under ~/.claude/projects.
+fn discover_project_dirs() -> Result<Vec<PathBuf>> {
     let claude_dir = crate::storage::user_home_path(".claude/projects")
         .context("Could not find Claude projects directory")?;
 
@@ -137,61 +137,271 @@ fn discover_projects() -> Result<Vec<PathBuf>> {
         return Ok(Vec::new());
     }
 
-    let mut index_files = Vec::new();
+    let mut project_dirs = Vec::new();
     for entry in std::fs::read_dir(&claude_dir)? {
         let entry = entry?;
         let path = entry.path();
         if path.is_dir() {
-            let index_path = path.join("sessions-index.json");
-            if index_path.exists() {
-                index_files.push(index_path);
+            project_dirs.push(path);
+        }
+    }
+
+    project_dirs.sort();
+    Ok(project_dirs)
+}
+
+/// Discover all Claude Code projects and their sessions-index.json files.
+#[cfg(test)]
+fn discover_projects() -> Result<Vec<PathBuf>> {
+    Ok(discover_project_dirs()?
+        .into_iter()
+        .map(|dir| dir.join("sessions-index.json"))
+        .filter(|path| path.exists())
+        .collect())
+}
+
+fn parse_rfc3339_string(value: Option<&str>) -> Option<DateTime<Utc>> {
+    value
+        .and_then(|ts| DateTime::parse_from_rfc3339(ts).ok())
+        .map(|dt| dt.with_timezone(&Utc))
+}
+
+fn claude_text_from_content(content: &ClaudeCodeContent) -> Option<String> {
+    match content {
+        ClaudeCodeContent::Empty => None,
+        ClaudeCodeContent::Text(text) => {
+            let text = text.trim();
+            if text.is_empty() {
+                None
+            } else {
+                Some(text.to_string())
+            }
+        }
+        ClaudeCodeContent::Blocks(blocks) => {
+            let text = blocks
+                .iter()
+                .filter_map(|block| match block {
+                    ClaudeCodeContentBlock::Text { text } => Some(text.trim()),
+                    ClaudeCodeContentBlock::Thinking { thinking, .. } => Some(thinking.trim()),
+                    ClaudeCodeContentBlock::ToolResult { content, .. } => Some(content.trim()),
+                    _ => None,
+                })
+                .filter(|text| !text.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n");
+            if text.is_empty() { None } else { Some(text) }
+        }
+    }
+}
+
+fn load_claude_code_entries(path: &Path) -> Result<Vec<ClaudeCodeEntry>> {
+    let content = std::fs::read_to_string(path)
+        .with_context(|| format!("Failed to read session file: {}", path.display()))?;
+
+    let mut entries = Vec::new();
+    for line in content.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<ClaudeCodeEntry>(line) {
+            Ok(entry) => entries.push(entry),
+            Err(e) => {
+                crate::logging::debug(&format!(
+                    "Skipping malformed Claude Code entry in {}: {}",
+                    path.display(),
+                    e
+                ));
+            }
+        }
+    }
+    Ok(entries)
+}
+
+fn ordered_claude_code_message_entries<'a>(
+    entries: &'a [ClaudeCodeEntry],
+) -> Vec<&'a ClaudeCodeEntry> {
+    let message_entries: Vec<&ClaudeCodeEntry> = entries
+        .iter()
+        .filter(|e| {
+            (e.entry_type == "user" || e.entry_type == "assistant")
+                && e.message.is_some()
+                && !e.is_sidechain
+        })
+        .collect();
+
+    let mut uuid_to_entry: HashMap<String, &ClaudeCodeEntry> = HashMap::new();
+    for entry in &message_entries {
+        if let Some(ref uuid) = entry.uuid {
+            uuid_to_entry.insert(uuid.clone(), entry);
+        }
+    }
+
+    let mut ordered_entries: Vec<&ClaudeCodeEntry> = Vec::new();
+    let mut visited: HashSet<String> = HashSet::new();
+
+    let roots: Vec<&ClaudeCodeEntry> = message_entries
+        .iter()
+        .filter(|e| {
+            e.parent_uuid.is_none()
+                || !uuid_to_entry.contains_key(e.parent_uuid.as_deref().unwrap_or_default())
+        })
+        .copied()
+        .collect();
+
+    for root in roots {
+        let mut current = root;
+        loop {
+            if let Some(ref uuid) = current.uuid {
+                if visited.contains(uuid) {
+                    break;
+                }
+                visited.insert(uuid.clone());
+            }
+            ordered_entries.push(current);
+
+            let next = message_entries.iter().find(|e| {
+                e.parent_uuid.as_ref() == current.uuid.as_ref()
+                    && e.uuid
+                        .as_ref()
+                        .map(|u| !visited.contains(u))
+                        .unwrap_or(true)
+            });
+
+            match next {
+                Some(n) => current = n,
+                None => break,
             }
         }
     }
 
-    Ok(index_files)
+    for entry in message_entries {
+        if entry
+            .uuid
+            .as_ref()
+            .map(|uuid| visited.contains(uuid))
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        ordered_entries.push(entry);
+    }
+
+    ordered_entries
+}
+
+fn claude_code_session_info_from_file(
+    path: &Path,
+    indexed: Option<&SessionIndexEntry>,
+) -> Result<ClaudeCodeSessionInfo> {
+    let entries = load_claude_code_entries(path)?;
+    let ordered_entries = ordered_claude_code_message_entries(&entries);
+    let first_entry = ordered_entries.first().copied();
+    let last_entry = ordered_entries.last().copied();
+
+    let session_id = indexed
+        .map(|entry| entry.session_id.clone())
+        .or_else(|| {
+            entries
+                .iter()
+                .find_map(|entry| entry._session_id.clone())
+                .or_else(|| {
+                    path.file_stem()
+                        .and_then(|stem| stem.to_str())
+                        .map(|s| s.to_string())
+                })
+        })
+        .unwrap_or_else(|| path.to_string_lossy().to_string());
+
+    let first_prompt = indexed
+        .and_then(|entry| entry.first_prompt.clone())
+        .filter(|text| !text.trim().is_empty())
+        .or_else(|| {
+            ordered_entries.iter().find_map(|entry| {
+                (entry.entry_type == "user")
+                    .then(|| entry.message.as_ref())
+                    .flatten()
+                    .and_then(|message| claude_text_from_content(&message.content))
+            })
+        })
+        .unwrap_or_else(|| "No prompt".to_string());
+
+    let summary = indexed
+        .and_then(|entry| entry.summary.clone())
+        .filter(|text| !text.trim().is_empty());
+    let message_count = indexed
+        .and_then(|entry| entry.message_count)
+        .unwrap_or(ordered_entries.len() as u32);
+    let created = indexed
+        .and_then(|entry| parse_rfc3339_string(entry.created.as_deref()))
+        .or_else(|| first_entry.and_then(|entry| parse_rfc3339_string(entry.timestamp.as_deref())));
+    let modified = indexed
+        .and_then(|entry| parse_rfc3339_string(entry.modified.as_deref()))
+        .or_else(|| last_entry.and_then(|entry| parse_rfc3339_string(entry.timestamp.as_deref())));
+    let project_path = indexed
+        .and_then(|entry| entry.project_path.clone())
+        .or_else(|| first_entry.and_then(|entry| entry.cwd.clone()));
+
+    Ok(ClaudeCodeSessionInfo {
+        session_id,
+        first_prompt,
+        summary,
+        message_count,
+        created,
+        modified,
+        project_path,
+        full_path: path.to_string_lossy().to_string(),
+    })
 }
 
 /// List all available Claude Code sessions
 pub fn list_claude_code_sessions() -> Result<Vec<ClaudeCodeSessionInfo>> {
     let mut all_sessions = Vec::new();
+    let mut seen_session_ids = HashSet::new();
 
-    for index_path in discover_projects()? {
-        let content = std::fs::read_to_string(&index_path)
-            .with_context(|| format!("Failed to read {}", index_path.display()))?;
+    for project_dir in discover_project_dirs()? {
+        let index_path = project_dir.join("sessions-index.json");
+        if index_path.exists() {
+            let content = std::fs::read_to_string(&index_path)
+                .with_context(|| format!("Failed to read {}", index_path.display()))?;
 
-        let index: SessionsIndex = serde_json::from_str(&content)
-            .with_context(|| format!("Failed to parse {}", index_path.display()))?;
+            let index: SessionsIndex = serde_json::from_str(&content)
+                .with_context(|| format!("Failed to parse {}", index_path.display()))?;
 
-        for entry in index.entries {
-            // Skip sidechains (branched conversations)
-            if entry.is_sidechain.unwrap_or(false) {
+            for entry in index.entries {
+                if entry.is_sidechain.unwrap_or(false) {
+                    continue;
+                }
+
+                let indexed_path = PathBuf::from(&entry.full_path);
+                let fallback_path = project_dir.join(format!("{}.jsonl", entry.session_id));
+                let path = if indexed_path.exists() {
+                    indexed_path
+                } else if fallback_path.exists() {
+                    fallback_path
+                } else {
+                    continue;
+                };
+
+                let session = claude_code_session_info_from_file(&path, Some(&entry))?;
+                seen_session_ids.insert(session.session_id.clone());
+                all_sessions.push(session);
+            }
+        }
+
+        for path in collect_files_recursive(&project_dir, "jsonl") {
+            let Some(session_id) = path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .map(|stem| stem.to_string())
+            else {
+                continue;
+            };
+            if seen_session_ids.contains(&session_id) {
                 continue;
             }
-
-            let created = entry.created.as_ref().and_then(|s| {
-                DateTime::parse_from_rfc3339(s)
-                    .ok()
-                    .map(|dt| dt.with_timezone(&Utc))
-            });
-            let modified = entry.modified.as_ref().and_then(|s| {
-                DateTime::parse_from_rfc3339(s)
-                    .ok()
-                    .map(|dt| dt.with_timezone(&Utc))
-            });
-
-            all_sessions.push(ClaudeCodeSessionInfo {
-                session_id: entry.session_id,
-                first_prompt: entry
-                    .first_prompt
-                    .unwrap_or_else(|| "No prompt".to_string()),
-                summary: entry.summary,
-                message_count: entry.message_count.unwrap_or(0),
-                created,
-                modified,
-                project_path: entry.project_path,
-                full_path: entry.full_path,
-            });
+            let session = claude_code_session_info_from_file(&path, None)?;
+            seen_session_ids.insert(session.session_id.clone());
+            all_sessions.push(session);
         }
     }
 
@@ -1152,6 +1362,121 @@ mod tests {
 
         let projects = discover_projects().unwrap();
         assert_eq!(projects, vec![project_dir.join("sessions-index.json")]);
+    }
+
+    #[test]
+    fn test_list_claude_code_sessions_uses_live_transcripts_when_index_is_stale() {
+        let _guard = crate::storage::lock_test_env();
+        let temp = tempfile::TempDir::new().unwrap();
+        let _home = EnvVarGuard::set_path("JCODE_HOME", temp.path());
+
+        let project_dir = temp.path().join("external/.claude/projects/demo-project");
+        std::fs::create_dir_all(&project_dir).unwrap();
+
+        let indexed_session_path = project_dir.join("live-session-1.jsonl");
+        std::fs::write(
+            &indexed_session_path,
+            concat!(
+                "{\"type\":\"user\",\"uuid\":\"u1\",\"sessionId\":\"live-session-1\",\"cwd\":\"/tmp/demo-project\",\"message\":{\"role\":\"user\",\"content\":\"Investigate the login bug\"},\"timestamp\":\"2026-04-04T12:00:00Z\"}\n",
+                "{\"type\":\"assistant\",\"uuid\":\"a1\",\"parentUuid\":\"u1\",\"sessionId\":\"live-session-1\",\"cwd\":\"/tmp/demo-project\",\"message\":{\"role\":\"assistant\",\"model\":\"claude-sonnet-4-6\",\"content\":\"I can help with that.\"},\"timestamp\":\"2026-04-04T12:05:00Z\"}\n"
+            ),
+        )
+        .unwrap();
+
+        let orphan_session_path = project_dir.join("orphan-session-2.jsonl");
+        std::fs::write(
+            &orphan_session_path,
+            concat!(
+                "{\"type\":\"user\",\"uuid\":\"u2\",\"sessionId\":\"orphan-session-2\",\"cwd\":\"/tmp/demo-project\",\"message\":{\"role\":\"user\",\"content\":\"Summarize the deployment issue\"},\"timestamp\":\"2026-04-05T09:00:00Z\"}\n",
+                "{\"type\":\"assistant\",\"uuid\":\"a2\",\"parentUuid\":\"u2\",\"sessionId\":\"orphan-session-2\",\"cwd\":\"/tmp/demo-project\",\"message\":{\"role\":\"assistant\",\"model\":\"claude-sonnet-4-6\",\"content\":\"Here is the deployment summary.\"},\"timestamp\":\"2026-04-05T09:01:00Z\"}\n"
+            ),
+        )
+        .unwrap();
+
+        std::fs::write(
+            project_dir.join("sessions-index.json"),
+            concat!(
+                "{\"version\":1,\"entries\":[",
+                "{\"sessionId\":\"live-session-1\",",
+                "\"fullPath\":\"/missing/live-session-1.jsonl\",",
+                "\"firstPrompt\":\"Investigate the login bug\",",
+                "\"summary\":\"Investigate the login bug\",",
+                "\"messageCount\":2,",
+                "\"created\":\"2026-04-04T12:00:00Z\",",
+                "\"modified\":\"2026-04-04T12:05:00Z\",",
+                "\"projectPath\":\"/tmp/demo-project\"",
+                "}] }"
+            ),
+        )
+        .unwrap();
+
+        let sessions = list_claude_code_sessions().unwrap();
+
+        let indexed = sessions
+            .iter()
+            .find(|session| session.session_id == "live-session-1")
+            .expect("indexed live transcript should be discovered");
+        assert_eq!(indexed.full_path, indexed_session_path.to_string_lossy());
+        assert_eq!(
+            indexed.summary.as_deref(),
+            Some("Investigate the login bug")
+        );
+        assert_eq!(indexed.project_path.as_deref(), Some("/tmp/demo-project"));
+
+        let orphan = sessions
+            .iter()
+            .find(|session| session.session_id == "orphan-session-2")
+            .expect("orphan live transcript should be discovered");
+        assert_eq!(orphan.full_path, orphan_session_path.to_string_lossy());
+        assert_eq!(orphan.first_prompt, "Summarize the deployment issue");
+        assert_eq!(orphan.message_count, 2);
+    }
+
+    #[test]
+    fn test_import_claude_session_uses_recovered_live_transcript() {
+        let _guard = crate::storage::lock_test_env();
+        let temp = tempfile::TempDir::new().unwrap();
+        let _home = EnvVarGuard::set_path("JCODE_HOME", temp.path());
+
+        let project_dir = temp.path().join("external/.claude/projects/demo-project");
+        std::fs::create_dir_all(&project_dir).unwrap();
+
+        let transcript_path = project_dir.join("live-session-1.jsonl");
+        std::fs::write(
+            &transcript_path,
+            concat!(
+                "{\"type\":\"user\",\"uuid\":\"u1\",\"sessionId\":\"live-session-1\",\"cwd\":\"/tmp/demo-project\",\"message\":{\"role\":\"user\",\"content\":\"Investigate the login bug\"},\"timestamp\":\"2026-04-04T12:00:00Z\"}\n",
+                "{\"type\":\"assistant\",\"uuid\":\"a1\",\"parentUuid\":\"u1\",\"sessionId\":\"live-session-1\",\"cwd\":\"/tmp/demo-project\",\"message\":{\"role\":\"assistant\",\"model\":\"claude-sonnet-4-6\",\"content\":\"I can help with that.\"},\"timestamp\":\"2026-04-04T12:05:00Z\"}\n"
+            ),
+        )
+        .unwrap();
+
+        std::fs::write(
+            project_dir.join("sessions-index.json"),
+            concat!(
+                "{\"version\":1,\"entries\":[",
+                "{\"sessionId\":\"live-session-1\",",
+                "\"fullPath\":\"/missing/live-session-1.jsonl\",",
+                "\"firstPrompt\":\"Investigate the login bug\",",
+                "\"summary\":\"Investigate the login bug\",",
+                "\"messageCount\":2,",
+                "\"created\":\"2026-04-04T12:00:00Z\",",
+                "\"modified\":\"2026-04-04T12:05:00Z\",",
+                "\"projectPath\":\"/tmp/demo-project\"",
+                "}] }"
+            ),
+        )
+        .unwrap();
+
+        let imported = import_session("live-session-1").unwrap();
+        assert_eq!(
+            imported.id,
+            imported_claude_code_session_id("live-session-1")
+        );
+        assert_eq!(imported.provider_key.as_deref(), Some("claude-code"));
+        assert_eq!(imported.working_dir.as_deref(), Some("/tmp/demo-project"));
+        assert_eq!(imported.model.as_deref(), Some("claude-sonnet-4-6"));
+        assert_eq!(imported.messages.len(), 2);
     }
 
     #[test]
