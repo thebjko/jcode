@@ -466,9 +466,24 @@ impl OpenAIProvider {
             }
         }
 
+        self.clear_persistent_ws_try("credentials reloaded");
+    }
+
+    fn clear_persistent_ws_try(&self, reason: &str) {
         if let Ok(mut persistent_ws) = self.persistent_ws.try_lock() {
+            if persistent_ws.is_some() {
+                crate::logging::info(&format!("Clearing persistent OpenAI WS state: {}", reason));
+            }
             *persistent_ws = None;
         }
+    }
+
+    async fn clear_persistent_ws(&self, reason: &str) {
+        let mut persistent_ws = self.persistent_ws.lock().await;
+        if persistent_ws.is_some() {
+            crate::logging::info(&format!("Clearing persistent OpenAI WS state: {}", reason));
+        }
+        *persistent_ws = None;
     }
 
     #[cfg(test)]
@@ -691,8 +706,14 @@ impl OpenAIProvider {
                             "Model '{}' not available for account; falling back to '{}'",
                             current, fallback
                         ));
-                        let mut w = self.model.write().await;
-                        *w = fallback.clone();
+                        {
+                            let mut w = self.model.write().await;
+                            *w = fallback.clone();
+                        }
+                        self.clear_persistent_ws(
+                            "automatic OpenAI model fallback changed the response chain",
+                        )
+                        .await;
                         return fallback;
                     }
                 }
@@ -1065,8 +1086,13 @@ impl Provider for OpenAIProvider {
             );
         }
         if let Ok(mut current) = self.model.try_write() {
+            let changed = current.as_str() != model;
             *current = model.to_string();
             crate::provider::clear_model_unavailable_for_account(model);
+            drop(current);
+            if changed {
+                self.clear_persistent_ws_try("manual OpenAI model change reset the response chain");
+            }
             Ok(())
         } else {
             Err(anyhow::anyhow!(
@@ -1172,7 +1198,14 @@ impl Provider for OpenAIProvider {
         };
         match self.transport_mode.try_write() {
             Ok(mut guard) => {
+                let clears_persistent_chain = matches!(mode, OpenAITransportMode::HTTPS);
                 *guard = mode;
+                drop(guard);
+                if clears_persistent_chain {
+                    self.clear_persistent_ws_try(
+                        "switching OpenAI transport to HTTPS invalidated the websocket chain",
+                    );
+                }
                 Ok(())
             }
             Err(_) => Err(anyhow::anyhow!(
@@ -1318,8 +1351,7 @@ impl Provider for OpenAIProvider {
             *guard = credentials;
         }
 
-        let mut persistent_ws = self.persistent_ws.lock().await;
-        *persistent_ws = None;
+        self.clear_persistent_ws("credentials invalidated").await;
     }
 }
 
@@ -2742,6 +2774,7 @@ mod tests {
     use crate::auth::codex::CodexCredentials;
     use crate::message::{ContentBlock, Role};
     use anyhow::Result;
+    use futures::{SinkExt, StreamExt};
     use std::collections::{HashMap, HashSet};
     use std::ffi::OsString;
     use std::path::PathBuf;
@@ -2778,6 +2811,43 @@ mod tests {
                 crate::env::remove_var(self.key);
             }
         }
+    }
+
+    async fn test_persistent_ws_state() -> (PersistentWsState, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test websocket listener");
+        let addr = listener.local_addr().expect("listener local addr");
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept websocket client");
+            let mut ws = tokio_tungstenite::accept_async(stream)
+                .await
+                .expect("accept websocket handshake");
+            while let Some(message) = ws.next().await {
+                match message {
+                    Ok(WsMessage::Ping(payload)) => {
+                        let _ = ws.send(WsMessage::Pong(payload)).await;
+                    }
+                    Ok(WsMessage::Close(_)) | Err(_) => break,
+                    _ => {}
+                }
+            }
+        });
+
+        let (client_ws, _) = connect_async(format!("ws://{}", addr))
+            .await
+            .expect("connect websocket client");
+        (
+            PersistentWsState {
+                ws_stream: client_ws,
+                last_response_id: "resp_test".to_string(),
+                connected_at: Instant::now(),
+                last_activity_at: Instant::now(),
+                message_count: 1,
+                last_input_item_count: 1,
+            },
+            server,
+        )
     }
 
     struct LiveOpenAITestEnv {
@@ -2950,6 +3020,50 @@ mod tests {
         assert!(persistent_ws_idle_requires_reconnect(Duration::from_secs(
             WEBSOCKET_PERSISTENT_IDLE_RECONNECT_SECS
         )));
+    }
+
+    #[tokio::test]
+    async fn test_set_model_clears_persistent_ws_state() {
+        let provider = OpenAIProvider::new(CodexCredentials {
+            access_token: "test".to_string(),
+            refresh_token: String::new(),
+            id_token: None,
+            account_id: None,
+            expires_at: None,
+        });
+        let (state, server) = test_persistent_ws_state().await;
+        *provider.persistent_ws.lock().await = Some(state);
+
+        provider.set_model("gpt-5.3-codex").expect("set model");
+
+        assert!(
+            provider.persistent_ws.lock().await.is_none(),
+            "changing models should reset the persistent websocket chain"
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn test_switching_to_https_clears_persistent_ws_state() {
+        let provider = OpenAIProvider::new(CodexCredentials {
+            access_token: "test".to_string(),
+            refresh_token: String::new(),
+            id_token: None,
+            account_id: None,
+            expires_at: None,
+        });
+        let (state, server) = test_persistent_ws_state().await;
+        *provider.persistent_ws.lock().await = Some(state);
+
+        provider
+            .set_transport("https")
+            .expect("switch transport to https");
+
+        assert!(
+            provider.persistent_ws.lock().await.is_none(),
+            "switching to HTTPS should drop the websocket continuation chain"
+        );
+        server.abort();
     }
 
     #[test]
