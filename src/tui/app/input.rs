@@ -1457,7 +1457,9 @@ impl App {
             // treat this as a reset and count the full value once.
             output_tokens
         };
-        self.streaming_total_output_tokens += delta;
+        if self.streaming_tps_collect_output {
+            self.streaming_total_output_tokens += delta;
+        }
         *call_output_tokens_seen = output_tokens;
     }
 
@@ -1752,8 +1754,10 @@ impl App {
         self.streaming_cache_read_tokens = None;
         self.streaming_cache_creation_tokens = None;
         self.upstream_provider = None;
+        self.status_detail = None;
         self.streaming_tps_start = None;
         self.streaming_tps_elapsed = Duration::ZERO;
+        self.streaming_tps_collect_output = false;
         self.streaming_total_output_tokens = 0;
         self.processing_started = Some(Instant::now());
         self.pending_turn = true;
@@ -1807,8 +1811,10 @@ impl App {
             self.streaming_cache_read_tokens = None;
             self.streaming_cache_creation_tokens = None;
             self.upstream_provider = None;
+            self.status_detail = None;
             self.streaming_tps_start = None;
             self.streaming_tps_elapsed = Duration::ZERO;
+            self.streaming_tps_collect_output = false;
             self.streaming_total_output_tokens = 0;
             self.processing_started = Some(Instant::now());
             self.is_processing = true;

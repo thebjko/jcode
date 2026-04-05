@@ -2,6 +2,27 @@ use super::*;
 
 /// Update cost calculation based on token usage (for API-key providers)
 impl App {
+    pub(super) fn resume_streaming_tps(&mut self) {
+        self.streaming_tps_collect_output = true;
+        if self.streaming_tps_start.is_none() {
+            self.streaming_tps_start = Some(Instant::now());
+        }
+    }
+
+    pub(super) fn pause_streaming_tps(&mut self, keep_collecting_output: bool) {
+        if let Some(start) = self.streaming_tps_start.take() {
+            self.streaming_tps_elapsed += start.elapsed();
+        }
+        self.streaming_tps_collect_output = keep_collecting_output;
+    }
+
+    pub(super) fn reset_streaming_tps(&mut self) {
+        self.streaming_tps_start = None;
+        self.streaming_tps_elapsed = Duration::ZERO;
+        self.streaming_tps_collect_output = false;
+        self.streaming_total_output_tokens = 0;
+    }
+
     pub(super) fn open_usage_overlay_loading(&mut self) {
         self.usage_overlay = Some(std::cell::RefCell::new(
             crate::tui::usage_overlay::UsageOverlay::loading(),

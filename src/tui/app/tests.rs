@@ -2196,12 +2196,30 @@ fn test_accumulate_streaming_output_tokens_uses_deltas() {
     let mut app = create_test_app();
     let mut seen = 0;
 
+    app.streaming_tps_collect_output = true;
+
     app.accumulate_streaming_output_tokens(10, &mut seen);
     app.accumulate_streaming_output_tokens(30, &mut seen);
     app.accumulate_streaming_output_tokens(30, &mut seen);
 
     assert_eq!(app.streaming_total_output_tokens, 30);
     assert_eq!(seen, 30);
+}
+
+#[test]
+fn test_accumulate_streaming_output_tokens_ignores_hidden_output_phase() {
+    let mut app = create_test_app();
+    let mut seen = 0;
+
+    app.accumulate_streaming_output_tokens(20, &mut seen);
+    assert_eq!(app.streaming_total_output_tokens, 0);
+    assert_eq!(seen, 20);
+
+    app.streaming_tps_collect_output = true;
+    app.accumulate_streaming_output_tokens(60, &mut seen);
+
+    assert_eq!(app.streaming_total_output_tokens, 40);
+    assert_eq!(seen, 60);
 }
 
 #[test]
@@ -5936,6 +5954,7 @@ fn test_initial_history_bootstrap_preserves_restored_interleave_state() {
                 server_has_update: None,
                 was_interrupted: None,
                 connection_type: Some("websocket".to_string()),
+                status_detail: None,
                 upstream_provider: None,
                 reasoning_effort: None,
                 service_tier: None,
@@ -6015,6 +6034,23 @@ fn test_handle_server_event_updates_connection_type() {
     );
 
     assert_eq!(app.connection_type.as_deref(), Some("websocket"));
+}
+
+#[test]
+fn test_handle_server_event_updates_status_detail() {
+    let mut app = create_test_app();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let mut remote = crate::tui::backend::RemoteConnection::dummy();
+
+    app.handle_server_event(
+        crate::protocol::ServerEvent::StatusDetail {
+            detail: "reusing websocket".to_string(),
+        },
+        &mut remote,
+    );
+
+    assert_eq!(app.status_detail.as_deref(), Some("reusing websocket"));
 }
 
 #[test]
@@ -6130,6 +6166,7 @@ fn test_handle_server_event_history_clears_connection_type_on_session_change_whe
             server_has_update: None,
             was_interrupted: None,
             connection_type: None,
+            status_detail: None,
             upstream_provider: None,
             reasoning_effort: None,
             service_tier: None,
@@ -6178,6 +6215,7 @@ fn test_handle_server_event_history_preserves_connection_type_for_same_session_w
             server_has_update: None,
             was_interrupted: None,
             connection_type: None,
+            status_detail: None,
             upstream_provider: None,
             reasoning_effort: None,
             service_tier: None,
@@ -6328,6 +6366,8 @@ fn test_handle_server_event_token_usage_uses_per_call_deltas() {
     let _guard = rt.enter();
     let mut remote = crate::tui::backend::RemoteConnection::dummy();
 
+    app.streaming_tps_collect_output = true;
+
     app.handle_server_event(
         crate::protocol::ServerEvent::TokenUsage {
             input: 100,
@@ -6358,6 +6398,50 @@ fn test_handle_server_event_token_usage_uses_per_call_deltas() {
 
     assert_eq!(app.streaming_output_tokens, 30);
     assert_eq!(app.streaming_total_output_tokens, 30);
+}
+
+#[test]
+fn test_handle_server_event_tool_start_pauses_tps_and_excludes_hidden_output_tokens() {
+    let mut app = create_test_app();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let mut remote = crate::tui::backend::RemoteConnection::dummy();
+
+    app.streaming_tps_collect_output = true;
+    app.streaming_tps_start = Some(Instant::now());
+
+    app.handle_server_event(
+        crate::protocol::ServerEvent::ToolStart {
+            id: "tool-1".to_string(),
+            name: "read".to_string(),
+        },
+        &mut remote,
+    );
+
+    assert!(!app.streaming_tps_collect_output);
+    assert!(app.streaming_tps_start.is_none());
+
+    app.handle_server_event(
+        crate::protocol::ServerEvent::TokenUsage {
+            input: 100,
+            output: 25,
+            cache_read_input: None,
+            cache_creation_input: None,
+        },
+        &mut remote,
+    );
+
+    assert_eq!(app.streaming_total_output_tokens, 0);
+
+    app.handle_server_event(
+        crate::protocol::ServerEvent::TextDelta {
+            text: "hello".to_string(),
+        },
+        &mut remote,
+    );
+
+    assert!(app.streaming_tps_collect_output);
+    assert!(app.streaming_tps_start.is_some());
 }
 
 #[test]
@@ -7129,6 +7213,7 @@ fn test_handle_server_event_history_with_interruption_queues_continuation() {
             server_has_update: None,
             was_interrupted: Some(true),
             connection_type: Some("websocket".to_string()),
+            status_detail: None,
             upstream_provider: None,
             reasoning_effort: None,
             service_tier: None,
@@ -7194,6 +7279,7 @@ fn test_handle_server_event_history_without_interruption_does_not_queue() {
             server_has_update: None,
             was_interrupted: None,
             connection_type: Some("https/sse".to_string()),
+            status_detail: None,
             upstream_provider: None,
             reasoning_effort: None,
             service_tier: None,
@@ -7356,6 +7442,7 @@ fn test_handle_server_event_history_restores_side_panel_snapshot() {
             server_has_update: None,
             was_interrupted: None,
             connection_type: Some("websocket".to_string()),
+            status_detail: None,
             upstream_provider: None,
             reasoning_effort: None,
             service_tier: None,
@@ -7549,6 +7636,7 @@ fn test_metadata_only_history_preserves_fast_restored_startup_state() {
             server_has_update: None,
             was_interrupted: None,
             connection_type: Some("https".to_string()),
+            status_detail: None,
             upstream_provider: None,
             reasoning_effort: None,
             service_tier: None,
@@ -7621,6 +7709,7 @@ fn test_duplicate_history_for_same_session_is_ignored_after_fast_path_restore() 
             server_has_update: None,
             was_interrupted: Some(true),
             connection_type: Some("websocket".to_string()),
+            status_detail: None,
             upstream_provider: None,
             reasoning_effort: None,
             service_tier: None,

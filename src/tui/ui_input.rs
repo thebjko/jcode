@@ -234,6 +234,20 @@ fn append_stream_route(status_text: &mut String, app: &dyn TuiState) {
     }
 }
 
+fn append_transport_context(status_text: &mut String, app: &dyn TuiState) {
+    if let Some(conn) = app.connection_type() {
+        status_text.push_str(&format!(" · {}", conn));
+    }
+    if let Some(detail) = app
+        .status_detail()
+        .map(|detail| detail.trim().to_string())
+        .filter(|detail| !detail.is_empty())
+    {
+        status_text.push_str(&format!(" · {}", detail));
+    }
+    append_stream_route(status_text, app);
+}
+
 fn batch_progress_state(
     batch_prog: Option<crate::bus::BatchProgress>,
     initial_total: Option<usize>,
@@ -360,10 +374,7 @@ pub(super) fn draw_status(frame: &mut Frame, app: &dyn TuiState, area: Rect, pen
                     connection_phase_label(phase),
                     format_elapsed(elapsed)
                 );
-                if let Some(conn) = app.connection_type() {
-                    label.push_str(&format!(" · {}", conn));
-                }
-                append_stream_route(&mut label, app);
+                append_transport_context(&mut label, app);
                 let label_color = match phase {
                     crate::message::ConnectionPhase::Retrying { .. } => rgb(255, 193, 7),
                     crate::message::ConnectionPhase::Authenticating if elapsed > 10.0 => {
@@ -387,12 +398,11 @@ pub(super) fn draw_status(frame: &mut Frame, app: &dyn TuiState, area: Rect, pen
                 Line::from(spans)
             }
             ProcessingStatus::Thinking(_start) => {
+                let mut label = format!(" thinking… {:.1}s", elapsed);
+                append_transport_context(&mut label, app);
                 let mut spans = vec![
                     Span::styled(spinner, Style::default().fg(ai_color())),
-                    Span::styled(
-                        format!(" thinking… {:.1}s", elapsed),
-                        Style::default().fg(dim_color()),
-                    ),
+                    Span::styled(label, Style::default().fg(dim_color())),
                 ];
                 if !queued_suffix.is_empty() {
                     spans.push(Span::styled(
@@ -421,7 +431,7 @@ pub(super) fn draw_status(frame: &mut Frame, app: &dyn TuiState, area: Rect, pen
                         format_stream_tokens(output_tokens)
                     );
                 }
-                append_stream_route(&mut status_text, app);
+                append_transport_context(&mut status_text, app);
                 if unexpected_cache_miss {
                     let miss_tokens = cache_creation.unwrap_or(0);
                     let miss_str = if miss_tokens >= 1000 {
@@ -516,6 +526,28 @@ pub(super) fn draw_status(frame: &mut Frame, app: &dyn TuiState, area: Rect, pen
                 if let Some(status) = subagent {
                     spans.push(Span::styled(
                         format!(" ({})", status),
+                        Style::default().fg(dim_color()),
+                    ));
+                }
+                if let Some(detail) = app
+                    .status_detail()
+                    .map(|detail| detail.trim().to_string())
+                    .filter(|detail| !detail.is_empty())
+                {
+                    spans.push(Span::styled(
+                        format!(" · {}", detail),
+                        Style::default().fg(dim_color()),
+                    ));
+                }
+                if let Some(conn) = app.connection_type() {
+                    spans.push(Span::styled(
+                        format!(" · {}", conn),
+                        Style::default().fg(dim_color()),
+                    ));
+                }
+                if let Some(upstream) = app.upstream_provider() {
+                    spans.push(Span::styled(
+                        format!(" · via {}", upstream),
                         Style::default().fg(dim_color()),
                     ));
                 }

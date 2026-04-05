@@ -739,6 +739,8 @@ pub enum StreamEvent {
     ConnectionType { connection: String },
     /// Connection phase update (for status bar transparency)
     ConnectionPhase { phase: ConnectionPhase },
+    /// Provider-supplied human-readable transport detail for the status line
+    StatusDetail { detail: String },
     /// Error occurred
     Error {
         message: String,

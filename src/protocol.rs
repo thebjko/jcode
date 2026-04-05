@@ -578,6 +578,10 @@ pub enum ServerEvent {
     #[serde(rename = "connection_phase")]
     ConnectionPhase { phase: String },
 
+    /// Provider-supplied human-readable transport detail for the current stream.
+    #[serde(rename = "status_detail")]
+    StatusDetail { detail: String },
+
     /// Upstream provider info (e.g., which provider OpenRouter routed to)
     #[serde(rename = "upstream_provider")]
     UpstreamProvider { provider: String },
@@ -788,6 +792,9 @@ pub enum ServerEvent {
         /// Last observed actual connection type for this session (e.g. websocket, https/sse)
         #[serde(skip_serializing_if = "Option::is_none")]
         connection_type: Option<String>,
+        /// Last observed provider-supplied status detail for this session.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        status_detail: Option<String>,
         /// Upstream provider (e.g., which provider OpenRouter routed to, or calculated preference)
         #[serde(skip_serializing_if = "Option::is_none")]
         upstream_provider: Option<String>,
@@ -1252,6 +1259,19 @@ mod tests {
         let decoded: ServerEvent = serde_json::from_str(json.trim()).unwrap();
         match decoded {
             ServerEvent::ConnectionType { connection } => assert_eq!(connection, "websocket"),
+            _ => panic!("wrong event type"),
+        }
+    }
+
+    #[test]
+    fn test_status_detail_event_roundtrip() {
+        let event = ServerEvent::StatusDetail {
+            detail: "reusing websocket".to_string(),
+        };
+        let json = encode_event(&event);
+        let decoded: ServerEvent = serde_json::from_str(json.trim()).unwrap();
+        match decoded {
+            ServerEvent::StatusDetail { detail } => assert_eq!(detail, "reusing websocket"),
             _ => panic!("wrong event type"),
         }
     }

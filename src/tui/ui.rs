@@ -3348,6 +3348,9 @@ mod tests {
         fn connection_type(&self) -> Option<String> {
             None
         }
+        fn status_detail(&self) -> Option<String> {
+            None
+        }
         fn mcp_servers(&self) -> Vec<(String, usize)> {
             Vec::new()
         }

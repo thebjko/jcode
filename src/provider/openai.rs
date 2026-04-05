@@ -279,6 +279,21 @@ fn persistent_ws_idle_requires_reconnect(idle_for: Duration) -> bool {
     idle_for >= Duration::from_secs(WEBSOCKET_PERSISTENT_IDLE_RECONNECT_SECS)
 }
 
+async fn emit_connection_phase(
+    tx: &mpsc::Sender<Result<StreamEvent>>,
+    phase: crate::message::ConnectionPhase,
+) {
+    let _ = tx.send(Ok(StreamEvent::ConnectionPhase { phase })).await;
+}
+
+async fn emit_status_detail(tx: &mpsc::Sender<Result<StreamEvent>>, detail: impl Into<String>) {
+    let _ = tx
+        .send(Ok(StreamEvent::StatusDetail {
+            detail: detail.into(),
+        }))
+        .await;
+}
+
 async fn ensure_persistent_ws_is_healthy(state: &mut PersistentWsState) -> Result<bool, String> {
     let idle_for = state.last_activity_at.elapsed();
     if persistent_ws_idle_requires_reconnect(idle_for) {
@@ -904,6 +919,16 @@ impl Provider for OpenAIProvider {
             let mut skip_backoff_once = false;
 
             for attempt in 0..MAX_RETRIES {
+                if attempt > 0 {
+                    emit_connection_phase(
+                        &tx,
+                        crate::message::ConnectionPhase::Retrying {
+                            attempt: attempt + 1,
+                            max: MAX_RETRIES,
+                        },
+                    )
+                    .await;
+                }
                 if attempt > 0 && !skip_backoff_once {
                     let delay = RETRY_BASE_DELAY_MS * (1 << (attempt - 1));
                     tokio::time::sleep(Duration::from_millis(delay)).await;
@@ -955,6 +980,13 @@ impl Provider for OpenAIProvider {
                 ));
 
                 let use_websocket = matches!(transport, OpenAITransport::WebSocket);
+                if use_websocket {
+                    emit_status_detail(&tx, "fresh websocket").await;
+                } else if force_https_for_request {
+                    emit_status_detail(&tx, "https fallback").await;
+                } else {
+                    emit_status_detail(&tx, "https").await;
+                }
                 let result = if use_websocket {
                     stream_response_websocket_persistent(
                         Arc::clone(&credentials),
@@ -992,6 +1024,7 @@ impl Provider for OpenAIProvider {
                             "WebSocket fallback after {}ms: {}",
                             elapsed_ms, error
                         ));
+                        emit_status_detail(&tx, "https fallback").await;
                         force_https_for_request = true;
                         skip_backoff_once = true;
                         if matches!(transport_mode, OpenAITransportMode::Auto) {
@@ -1419,11 +1452,8 @@ async fn stream_response(
         "OpenAI limit diag: starting fresh HTTPS request usage=({})",
         usage_snapshot.diagnostic_fields()
     ));
-    let _ = tx
-        .send(Ok(StreamEvent::ConnectionPhase {
-            phase: ConnectionPhase::Authenticating,
-        }))
-        .await;
+    emit_status_detail(&tx, "https").await;
+    emit_connection_phase(&tx, ConnectionPhase::Authenticating).await;
     let access_token = openai_access_token(&credentials).await?;
     let creds = credentials.read().await;
     let is_chatgpt_mode = !creds.refresh_token.is_empty() || creds.id_token.is_some();
@@ -1443,11 +1473,7 @@ async fn stream_response(
         }
     }
 
-    let _ = tx
-        .send(Ok(StreamEvent::ConnectionPhase {
-            phase: ConnectionPhase::Connecting,
-        }))
-        .await;
+    emit_connection_phase(&tx, ConnectionPhase::Connecting).await;
     let connect_start = std::time::Instant::now();
 
     let response = builder
@@ -1511,11 +1537,7 @@ async fn stream_response(
         return Err(OpenAIStreamFailure::Other(anyhow::anyhow!("{}", msg)));
     }
 
-    let _ = tx
-        .send(Ok(StreamEvent::ConnectionPhase {
-            phase: ConnectionPhase::WaitingForResponse,
-        }))
-        .await;
+    emit_connection_phase(&tx, ConnectionPhase::WaitingForResponse).await;
 
     let _ = tx
         .send(Ok(StreamEvent::ConnectionType {
@@ -1899,6 +1921,10 @@ async fn try_persistent_ws_continuation(
         return PersistentWsResult::NotAvailable;
     }
 
+    if persistent_ws_idle_needs_healthcheck(state.last_activity_at.elapsed()) {
+        emit_status_detail(tx, "websocket healthcheck").await;
+    }
+
     match ensure_persistent_ws_is_healthy(state).await {
         Ok(true) => {}
         Ok(false) => {
@@ -1999,12 +2025,14 @@ async fn try_persistent_ws_continuation(
             connection: "websocket/persistent-reuse".to_string(),
         }))
         .await;
+    emit_status_detail(tx, "reusing websocket").await;
 
     // Send the continuation request on the existing WebSocket
     let send_started_at = Instant::now();
     if let Err(e) = state.ws_stream.send(WsMessage::Text(request_text)).await {
         return PersistentWsResult::Failed(format!("send error: {}", e));
     }
+    emit_connection_phase(tx, crate::message::ConnectionPhase::WaitingForResponse).await;
     state.last_activity_at = Instant::now();
     crate::logging::info(&format!(
         "Persistent WS continuation request sent in {}ms ({})",
@@ -2074,6 +2102,7 @@ async fn try_persistent_ws_continuation(
             Ok(WsMessage::Text(text)) => {
                 let text = text.to_string();
                 if !logged_first_server_event {
+                    emit_connection_phase(tx, crate::message::ConnectionPhase::Streaming).await;
                     crate::logging::info(&format!(
                         "Persistent WS first server event after {}ms ({})",
                         stream_started.elapsed().as_millis(),
@@ -2225,6 +2254,7 @@ async fn stream_response_websocket_persistent(
         "OpenAI limit diag: opening fresh persistent WS request usage=({})",
         usage_snapshot.diagnostic_fields()
     ));
+    emit_status_detail(&tx, "opening websocket").await;
     let creds = credentials.read().await;
     let is_chatgpt_mode = !creds.refresh_token.is_empty() || creds.id_token.is_some();
     let ws_url = OpenAIProvider::responses_ws_url(&creds);
@@ -2264,11 +2294,7 @@ async fn stream_response_websocket_persistent(
     }
     drop(creds);
 
-    let _ = tx
-        .send(Ok(StreamEvent::ConnectionPhase {
-            phase: ConnectionPhase::Connecting,
-        }))
-        .await;
+    emit_connection_phase(&tx, ConnectionPhase::Connecting).await;
     let connect_start = std::time::Instant::now();
 
     let connect_result = tokio::time::timeout(
@@ -2310,6 +2336,7 @@ async fn stream_response_websocket_persistent(
             connection: "websocket/persistent-fresh".to_string(),
         }))
         .await;
+    emit_status_detail(&tx, "fresh websocket").await;
 
     let mut request_event = request;
     if !request_event.is_object() {
@@ -2346,6 +2373,7 @@ async fn stream_response_websocket_persistent(
         .send(WsMessage::Text(request_text))
         .await
         .map_err(|err| OpenAIStreamFailure::Other(anyhow::anyhow!(err)))?;
+    emit_connection_phase(&tx, ConnectionPhase::WaitingForResponse).await;
     crate::logging::info(&format!(
         "Fresh WS request sent in {}ms ({})",
         request_send_started_at.elapsed().as_millis(),
@@ -2423,6 +2451,7 @@ async fn stream_response_websocket_persistent(
                 WsMessage::Text(text) => {
                     let text = text.to_string();
                     if !logged_first_server_event {
+                        emit_connection_phase(&tx, ConnectionPhase::Streaming).await;
                         crate::logging::info(&format!(
                             "Fresh WS first server event after {}ms ({})",
                             ws_started_at.elapsed().as_millis(),

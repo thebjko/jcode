@@ -106,6 +106,8 @@ pub struct Agent {
     last_upstream_provider: Option<String>,
     /// Last observed transport/connection type for this session
     last_connection_type: Option<String>,
+    /// Last provider-supplied human-readable transport detail for this session
+    last_status_detail: Option<String>,
     /// Pending swarm alerts to inject into the next turn
     pending_alerts: Vec<String>,
     /// Transient reminder injected into provider requests for the current turn only.
@@ -168,6 +170,7 @@ impl Agent {
             provider_session_id: None,
             last_upstream_provider: None,
             last_connection_type: None,
+            last_status_detail: None,
             pending_alerts: Vec::new(),
             current_turn_system_reminder: None,
             tool_call_ids: HashSet::new(),
@@ -258,6 +261,7 @@ impl Agent {
         self.active_skill = None;
         self.last_upstream_provider = None;
         self.last_connection_type = None;
+        self.last_status_detail = None;
         self.pending_alerts.clear();
         self.current_turn_system_reminder = None;
         self.reset_tool_output_tracking();
@@ -658,6 +662,10 @@ impl Agent {
 
     pub fn last_connection_type(&self) -> Option<String> {
         self.last_connection_type.clone()
+    }
+
+    pub fn last_status_detail(&self) -> Option<String> {
+        self.last_status_detail.clone()
     }
 
     pub fn provider_name(&self) -> String {
@@ -1557,6 +1565,7 @@ impl Agent {
             } else {
                 &messages_with_memory
             };
+            self.last_status_detail = None;
             let mut stream = match self
                 .provider
                 .complete_split(
@@ -1789,6 +1798,12 @@ impl Agent {
                         if trace {
                             eprintln!("[trace] connection_phase={}", phase);
                         }
+                    }
+                    StreamEvent::StatusDetail { detail } => {
+                        if trace {
+                            eprintln!("[trace] status_detail={}", detail);
+                        }
+                        self.last_status_detail = Some(detail);
                     }
                     StreamEvent::MessageEnd {
                         stop_reason: reason,
@@ -2336,6 +2351,7 @@ impl Agent {
             };
             let provider = Arc::clone(&self.provider);
             let resume_session_id = self.provider_session_id.clone();
+            self.last_status_detail = None;
             let mut keepalive = stream_keepalive_ticker();
             let mut stream = {
                 let mut complete_future = std::pin::pin!(provider.complete_split(
@@ -2590,6 +2606,10 @@ impl Agent {
                         let _ = event_tx.send(ServerEvent::ConnectionPhase {
                             phase: phase.to_string(),
                         });
+                    }
+                    StreamEvent::StatusDetail { detail } => {
+                        self.last_status_detail = Some(detail.clone());
+                        let _ = event_tx.send(ServerEvent::StatusDetail { detail });
                     }
                     StreamEvent::MessageEnd {
                         stop_reason: reason,
@@ -3101,6 +3121,7 @@ impl Agent {
             };
             let provider = Arc::clone(&self.provider);
             let resume_session_id = self.provider_session_id.clone();
+            self.last_status_detail = None;
             let mut keepalive = stream_keepalive_ticker();
             let mut stream = {
                 let mut complete_future = std::pin::pin!(provider.complete_split(
@@ -3363,6 +3384,10 @@ impl Agent {
                         let _ = event_tx.send(ServerEvent::ConnectionPhase {
                             phase: phase.to_string(),
                         });
+                    }
+                    StreamEvent::StatusDetail { detail } => {
+                        self.last_status_detail = Some(detail.clone());
+                        let _ = event_tx.send(ServerEvent::StatusDetail { detail });
                     }
                     StreamEvent::MessageEnd {
                         stop_reason: reason,

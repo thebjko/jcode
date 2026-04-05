@@ -148,6 +148,8 @@ pub trait TuiState {
     fn upstream_provider(&self) -> Option<String>;
     /// Active transport/connection type (websocket/https/etc.)
     fn connection_type(&self) -> Option<String>;
+    /// Provider-supplied human-readable status detail for the current stream.
+    fn status_detail(&self) -> Option<String>;
     fn mcp_servers(&self) -> Vec<(String, usize)>;
     fn available_skills(&self) -> Vec<String>;
     fn streaming_tokens(&self) -> (u64, u64);

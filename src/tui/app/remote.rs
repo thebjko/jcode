@@ -685,8 +685,7 @@ pub(super) fn handle_disconnect(
     app.thought_line_inserted = false;
     app.thinking_prefix_emitted = false;
     app.thinking_buffer.clear();
-    app.streaming_tps_start = None;
-    app.streaming_tps_elapsed = Duration::ZERO;
+    app.reset_streaming_tps();
     app.is_processing = false;
     app.status = ProcessingStatus::Idle;
     state.disconnect_start = Some(Instant::now());
@@ -999,11 +998,10 @@ pub(super) async fn begin_remote_send(
     app.current_message_id = Some(msg_id);
     app.is_processing = true;
     app.status = ProcessingStatus::Sending;
+    app.status_detail = None;
     app.processing_started = Some(Instant::now());
     app.last_stream_activity = Some(Instant::now());
-    app.streaming_tps_start = None;
-    app.streaming_tps_elapsed = Duration::ZERO;
-    app.streaming_total_output_tokens = 0;
+    app.reset_streaming_tps();
     app.thought_line_inserted = false;
     app.thinking_prefix_emitted = false;
     app.thinking_buffer.clear();
@@ -1025,13 +1023,12 @@ pub(super) async fn begin_remote_send(
 fn begin_remote_split_launch(app: &mut App, label: &str) {
     app.is_processing = true;
     app.status = ProcessingStatus::Sending;
+    app.status_detail = None;
     let started_at = Instant::now();
     app.pending_split_started_at = Some(started_at);
     app.processing_started = Some(started_at);
     app.last_stream_activity = Some(started_at);
-    app.streaming_tps_start = None;
-    app.streaming_tps_elapsed = Duration::ZERO;
-    app.streaming_total_output_tokens = 0;
+    app.reset_streaming_tps();
     app.thought_line_inserted = false;
     app.thinking_prefix_emitted = false;
     app.thinking_buffer.clear();
@@ -1050,8 +1047,7 @@ fn finish_remote_split_launch(app: &mut App) {
     app.status = ProcessingStatus::Idle;
     app.processing_started = None;
     app.last_stream_activity = None;
-    app.streaming_tps_start = None;
-    app.streaming_tps_elapsed = Duration::ZERO;
+    app.reset_streaming_tps();
     app.current_message_id = None;
 }
 
@@ -1165,11 +1161,10 @@ async fn submit_remote_input_shell(
     app.current_message_id = Some(request_id);
     app.is_processing = true;
     app.status = ProcessingStatus::Sending;
+    app.status_detail = None;
     app.processing_started = Some(Instant::now());
     app.last_stream_activity = Some(Instant::now());
-    app.streaming_tps_start = None;
-    app.streaming_tps_elapsed = Duration::ZERO;
-    app.streaming_total_output_tokens = 0;
+    app.reset_streaming_tps();
     app.thought_line_inserted = false;
     app.thinking_prefix_emitted = false;
     app.thinking_buffer.clear();
@@ -1267,9 +1262,7 @@ pub(super) fn handle_server_event(
             } else if app.is_processing && matches!(app.status, ProcessingStatus::Idle) {
                 app.status = ProcessingStatus::Streaming;
             }
-            if app.streaming_tps_start.is_none() {
-                app.streaming_tps_start = Some(Instant::now());
-            }
+            app.resume_streaming_tps();
             if let Some(chunk) = app.stream_buffer.push(&text) {
                 app.streaming_text.push_str(&chunk);
             }
@@ -1279,12 +1272,11 @@ pub(super) fn handle_server_event(
         ServerEvent::TextReplace { text } => {
             app.stream_buffer.flush();
             app.streaming_text = text;
+            app.resume_streaming_tps();
             false
         }
         ServerEvent::ToolStart { id, name } => {
-            if app.streaming_tps_start.is_none() {
-                app.streaming_tps_start = Some(Instant::now());
-            }
+            app.pause_streaming_tps(false);
             remote.handle_tool_start(&id, &name);
             app.commit_pending_streaming_assistant_message();
             if matches!(name.as_str(), "memory") {
@@ -1304,9 +1296,7 @@ pub(super) fn handle_server_event(
             false
         }
         ServerEvent::ToolExec { id, name } => {
-            if let Some(start) = app.streaming_tps_start.take() {
-                app.streaming_tps_elapsed += start.elapsed();
-            }
+            app.pause_streaming_tps(false);
             let parsed_input = remote.get_current_tool_input();
             let tool_call = ToolCall {
                 id: id.clone(),
@@ -1411,7 +1401,15 @@ pub(super) fn handle_server_event(
                 }
                 _ => crate::message::ConnectionPhase::Connecting,
             };
-            app.status = ProcessingStatus::Connecting(cp);
+            app.status = if matches!(cp, crate::message::ConnectionPhase::Streaming) {
+                ProcessingStatus::Streaming
+            } else {
+                ProcessingStatus::Connecting(cp)
+            };
+            false
+        }
+        ServerEvent::StatusDetail { detail } => {
+            app.status_detail = Some(detail);
             false
         }
         ServerEvent::UpstreamProvider { provider } => {
@@ -1469,9 +1467,7 @@ pub(super) fn handle_server_event(
                 if let Some(chunk) = app.stream_buffer.flush() {
                     app.streaming_text.push_str(&chunk);
                 }
-                if let Some(start) = app.streaming_tps_start.take() {
-                    app.streaming_tps_elapsed += start.elapsed();
-                }
+                app.pause_streaming_tps(false);
                 if !app.streaming_text.is_empty() {
                     let duration = app.processing_started.map(|s| s.elapsed().as_secs_f32());
                     let content = app.take_streaming_text();
@@ -1677,6 +1673,7 @@ pub(super) fn handle_server_event(
             server_has_update,
             was_interrupted,
             connection_type,
+            status_detail,
             upstream_provider,
             reasoning_effort,
             service_tier,
@@ -1698,6 +1695,7 @@ pub(super) fn handle_server_event(
                 app.rate_limit_pending_message = None;
                 app.rate_limit_reset = None;
                 app.connection_type = None;
+                app.status_detail = None;
                 app.clear_display_messages();
                 app.clear_streaming_render_state();
                 app.streaming_tool_calls.clear();
@@ -1711,9 +1709,7 @@ pub(super) fn handle_server_event(
                 app.processing_started = None;
                 app.replay_processing_started_ms = None;
                 app.replay_elapsed_override = None;
-                app.streaming_tps_start = None;
-                app.streaming_tps_elapsed = Duration::ZERO;
-                app.streaming_total_output_tokens = 0;
+                app.reset_streaming_tps();
                 app.last_stream_activity = None;
                 app.is_processing = false;
                 app.status = ProcessingStatus::Idle;
@@ -1751,6 +1747,9 @@ pub(super) fn handle_server_event(
             }
             if session_changed || connection_type.is_some() {
                 app.connection_type = connection_type;
+            }
+            if session_changed || status_detail.is_some() {
+                app.status_detail = status_detail;
             }
             app.remote_reasoning_effort = reasoning_effort;
             app.remote_service_tier = service_tier;

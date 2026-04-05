@@ -354,6 +354,8 @@ pub struct App {
     upstream_provider: Option<String>,
     // Active stream connection type (websocket/https/etc.)
     connection_type: Option<String>,
+    // Provider-supplied human-readable transport detail for the current stream
+    status_detail: Option<String>,
     // Total session token usage (accumulated across all turns)
     total_input_tokens: u64,
     total_output_tokens: u64,
@@ -374,6 +376,11 @@ pub struct App {
     streaming_tps_start: Option<Instant>,
     /// Accumulated streaming-only time across agentic loop iterations
     streaming_tps_elapsed: Duration,
+    /// Whether incoming output-token deltas should contribute to TPS.
+    ///
+    /// This is enabled only while user-visible assistant text is streaming, and stays
+    /// enabled briefly after message end so late final usage snapshots still count.
+    streaming_tps_collect_output: bool,
     /// Accumulated output tokens across all API calls in a turn.
     ///
     /// Providers may emit repeated cumulative usage snapshots for a single API call,

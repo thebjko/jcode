@@ -1776,6 +1776,7 @@ impl App {
 
                         self.picker_state = None;
                         self.upstream_provider = None;
+                        self.status_detail = None;
                         if self.is_remote {
                             self.pending_model_switch = Some(spec);
                         } else {

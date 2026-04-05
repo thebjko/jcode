@@ -30,6 +30,7 @@ impl App {
         self.provider_session_id = None;
         self.session.provider_session_id = None;
         self.upstream_provider = None;
+        self.status_detail = None;
         let active_model = self.provider.model();
         self.update_context_limit_for_model(&active_model);
         self.session.model = Some(active_model.clone());
@@ -171,6 +172,7 @@ impl App {
                 self.provider_session_id = None;
                 self.session.provider_session_id = None;
                 self.upstream_provider = None;
+                self.status_detail = None;
                 self.update_context_limit_for_model(&next_model);
                 self.session.model = Some(self.provider.model());
                 let _ = self.session.save();

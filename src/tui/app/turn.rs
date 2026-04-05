@@ -108,18 +108,14 @@ impl App {
                     StreamEvent::TextDelta(text) => {
                         self.status = ProcessingStatus::Streaming;
                         text_content.push_str(&text);
-                        if self.streaming_tps_start.is_none() {
-                            self.streaming_tps_start = Some(Instant::now());
-                        }
+                        self.resume_streaming_tps();
                         if let Some(chunk) = self.stream_buffer.push(&text) {
                             self.streaming_text.push_str(&chunk);
                         }
                     }
                     StreamEvent::ToolUseStart { id, name } => {
                         self.status = ProcessingStatus::Streaming;
-                        if self.streaming_tps_start.is_none() {
-                            self.streaming_tps_start = Some(Instant::now());
-                        }
+                        self.pause_streaming_tps(false);
                         self.commit_pending_streaming_assistant_message();
                         current_tool = Some(ToolCall {
                             id,
@@ -133,9 +129,7 @@ impl App {
                         current_tool_input.push_str(&delta);
                     }
                     StreamEvent::ToolUseEnd => {
-                        if let Some(start) = self.streaming_tps_start.take() {
-                            self.streaming_tps_elapsed += start.elapsed();
-                        }
+                        self.pause_streaming_tps(false);
                         if let Some(mut tool) = current_tool.take() {
                             tool.input = serde_json::from_str(&current_tool_input)
                                 .unwrap_or(serde_json::Value::Null);
@@ -193,12 +187,18 @@ impl App {
                         self.update_terminal_title();
                     }
                     StreamEvent::ConnectionPhase { phase } => {
-                        self.status = ProcessingStatus::Connecting(phase);
+                        self.status = if matches!(phase, crate::message::ConnectionPhase::Streaming)
+                        {
+                            ProcessingStatus::Streaming
+                        } else {
+                            ProcessingStatus::Connecting(phase)
+                        };
+                    }
+                    StreamEvent::StatusDetail { detail } => {
+                        self.status_detail = Some(detail);
                     }
                     StreamEvent::MessageEnd { .. } => {
-                        if let Some(start) = self.streaming_tps_start.take() {
-                            self.streaming_tps_elapsed += start.elapsed();
-                        }
+                        self.pause_streaming_tps(true);
                         saw_message_end = true;
                     }
                     StreamEvent::SessionId(sid) => {
@@ -918,9 +918,7 @@ impl App {
                                     StreamEvent::TextDelta(text) => {
                                         self.status = ProcessingStatus::Streaming;
                                         text_content.push_str(&text);
-                                        if self.streaming_tps_start.is_none() {
-                                            self.streaming_tps_start = Some(Instant::now());
-                                        }
+                                        self.resume_streaming_tps();
                                         if let Some(chunk) = self.stream_buffer.push(&text) {
                                             self.streaming_text.push_str(&chunk);
                                             self.broadcast_debug(crate::tui::backend::DebugEvent::TextDelta {
@@ -929,9 +927,7 @@ impl App {
                                         }
                                     }
                                     StreamEvent::ToolUseStart { id, name } => {
-                                        if self.streaming_tps_start.is_none() {
-                                            self.streaming_tps_start = Some(Instant::now());
-                                        }
+                                        self.pause_streaming_tps(false);
                                         self.broadcast_debug(crate::tui::backend::DebugEvent::ToolStart {
                                             id: id.clone(),
                                             name: name.clone(),
@@ -965,9 +961,7 @@ impl App {
                                         current_tool_input.push_str(&delta);
                                     }
                                     StreamEvent::ToolUseEnd => {
-                                        if let Some(start) = self.streaming_tps_start.take() {
-                                            self.streaming_tps_elapsed += start.elapsed();
-                                        }
+                                        self.pause_streaming_tps(false);
                                         if let Some(mut tool) = current_tool.take() {
                                             tool.input = serde_json::from_str(&current_tool_input)
                                                 .unwrap_or(serde_json::Value::Null);
@@ -1037,12 +1031,17 @@ impl App {
                                         self.update_terminal_title();
                                     }
                                     StreamEvent::ConnectionPhase { phase } => {
-                                        self.status = ProcessingStatus::Connecting(phase);
+                                        self.status = if matches!(phase, crate::message::ConnectionPhase::Streaming) {
+                                            ProcessingStatus::Streaming
+                                        } else {
+                                            ProcessingStatus::Connecting(phase)
+                                        };
+                                    }
+                                    StreamEvent::StatusDetail { detail } => {
+                                        self.status_detail = Some(detail);
                                     }
                                     StreamEvent::MessageEnd { .. } => {
-                                        if let Some(start) = self.streaming_tps_start.take() {
-                                            self.streaming_tps_elapsed += start.elapsed();
-                                        }
+                                        self.pause_streaming_tps(true);
                                         saw_message_end = true;
                                     }
                                     StreamEvent::SessionId(sid) => {

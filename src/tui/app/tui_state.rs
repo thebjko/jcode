@@ -139,7 +139,7 @@ impl App {
         &self,
         route: WidgetRouteInfo,
     ) -> Option<crate::tui::info_widget::UsageInfo> {
-        let output_tps = if self.is_processing {
+        let output_tps = if matches!(self.status, ProcessingStatus::Streaming) {
             self.compute_streaming_tps()
         } else {
             None
@@ -322,6 +322,10 @@ impl crate::tui::TuiState for App {
         self.connection_type.clone()
     }
 
+    fn status_detail(&self) -> Option<String> {
+        self.status_detail.clone()
+    }
+
     fn mcp_servers(&self) -> Vec<(String, usize)> {
         self.mcp_server_names.clone()
     }
@@ -346,7 +350,7 @@ impl crate::tui::TuiState for App {
     }
 
     fn output_tps(&self) -> Option<f32> {
-        if !self.is_processing {
+        if !self.is_processing || !matches!(self.status, ProcessingStatus::Streaming) {
             return None;
         }
         self.compute_streaming_tps()
@@ -862,7 +866,11 @@ impl crate::tui::TuiState for App {
         let route = self.widget_route_info(model.as_deref());
         let usage_info = self.widget_usage_info(route);
 
-        let tokens_per_second = self.compute_streaming_tps();
+        let tokens_per_second = if matches!(self.status, ProcessingStatus::Streaming) {
+            self.compute_streaming_tps()
+        } else {
+            None
+        };
 
         let auth_method = self.widget_auth_method(route);
 

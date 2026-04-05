@@ -779,6 +779,10 @@ impl TuiState for BenchState {
         None
     }
 
+    fn status_detail(&self) -> Option<String> {
+        None
+    }
+
     fn mcp_servers(&self) -> Vec<(String, usize)> {
         Vec::new()
     }

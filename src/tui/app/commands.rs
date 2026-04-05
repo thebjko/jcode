@@ -1405,8 +1405,10 @@ fn start_synthetic_user_turn(app: &mut App, content: String) {
     app.streaming_cache_read_tokens = None;
     app.streaming_cache_creation_tokens = None;
     app.upstream_provider = None;
+    app.status_detail = None;
     app.streaming_tps_start = None;
     app.streaming_tps_elapsed = std::time::Duration::ZERO;
+    app.streaming_tps_collect_output = false;
     app.streaming_total_output_tokens = 0;
     app.processing_started = Some(Instant::now());
     app.pending_turn = true;
@@ -2546,8 +2548,10 @@ pub(super) fn handle_session_command(app: &mut App, trimmed: &str) -> bool {
             app.streaming_cache_read_tokens = None;
             app.streaming_cache_creation_tokens = None;
             app.upstream_provider = None;
+            app.status_detail = None;
             app.streaming_tps_start = None;
             app.streaming_tps_elapsed = std::time::Duration::ZERO;
+            app.streaming_tps_collect_output = false;
             app.streaming_total_output_tokens = 0;
             app.processing_started = Some(Instant::now());
             app.pending_turn = true;
