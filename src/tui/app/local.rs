@@ -266,6 +266,7 @@ pub(super) fn finish_turn(app: &mut App) {
     app.processing_started = None;
     app.interleave_message = None;
     app.pending_soft_interrupts.clear();
+    app.pending_soft_interrupt_requests.clear();
     app.thought_line_inserted = false;
     app.thinking_prefix_emitted = false;
     app.thinking_buffer.clear();

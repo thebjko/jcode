@@ -10,6 +10,7 @@ pub(super) struct RestoredReloadInput {
     pub startup_display_message: Option<(String, String)>,
     pub interleave_message: Option<String>,
     pub pending_soft_interrupts: Vec<String>,
+    pub pending_soft_interrupt_resend: Option<Vec<String>>,
     pub rate_limit_pending_message: Option<super::PendingRemoteMessage>,
     pub rate_limit_reset: Option<Instant>,
     pub observe_mode_enabled: bool,
@@ -1822,6 +1823,7 @@ impl App {
             && self.hidden_queued_system_messages.is_empty()
             && self.interleave_message.is_none()
             && self.pending_soft_interrupts.is_empty()
+            && self.pending_soft_interrupt_requests.is_empty()
             && self.rate_limit_pending_message.is_none()
             && !self.observe_mode_enabled
         {
@@ -1848,6 +1850,11 @@ impl App {
                         "retry_attempts": pending.retry_attempts,
                     })
                 });
+            let pending_soft_interrupt_resend = self
+                .pending_soft_interrupt_requests
+                .iter()
+                .map(|(_, content)| content.clone())
+                .collect::<Vec<_>>();
             let data = serde_json::json!({
                 "cursor": self.cursor_pos,
                 "input": self.input,
@@ -1855,6 +1862,7 @@ impl App {
                 "hidden_queued_system_messages": self.hidden_queued_system_messages,
                 "interleave_message": self.interleave_message,
                 "pending_soft_interrupts": self.pending_soft_interrupts,
+                "pending_soft_interrupt_resend": pending_soft_interrupt_resend,
                 "rate_limit_pending_message": rate_limit_pending_message,
                 "rate_limit_reset_in_ms": rate_limit_reset_in_ms,
                 "observe_mode_enabled": self.observe_mode_enabled,
@@ -1882,6 +1890,7 @@ impl App {
                 "startup_display_message": inferred_hints.as_ref().map(|(_, (_, body))| body.clone()),
                 "interleave_message": serde_json::Value::Null,
                 "pending_soft_interrupts": [],
+                "pending_soft_interrupt_resend": [],
                 "rate_limit_pending_message": serde_json::Value::Null,
                 "rate_limit_reset_in_ms": serde_json::Value::Null,
                 "observe_mode_enabled": false,
@@ -1960,6 +1969,17 @@ impl App {
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
+            let pending_soft_interrupt_resend =
+                value.get("pending_soft_interrupt_resend").map(|v| {
+                    v.as_array()
+                        .map(|items| {
+                            items
+                                .iter()
+                                .filter_map(|item| item.as_str().map(|s| s.to_string()))
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default()
+                });
             let rate_limit_pending_message = value
                 .get("rate_limit_pending_message")
                 .and_then(|pending| pending.as_object())
@@ -2035,6 +2055,7 @@ impl App {
                 startup_display_message,
                 interleave_message,
                 pending_soft_interrupts,
+                pending_soft_interrupt_resend,
                 rate_limit_pending_message,
                 rate_limit_reset,
                 observe_mode_enabled,
@@ -2055,6 +2076,7 @@ impl App {
             startup_display_message: None,
             interleave_message: None,
             pending_soft_interrupts: Vec::new(),
+            pending_soft_interrupt_resend: None,
             rate_limit_pending_message: None,
             rate_limit_reset: None,
             observe_mode_enabled: false,

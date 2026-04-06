@@ -524,6 +524,7 @@ impl Agent {
             &self.provider.model(),
             crate::telemetry::SessionEndReason::NormalExit,
         );
+        self.persist_soft_interrupt_snapshot();
         self.session.mark_closed();
         if !self.session.messages.is_empty() {
             let _ = self.session.save();
@@ -536,6 +537,7 @@ impl Agent {
             &self.provider.model(),
             crate::telemetry::SessionEndReason::Unknown,
         );
+        self.persist_soft_interrupt_snapshot();
         self.session.mark_crashed(message);
         if !self.session.messages.is_empty() {
             let _ = self.session.save();
@@ -1251,6 +1253,7 @@ impl Agent {
 
         let reset_start = Instant::now();
         self.reset_runtime_state_for_session_change();
+        let restored_soft_interrupts = self.restore_persisted_soft_interrupts();
         let reset_ms = reset_start.elapsed().as_millis();
 
         let model_start = Instant::now();
@@ -1294,9 +1297,10 @@ impl Agent {
         let save_ms = save_start.elapsed().as_millis();
 
         logging::info(&format!(
-            "[TIMING] restore_session: session={}, messages={}, load={}ms, assign={}ms, reset={}ms, model={}ms, mark_active={}ms, compaction={}ms, env_snapshot={}ms, save={}ms, total={}ms",
+            "[TIMING] restore_session: session={}, messages={}, restored_soft_interrupts={}, load={}ms, assign={}ms, reset={}ms, model={}ms, mark_active={}ms, compaction={}ms, env_snapshot={}ms, save={}ms, total={}ms",
             session_id,
             self.session.messages.len(),
+            restored_soft_interrupts,
             load_ms,
             assign_ms,
             reset_ms,
@@ -4479,6 +4483,46 @@ mod tests {
         );
 
         crate::memory::clear_all_pending_memory();
+    }
+
+    #[tokio::test]
+    async fn mark_closed_persists_soft_interrupts_for_restore_after_reload() {
+        let _guard = crate::storage::lock_test_env();
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let prev_home = std::env::var_os("JCODE_HOME");
+        crate::env::set_var("JCODE_HOME", temp.path());
+
+        let provider: Arc<dyn Provider> = Arc::new(NativeAutoCompactionProvider);
+        let registry = Registry::new(provider.clone()).await;
+        let mut agent = Agent::new(provider.clone(), registry.clone());
+        let session_id = agent.session_id().to_string();
+        agent.session.save().expect("save active session");
+        agent.queue_soft_interrupt(
+            "resume me after reload".to_string(),
+            true,
+            SoftInterruptSource::System,
+        );
+
+        agent.mark_closed();
+
+        let mut restored = Agent::new(provider, registry);
+        restored
+            .restore_session(&session_id)
+            .expect("restore session with persisted interrupts");
+
+        assert_eq!(restored.soft_interrupt_count(), 1);
+        assert!(restored.has_urgent_interrupt());
+        assert!(
+            crate::soft_interrupt_store::load(&session_id)
+                .expect("store should be readable after restore")
+                .is_empty()
+        );
+
+        if let Some(prev_home) = prev_home {
+            crate::env::set_var("JCODE_HOME", prev_home);
+        } else {
+            crate::env::remove_var("JCODE_HOME");
+        }
     }
 
     #[tokio::test]

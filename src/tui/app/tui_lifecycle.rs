@@ -21,7 +21,9 @@ impl App {
         self.set_observe_mode_enabled(restored.observe_mode_enabled, restored.observe_mode_enabled);
 
         let mut queued_messages = restored.queued_messages;
-        let mut recovered_interrupts = restored.pending_soft_interrupts;
+        let mut recovered_interrupts = restored
+            .pending_soft_interrupt_resend
+            .unwrap_or(restored.pending_soft_interrupts);
         if !recovered_interrupts.is_empty() {
             crate::logging::info(&format!(
                 "Recovered {} pending soft interrupt(s) after reload; re-queueing them for resend",
@@ -319,6 +321,7 @@ impl App {
             status_notice: None,
             interleave_message: None,
             pending_soft_interrupts: Vec::new(),
+            pending_soft_interrupt_requests: Vec::new(),
             autoreview_after_current_turn: false,
             autojudge_after_current_turn: false,
             pending_split_startup_message: None,
@@ -595,6 +598,7 @@ impl App {
             status_notice: None,
             interleave_message: None,
             pending_soft_interrupts: Vec::new(),
+            pending_soft_interrupt_requests: Vec::new(),
             autoreview_after_current_turn: false,
             autojudge_after_current_turn: false,
             pending_split_startup_message: None,

@@ -413,6 +413,7 @@ fn session_picker_resume_action_keeps_overlay_open() {
                 resume_target: crate::tui::session_picker::ResumeTarget::JcodeSession {
                     session_id: "session_keep_open".to_string(),
                 },
+                external_path: None,
             },
         ]),
     ));
@@ -5837,6 +5838,7 @@ fn test_save_and_restore_reload_state_preserves_interleave_and_pending_retry() {
         "already sent one".to_string(),
         "already sent two".to_string(),
     ];
+    app.pending_soft_interrupt_requests = vec![(17, "already sent two".to_string())];
     app.rate_limit_pending_message = Some(PendingRemoteMessage {
         content: "retry me".to_string(),
         images: vec![("image/png".to_string(), "abc123".to_string())],
@@ -5854,6 +5856,10 @@ fn test_save_and_restore_reload_state_preserves_interleave_and_pending_retry() {
     assert_eq!(
         restored.pending_soft_interrupts,
         vec!["already sent one", "already sent two"]
+    );
+    assert_eq!(
+        restored.pending_soft_interrupt_resend,
+        Some(vec!["already sent two".to_string()])
     );
 
     let pending = restored
@@ -5935,6 +5941,8 @@ fn test_new_for_remote_requeues_restored_pending_soft_interrupts() {
 
     app.interleave_message = Some("local interleave".to_string());
     app.pending_soft_interrupts = vec!["sent one".to_string(), "sent two".to_string()];
+    app.pending_soft_interrupt_requests =
+        vec![(101, "sent one".to_string()), (102, "sent two".to_string())];
     app.queued_messages.push("queued later".to_string());
     app.save_input_for_reload(&session_id);
 
@@ -5947,6 +5955,24 @@ fn test_new_for_remote_requeues_restored_pending_soft_interrupts() {
         restored.queued_messages(),
         &["sent one", "sent two", "queued later"]
     );
+}
+
+#[test]
+fn test_new_for_remote_does_not_requeue_acked_pending_soft_interrupts() {
+    let mut app = create_test_app();
+    let session_id = format!("test-remote-acked-{}", std::process::id());
+
+    app.interleave_message = Some("local interleave".to_string());
+    app.pending_soft_interrupts = vec!["already queued on server".to_string()];
+    app.queued_messages.push("queued later".to_string());
+    app.save_input_for_reload(&session_id);
+
+    let restored = App::new_for_remote(Some(session_id));
+    assert_eq!(
+        restored.interleave_message.as_deref(),
+        Some("local interleave")
+    );
+    assert_eq!(restored.queued_messages(), &["queued later"]);
 }
 
 #[test]
@@ -5963,6 +5989,7 @@ fn test_initial_history_bootstrap_preserves_restored_interleave_state() {
         let mut app = create_test_app();
         app.interleave_message = Some("interrupt after reload".to_string());
         app.pending_soft_interrupts = vec!["already sent interrupt".to_string()];
+        app.pending_soft_interrupt_requests = vec![(55, "already sent interrupt".to_string())];
         app.queued_messages.push("queued followup".to_string());
         app.save_input_for_reload(session_id);
 
@@ -6507,6 +6534,8 @@ fn test_handle_server_event_interrupted_clears_stream_state_and_sets_idle() {
     app.interleave_message = Some("queued interrupt".to_string());
     app.pending_soft_interrupts
         .push("pending soft interrupt".to_string());
+    app.pending_soft_interrupt_requests
+        .push((77, "pending soft interrupt".to_string()));
 
     remote.handle_tool_start("tool_1", "bash");
     remote.handle_tool_input("{\"command\":\"sleep 10\"}");
@@ -6522,6 +6551,7 @@ fn test_handle_server_event_interrupted_clears_stream_state_and_sets_idle() {
     assert!(app.streaming_tool_calls.is_empty());
     assert!(app.interleave_message.is_none());
     assert!(app.pending_soft_interrupts.is_empty());
+    assert!(app.pending_soft_interrupt_requests.is_empty());
 
     let last = app
         .display_messages()
@@ -6875,6 +6905,48 @@ fn test_handle_server_event_soft_interrupt_injected_system_renders_system_messag
         .expect("missing injected message");
     assert_eq!(last.role, "system");
     assert!(last.content.contains("Background Task Completed"));
+}
+
+#[test]
+fn test_handle_server_event_ack_removes_only_matching_unacked_soft_interrupt() {
+    let mut app = create_test_app();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let mut remote = crate::tui::backend::RemoteConnection::dummy();
+
+    app.pending_soft_interrupts = vec!["first".to_string(), "second".to_string()];
+    app.pending_soft_interrupt_requests =
+        vec![(11, "first".to_string()), (22, "second".to_string())];
+
+    app.handle_server_event(crate::protocol::ServerEvent::Ack { id: 11 }, &mut remote);
+
+    assert_eq!(app.pending_soft_interrupts, vec!["first", "second"]);
+    assert_eq!(
+        app.pending_soft_interrupt_requests,
+        vec![(22, "second".to_string())]
+    );
+}
+
+#[test]
+fn test_handle_server_event_soft_interrupt_injected_keeps_other_pending_previews() {
+    let mut app = create_test_app();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let mut remote = crate::tui::backend::RemoteConnection::dummy();
+
+    app.pending_soft_interrupts = vec!["first".to_string(), "second".to_string()];
+
+    app.handle_server_event(
+        crate::protocol::ServerEvent::SoftInterruptInjected {
+            content: "first".to_string(),
+            display_role: Some("user".to_string()),
+            point: "D".to_string(),
+            tools_skipped: None,
+        },
+        &mut remote,
+    );
+
+    assert_eq!(app.pending_soft_interrupts, vec!["second"]);
 }
 
 #[test]

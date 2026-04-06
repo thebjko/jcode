@@ -542,7 +542,12 @@ pub(super) async fn handle_client(
             }
 
             Request::CancelSoftInterrupts { id } => {
-                clear_soft_interrupts(id, &soft_interrupt_queue, &client_event_tx);
+                clear_soft_interrupts(
+                    id,
+                    &client_session_id,
+                    &soft_interrupt_queue,
+                    &client_event_tx,
+                );
             }
 
             Request::BackgroundTool { id } => {
@@ -1492,11 +1497,18 @@ fn queue_soft_interrupt(
 
 fn clear_soft_interrupts(
     id: u64,
+    session_id: &str,
     soft_interrupt_queue: &SoftInterruptQueue,
     client_event_tx: &mpsc::UnboundedSender<ServerEvent>,
 ) {
     if let Ok(mut queue) = soft_interrupt_queue.lock() {
         queue.clear();
+    }
+    if let Err(err) = crate::soft_interrupt_store::clear(session_id) {
+        crate::logging::warn(&format!(
+            "Failed to clear persisted soft interrupts for {}: {}",
+            session_id, err
+        ));
     }
     let _ = client_event_tx.send(ServerEvent::Ack { id });
 }

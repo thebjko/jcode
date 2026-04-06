@@ -1424,6 +1424,7 @@ fn interrupt_and_queue_synthetic_message(
     app.cancel_requested = true;
     app.interleave_message = None;
     app.pending_soft_interrupts.clear();
+    app.pending_soft_interrupt_requests.clear();
     app.set_status_notice(status_notice);
     app.push_display_message(DisplayMessage::system(display_notice));
     app.queued_messages.push(content);
@@ -2511,6 +2512,7 @@ pub(super) fn handle_session_command(app: &mut App, trimmed: &str) -> bool {
             app.cancel_requested = true;
             app.interleave_message = None;
             app.pending_soft_interrupts.clear();
+            app.pending_soft_interrupt_requests.clear();
             app.set_status_notice("Interrupting for poke...");
             app.push_display_message(DisplayMessage::system(format!(
                 "👉 Interrupting and poking with {} incomplete todo{}...",

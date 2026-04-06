@@ -26,6 +26,46 @@ use workspace::{handle_workspace_command, handle_workspace_navigation_key};
 const CONNECTION_MESSAGE_TITLE: &str = "Connection";
 const RELOAD_MARKER_MAX_AGE: Duration = Duration::from_secs(30);
 
+impl App {
+    fn track_pending_soft_interrupt(&mut self, request_id: u64, content: String) {
+        self.pending_soft_interrupt_requests
+            .push((request_id, content.clone()));
+        self.pending_soft_interrupts.push(content);
+    }
+
+    fn acknowledge_pending_soft_interrupt(&mut self, request_id: u64) -> bool {
+        if let Some(index) = self
+            .pending_soft_interrupt_requests
+            .iter()
+            .position(|(id, _)| *id == request_id)
+        {
+            self.pending_soft_interrupt_requests.remove(index);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn clear_pending_soft_interrupt_tracking(&mut self) {
+        self.pending_soft_interrupts.clear();
+        self.pending_soft_interrupt_requests.clear();
+    }
+
+    fn mark_soft_interrupt_injected(&mut self, content: &str) {
+        if let Some(index) = self
+            .pending_soft_interrupts
+            .iter()
+            .position(|pending| pending == content)
+        {
+            self.pending_soft_interrupts.remove(index);
+        } else {
+            self.pending_soft_interrupts.clear();
+        }
+        self.pending_soft_interrupt_requests
+            .retain(|(_, pending)| pending != content);
+    }
+}
+
 pub(super) enum RemoteEventOutcome {
     Continue,
     Reconnect,
@@ -766,13 +806,16 @@ pub(super) async fn process_remote_followups(app: &mut App, remote: &mut RemoteC
         if let Some(interleave_msg) = app.interleave_message.take() {
             if !interleave_msg.trim().is_empty() {
                 let msg_clone = interleave_msg.clone();
-                if let Err(e) = remote.soft_interrupt(interleave_msg, false).await {
-                    app.push_display_message(DisplayMessage::error(format!(
-                        "Failed to queue soft interrupt: {}",
-                        e
-                    )));
-                } else {
-                    app.pending_soft_interrupts.push(msg_clone);
+                match remote.soft_interrupt(interleave_msg, false).await {
+                    Err(e) => {
+                        app.push_display_message(DisplayMessage::error(format!(
+                            "Failed to queue soft interrupt: {}",
+                            e
+                        )));
+                    }
+                    Ok(request_id) => {
+                        app.track_pending_soft_interrupt(request_id, msg_clone);
+                    }
                 }
             }
         }
@@ -1416,6 +1459,10 @@ pub(super) fn handle_server_event(
             app.upstream_provider = Some(provider);
             false
         }
+        ServerEvent::Ack { id } => {
+            let _ = app.acknowledge_pending_soft_interrupt(id);
+            false
+        }
         ServerEvent::Interrupted => {
             let keep_pending_retry = app
                 .rate_limit_pending_message
@@ -1425,7 +1472,7 @@ pub(super) fn handle_server_event(
                 app.clear_pending_remote_retry();
             }
             app.interleave_message = None;
-            app.pending_soft_interrupts.clear();
+            app.clear_pending_soft_interrupt_tracking();
             if let Some(chunk) = app.stream_buffer.flush() {
                 app.streaming_text.push_str(&chunk);
             }
@@ -1596,7 +1643,7 @@ pub(super) fn handle_server_event(
             app.is_processing = false;
             app.status = ProcessingStatus::Idle;
             app.interleave_message = None;
-            app.pending_soft_interrupts.clear();
+            app.clear_pending_soft_interrupt_tracking();
             crate::tui::mermaid::clear_streaming_preview_diagram();
             app.thought_line_inserted = false;
             app.thinking_prefix_emitted = false;
@@ -1717,7 +1764,7 @@ pub(super) fn handle_server_event(
                 if prev_session_id.is_some() {
                     app.queued_messages.clear();
                     app.interleave_message = None;
-                    app.pending_soft_interrupts.clear();
+                    app.clear_pending_soft_interrupt_tracking();
                 }
                 app.remote_total_tokens = None;
                 app.remote_side_pane_images.clear();
@@ -2036,7 +2083,7 @@ pub(super) fn handle_server_event(
                 });
                 app.push_turn_footer(duration);
             }
-            app.pending_soft_interrupts.clear();
+            app.mark_soft_interrupt_injected(&content);
             let role = display_role.unwrap_or_else(|| "user".to_string());
             app.push_display_message(DisplayMessage {
                 role,
@@ -2448,14 +2495,17 @@ pub(super) async fn send_interleave_now(
         return;
     }
     let msg_clone = content.clone();
-    if let Err(e) = remote.soft_interrupt(content, false).await {
-        app.push_display_message(DisplayMessage::error(format!(
-            "Failed to send interleave: {}",
-            e
-        )));
-    } else {
-        app.pending_soft_interrupts.push(msg_clone);
-        app.set_status_notice("⏭ Interleave sent");
+    match remote.soft_interrupt(content, false).await {
+        Err(e) => {
+            app.push_display_message(DisplayMessage::error(format!(
+                "Failed to send interleave: {}",
+                e
+            )));
+        }
+        Ok(request_id) => {
+            app.track_pending_soft_interrupt(request_id, msg_clone);
+            app.set_status_notice("⏭ Interleave sent");
+        }
     }
 }
 

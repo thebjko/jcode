@@ -665,6 +665,7 @@ impl App {
                                         self.cancel_requested = false;
                                         self.interleave_message = None;
                                         self.pending_soft_interrupts.clear();
+                                        self.pending_soft_interrupt_requests.clear();
                                         self.clear_streaming_render_state();
                                         self.stream_buffer.clear();
                                         self.streaming_tool_calls.clear();
@@ -751,6 +752,7 @@ impl App {
                                         self.cancel_requested = false;
                                         self.interleave_message = None;
                                         self.pending_soft_interrupts.clear();
+                                        self.pending_soft_interrupt_requests.clear();
                                         // Save partial assistant response before clearing
                                         if let Some(tool) = current_tool.take() {
                                             tool_calls.push(tool);
@@ -1403,6 +1405,7 @@ impl App {
                                             self.cancel_requested = false;
                                             self.interleave_message = None;
                                             self.pending_soft_interrupts.clear();
+                                            self.pending_soft_interrupt_requests.clear();
                                             // Partial text+tool_calls were already saved
                                             // to the session before tool execution started.
                                             // Just preserve the visual streaming content.

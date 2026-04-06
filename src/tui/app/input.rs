@@ -380,6 +380,7 @@ pub(super) fn retrieve_pending_message_for_edit(app: &mut App) -> bool {
 
     if !app.pending_soft_interrupts.is_empty() {
         parts.extend(std::mem::take(&mut app.pending_soft_interrupts));
+        app.pending_soft_interrupt_requests.clear();
         had_pending = true;
     }
     if let Some(msg) = app.interleave_message.take() {
@@ -897,6 +898,7 @@ pub(super) fn handle_global_control_shortcuts(
                 app.cancel_requested = true;
                 app.interleave_message = None;
                 app.pending_soft_interrupts.clear();
+                app.pending_soft_interrupt_requests.clear();
                 app.set_status_notice("Interrupting...");
             } else {
                 app.handle_quit_request();
@@ -1004,6 +1006,7 @@ pub(super) fn handle_basic_key(app: &mut App, code: KeyCode) -> bool {
                 app.cancel_requested = true;
                 app.interleave_message = None;
                 app.pending_soft_interrupts.clear();
+                app.pending_soft_interrupt_requests.clear();
             } else {
                 app.follow_chat_bottom();
                 clear_input_for_escape(app);

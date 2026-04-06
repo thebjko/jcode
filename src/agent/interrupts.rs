@@ -49,6 +49,64 @@ pub(super) enum PostToolInterruptOutcome {
 }
 
 impl Agent {
+    pub fn restore_persisted_soft_interrupts(&self) -> usize {
+        let restored = match crate::soft_interrupt_store::take(self.session_id()) {
+            Ok(items) => items,
+            Err(err) => {
+                logging::warn(&format!(
+                    "Failed to restore persisted soft interrupts for {}: {}",
+                    self.session_id(),
+                    err
+                ));
+                return 0;
+            }
+        };
+
+        if restored.is_empty() {
+            return 0;
+        }
+
+        let restored_count = restored.len();
+        if let Ok(mut queue) = self.soft_interrupt_queue.lock() {
+            queue.extend(restored);
+        } else {
+            logging::warn(&format!(
+                "Failed to restore persisted soft interrupts for {} because queue lock was poisoned",
+                self.session_id()
+            ));
+            return 0;
+        }
+
+        logging::info(&format!(
+            "Restored {} persisted soft interrupt(s) for session {}",
+            restored_count,
+            self.session_id()
+        ));
+        restored_count
+    }
+
+    pub fn persist_soft_interrupt_snapshot(&self) {
+        let pending = match self.soft_interrupt_queue.lock() {
+            Ok(queue) => queue.clone(),
+            Err(_) => {
+                logging::warn(&format!(
+                    "Failed to snapshot soft interrupts for {} because queue lock was poisoned",
+                    self.session_id()
+                ));
+                return;
+            }
+        };
+
+        if let Err(err) = crate::soft_interrupt_store::overwrite(self.session_id(), &pending) {
+            logging::warn(&format!(
+                "Failed to persist {} soft interrupt(s) for {}: {}",
+                pending.len(),
+                self.session_id(),
+                err
+            ));
+        }
+    }
+
     /// Add a swarm alert to be injected into the next turn
     pub fn push_alert(&mut self, alert: String) {
         self.pending_alerts.push(alert);

@@ -619,6 +619,8 @@ pub struct App {
     interleave_message: Option<String>,
     // Message sent as soft interrupt but not yet injected (shown in queue preview until injected)
     pending_soft_interrupts: Vec<String>,
+    // Soft interrupts written to the socket but not yet acknowledged by the server.
+    pending_soft_interrupt_requests: Vec<(u64, String)>,
     // Whether the current remote turn should trigger autoreview after completion.
     autoreview_after_current_turn: bool,
     // Whether the current remote turn should trigger autojudge after completion.

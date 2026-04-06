@@ -234,6 +234,30 @@ pub(super) async fn queue_soft_interrupt_for_session(
         register_session_interrupt_queue(queues, session_id, queue.clone()).await;
         enqueue_soft_interrupt(&queue, content, urgent, source)
     } else {
-        false
+        let session_exists = {
+            let guard = sessions.read().await;
+            guard.contains_key(session_id)
+        } || crate::session::session_exists(session_id);
+
+        if !session_exists {
+            return false;
+        }
+
+        crate::soft_interrupt_store::append(
+            session_id,
+            SoftInterruptMessage {
+                content,
+                urgent,
+                source,
+            },
+        )
+        .map(|_| true)
+        .unwrap_or_else(|err| {
+            crate::logging::warn(&format!(
+                "Failed to persist deferred soft interrupt for session {}: {}",
+                session_id, err
+            ));
+            false
+        })
     }
 }
