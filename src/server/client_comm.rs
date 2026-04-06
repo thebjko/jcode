@@ -39,7 +39,10 @@ async fn resolve_dm_target_session(
     swarm_session_ids: &[String],
     swarm_members: &Arc<RwLock<HashMap<String, SwarmMember>>>,
 ) -> Result<String, String> {
-    if swarm_session_ids.iter().any(|session_id| session_id == target) {
+    if swarm_session_ids
+        .iter()
+        .any(|session_id| session_id == target)
+    {
         return Ok(target.to_string());
     }
 

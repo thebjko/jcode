@@ -166,6 +166,50 @@ fn parse_rfc3339_string(value: Option<&str>) -> Option<DateTime<Utc>> {
         .map(|dt| dt.with_timezone(&Utc))
 }
 
+fn clean_optional_text(value: Option<String>) -> Option<String> {
+    value.and_then(|text| {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
+fn resolve_claude_session_path(project_dir: &Path, entry: &SessionIndexEntry) -> Option<PathBuf> {
+    let indexed_path = PathBuf::from(&entry.full_path);
+    let fallback_path = project_dir.join(format!("{}.jsonl", entry.session_id));
+    if indexed_path.exists() {
+        Some(indexed_path)
+    } else if fallback_path.exists() {
+        Some(fallback_path)
+    } else {
+        None
+    }
+}
+
+fn claude_code_session_info_from_index(
+    path: &Path,
+    entry: &SessionIndexEntry,
+) -> Option<ClaudeCodeSessionInfo> {
+    let message_count = entry.message_count.filter(|count| *count > 0)?;
+    let summary = clean_optional_text(entry.summary.clone());
+    let first_prompt =
+        clean_optional_text(entry.first_prompt.clone()).or_else(|| summary.clone())?;
+
+    Some(ClaudeCodeSessionInfo {
+        session_id: entry.session_id.clone(),
+        first_prompt,
+        summary,
+        message_count,
+        created: parse_rfc3339_string(entry.created.as_deref()),
+        modified: parse_rfc3339_string(entry.modified.as_deref()),
+        project_path: clean_optional_text(entry.project_path.clone()),
+        full_path: path.to_string_lossy().to_string(),
+    })
+}
+
 fn claude_text_from_content(content: &ClaudeCodeContent) -> Option<String> {
     match content {
         ClaudeCodeContent::Empty => None,
@@ -313,8 +357,7 @@ fn claude_code_session_info_from_file(
         .unwrap_or_else(|| path.to_string_lossy().to_string());
 
     let first_prompt = indexed
-        .and_then(|entry| entry.first_prompt.clone())
-        .filter(|text| !text.trim().is_empty())
+        .and_then(|entry| clean_optional_text(entry.first_prompt.clone()))
         .or_else(|| {
             ordered_entries.iter().find_map(|entry| {
                 (entry.entry_type == "user")
@@ -323,13 +366,13 @@ fn claude_code_session_info_from_file(
                     .and_then(|message| claude_text_from_content(&message.content))
             })
         })
+        .or_else(|| indexed.and_then(|entry| clean_optional_text(entry.summary.clone())))
         .unwrap_or_else(|| "No prompt".to_string());
 
-    let summary = indexed
-        .and_then(|entry| entry.summary.clone())
-        .filter(|text| !text.trim().is_empty());
+    let summary = indexed.and_then(|entry| clean_optional_text(entry.summary.clone()));
     let message_count = indexed
         .and_then(|entry| entry.message_count)
+        .filter(|count| *count > 0)
         .unwrap_or(ordered_entries.len() as u32);
     let created = indexed
         .and_then(|entry| parse_rfc3339_string(entry.created.as_deref()))
@@ -338,7 +381,7 @@ fn claude_code_session_info_from_file(
         .and_then(|entry| parse_rfc3339_string(entry.modified.as_deref()))
         .or_else(|| last_entry.and_then(|entry| parse_rfc3339_string(entry.timestamp.as_deref())));
     let project_path = indexed
-        .and_then(|entry| entry.project_path.clone())
+        .and_then(|entry| clean_optional_text(entry.project_path.clone()))
         .or_else(|| first_entry.and_then(|entry| entry.cwd.clone()));
 
     Ok(ClaudeCodeSessionInfo {
@@ -372,17 +415,22 @@ pub fn list_claude_code_sessions() -> Result<Vec<ClaudeCodeSessionInfo>> {
                     continue;
                 }
 
-                let indexed_path = PathBuf::from(&entry.full_path);
-                let fallback_path = project_dir.join(format!("{}.jsonl", entry.session_id));
-                let path = if indexed_path.exists() {
-                    indexed_path
-                } else if fallback_path.exists() {
-                    fallback_path
-                } else {
+                let Some(path) = resolve_claude_session_path(&project_dir, &entry) else {
                     continue;
                 };
 
-                let session = claude_code_session_info_from_file(&path, Some(&entry))?;
+                let session =
+                    if let Some(session) = claude_code_session_info_from_index(&path, &entry) {
+                        session
+                    } else {
+                        let session = claude_code_session_info_from_file(&path, Some(&entry))?;
+                        if session.message_count == 0
+                            || (session.summary.is_none() && session.first_prompt == "No prompt")
+                        {
+                            continue;
+                        }
+                        session
+                    };
                 seen_session_ids.insert(session.session_id.clone());
                 all_sessions.push(session);
             }
@@ -400,6 +448,11 @@ pub fn list_claude_code_sessions() -> Result<Vec<ClaudeCodeSessionInfo>> {
                 continue;
             }
             let session = claude_code_session_info_from_file(&path, None)?;
+            if session.message_count == 0
+                || (session.summary.is_none() && session.first_prompt == "No prompt")
+            {
+                continue;
+            }
             seen_session_ids.insert(session.session_id.clone());
             all_sessions.push(session);
         }
@@ -1430,6 +1483,92 @@ mod tests {
         assert_eq!(orphan.full_path, orphan_session_path.to_string_lossy());
         assert_eq!(orphan.first_prompt, "Summarize the deployment issue");
         assert_eq!(orphan.message_count, 2);
+    }
+
+    #[test]
+    fn test_list_claude_code_sessions_uses_index_metadata_without_parsing_transcript() {
+        let _guard = crate::storage::lock_test_env();
+        let temp = tempfile::TempDir::new().unwrap();
+        let _home = EnvVarGuard::set_path("JCODE_HOME", temp.path());
+
+        let project_dir = temp.path().join("external/.claude/projects/demo-project");
+        std::fs::create_dir_all(&project_dir).unwrap();
+
+        let transcript_path = project_dir.join("indexed-session.jsonl");
+        std::fs::write(&transcript_path, "{this is not valid jsonl}\n").unwrap();
+
+        std::fs::write(
+            project_dir.join("sessions-index.json"),
+            format!(
+                concat!(
+                    "{{\"version\":1,\"entries\":[",
+                    "{{\"sessionId\":\"indexed-session\",",
+                    "\"fullPath\":\"{}\",",
+                    "\"firstPrompt\":\"Investigate the login bug\",",
+                    "\"summary\":\"Investigate the login bug\",",
+                    "\"messageCount\":2,",
+                    "\"created\":\"2026-04-04T12:00:00Z\",",
+                    "\"modified\":\"2026-04-04T12:05:00Z\",",
+                    "\"projectPath\":\"/tmp/demo-project\"",
+                    "}}]}}"
+                ),
+                transcript_path.display()
+            ),
+        )
+        .unwrap();
+
+        let sessions = list_claude_code_sessions().unwrap();
+        let session = sessions
+            .iter()
+            .find(|session| session.session_id == "indexed-session")
+            .expect("indexed session should be listed from index metadata");
+
+        assert_eq!(session.message_count, 2);
+        assert_eq!(
+            session.summary.as_deref(),
+            Some("Investigate the login bug")
+        );
+        assert_eq!(session.first_prompt, "Investigate the login bug");
+    }
+
+    #[test]
+    fn test_list_claude_code_sessions_skips_empty_index_entries_without_messages() {
+        let _guard = crate::storage::lock_test_env();
+        let temp = tempfile::TempDir::new().unwrap();
+        let _home = EnvVarGuard::set_path("JCODE_HOME", temp.path());
+
+        let project_dir = temp.path().join("external/.claude/projects/demo-project");
+        std::fs::create_dir_all(&project_dir).unwrap();
+
+        let transcript_path = project_dir.join("empty-session.jsonl");
+        std::fs::write(
+            &transcript_path,
+            "{\"type\":\"system\",\"sessionId\":\"empty-session\"}\n",
+        )
+        .unwrap();
+
+        std::fs::write(
+            project_dir.join("sessions-index.json"),
+            format!(
+                concat!(
+                    "{{\"version\":1,\"entries\":[",
+                    "{{\"sessionId\":\"empty-session\",",
+                    "\"fullPath\":\"{}\",",
+                    "\"firstPrompt\":\"\",",
+                    "\"summary\":\"\",",
+                    "\"messageCount\":0",
+                    "}}]}}"
+                ),
+                transcript_path.display()
+            ),
+        )
+        .unwrap();
+
+        let sessions = list_claude_code_sessions().unwrap();
+        assert!(
+            sessions.is_empty(),
+            "empty placeholder sessions should be hidden"
+        );
     }
 
     #[test]

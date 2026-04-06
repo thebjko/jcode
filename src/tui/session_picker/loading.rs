@@ -659,6 +659,7 @@ pub fn load_sessions() -> Result<Vec<SessionInfo>> {
                 resume_target: ResumeTarget::JcodeSession {
                     session_id: stem.to_string(),
                 },
+                external_path: None,
             });
         }
     }
@@ -733,17 +734,14 @@ fn load_external_claude_code_sessions(scan_limit: usize) -> Vec<SessionInfo> {
                 server_icon: None,
                 source: SessionSource::ClaudeCode,
                 resume_target: ResumeTarget::ClaudeCodeSession { session_id },
+                external_path: Some(session.full_path),
             }
         })
         .collect()
 }
 
-pub(super) fn load_claude_code_preview(session_id: &str) -> Option<Vec<PreviewMessage>> {
-    let session = crate::import::list_claude_code_sessions()
-        .ok()?
-        .into_iter()
-        .find(|session| session.session_id == session_id)?;
-    let file = File::open(session.full_path).ok()?;
+pub(super) fn load_claude_code_preview_from_path(path: &Path) -> Option<Vec<PreviewMessage>> {
+    let file = File::open(path).ok()?;
     let reader = BufReader::new(file);
     let mut preview = Vec::new();
 
@@ -778,6 +776,14 @@ pub(super) fn load_claude_code_preview(session_id: &str) -> Option<Vec<PreviewMe
     } else {
         Some(preview)
     }
+}
+
+pub(super) fn load_claude_code_preview(session_id: &str) -> Option<Vec<PreviewMessage>> {
+    let session = crate::import::list_claude_code_sessions()
+        .ok()?
+        .into_iter()
+        .find(|session| session.session_id == session_id)?;
+    load_claude_code_preview_from_path(Path::new(&session.full_path))
 }
 
 fn load_external_codex_sessions(scan_limit: usize) -> Vec<SessionInfo> {
@@ -943,6 +949,7 @@ fn load_codex_session_info(path: &Path) -> Result<Option<SessionInfo>> {
         server_icon: None,
         source: SessionSource::Codex,
         resume_target: ResumeTarget::CodexSession { session_id },
+        external_path: Some(path.to_string_lossy().to_string()),
     }))
 }
 
@@ -975,8 +982,7 @@ fn find_codex_session_file(session_id: &str) -> Option<PathBuf> {
     None
 }
 
-pub(super) fn load_codex_preview(session_id: &str) -> Option<Vec<PreviewMessage>> {
-    let path = find_codex_session_file(session_id)?;
+pub(super) fn load_codex_preview_from_path(path: &Path) -> Option<Vec<PreviewMessage>> {
     let file = File::open(path).ok()?;
     let reader = BufReader::new(file);
     let mut preview = Vec::new();
@@ -1023,6 +1029,11 @@ pub(super) fn load_codex_preview(session_id: &str) -> Option<Vec<PreviewMessage>
     } else {
         Some(preview)
     }
+}
+
+pub(super) fn load_codex_preview(session_id: &str) -> Option<Vec<PreviewMessage>> {
+    let path = find_codex_session_file(session_id)?;
+    load_codex_preview_from_path(&path)
 }
 
 fn load_external_pi_sessions(scan_limit: usize) -> Vec<SessionInfo> {
@@ -1191,6 +1202,7 @@ fn load_pi_session_info(path: &Path) -> Result<Option<SessionInfo>> {
         resume_target: ResumeTarget::PiSession {
             session_path: path.to_string_lossy().to_string(),
         },
+        external_path: Some(path.to_string_lossy().to_string()),
     }))
 }
 
@@ -1338,6 +1350,7 @@ fn load_opencode_session_info(path: &Path) -> Result<Option<SessionInfo>> {
         server_icon: None,
         source: SessionSource::OpenCode,
         resume_target: ResumeTarget::OpenCodeSession { session_id },
+        external_path: Some(path.to_string_lossy().to_string()),
     }))
 }
 

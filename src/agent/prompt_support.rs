@@ -72,7 +72,7 @@ impl Agent {
     pub(super) fn build_memory_prompt_nonblocking(
         &self,
         messages: &[Message],
-        memory_event_tx: Option<crate::memory::MemoryEventSink>,
+        _memory_event_tx: Option<crate::memory::MemoryEventSink>,
     ) -> Option<crate::memory::PendingMemory> {
         if !self.memory_enabled {
             return None;
@@ -80,22 +80,12 @@ impl Agent {
 
         let session_id = &self.session.id;
         let pending = crate::memory::take_pending_memory(session_id);
-
-        let manager = self
-            .session
-            .working_dir
-            .as_deref()
-            .map(|dir| {
-                crate::memory::MemoryManager::new()
-                    .with_project_dir(dir)
-                    .with_skills(self.active_skill.is_none())
-            })
-            .unwrap_or_else(|| {
-                crate::memory::MemoryManager::new().with_skills(self.active_skill.is_none())
-            });
         let shared_messages: std::sync::Arc<[Message]> = messages.to_vec().into();
-        manager.spawn_relevance_check(session_id, shared_messages.clone(), memory_event_tx);
 
+        // Use the persistent memory-agent pipeline as the single source of truth.
+        // Running both this and the legacy MemoryManager background retrieval path
+        // can prepare overlapping pending prompts for the same turn, which makes
+        // memory injection feel overly aggressive.
         crate::memory_agent::update_context_sync_with_dir(
             session_id,
             shared_messages,

@@ -489,7 +489,38 @@ fn truncate_chars(value: &str, max_chars: usize) -> String {
     value.chars().take(max_chars).collect()
 }
 
-fn format_content_block(block: &crate::message::ContentBlock) -> Option<String> {
+fn format_content_block_for_relevance(block: &crate::message::ContentBlock) -> Option<String> {
+    match block {
+        crate::message::ContentBlock::Text { text, .. } => {
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(truncate_chars(trimmed, MEMORY_CONTEXT_MAX_BLOCK_CHARS))
+            }
+        }
+        crate::message::ContentBlock::ToolUse { name, .. } => Some(format!("[Tool: {}]", name)),
+        crate::message::ContentBlock::ToolResult {
+            content, is_error, ..
+        } => {
+            if is_error.unwrap_or(false) {
+                Some(format!(
+                    "[Tool error: {}]",
+                    truncate_chars(content.trim(), MEMORY_CONTEXT_MAX_BLOCK_CHARS / 4)
+                ))
+            } else {
+                None
+            }
+        }
+        crate::message::ContentBlock::Reasoning { .. } => None,
+        crate::message::ContentBlock::Image { .. } => Some("[Image]".to_string()),
+        crate::message::ContentBlock::OpenAICompaction { .. } => {
+            Some("[OpenAI native compaction]".to_string())
+        }
+    }
+}
+
+fn format_content_block_for_extraction(block: &crate::message::ContentBlock) -> Option<String> {
     match block {
         crate::message::ContentBlock::Text { text, .. } => {
             let trimmed = text.trim();
@@ -524,7 +555,10 @@ fn format_content_block(block: &crate::message::ContentBlock) -> Option<String> 
     }
 }
 
-fn format_message_context(message: &crate::message::Message) -> String {
+fn format_message_context_with(
+    message: &crate::message::Message,
+    format_block: fn(&crate::message::ContentBlock) -> Option<String>,
+) -> String {
     let role = match message.role {
         crate::message::Role::User => "User",
         crate::message::Role::Assistant => "Assistant",
@@ -536,7 +570,7 @@ fn format_message_context(message: &crate::message::Message) -> String {
 
     let mut has_content = false;
     for block in &message.content {
-        if let Some(text) = format_content_block(block) {
+        if let Some(text) = format_block(block) {
             if !text.is_empty() {
                 has_content = true;
                 chunk.push_str(&text);
@@ -554,7 +588,7 @@ pub fn format_context_for_relevance(messages: &[crate::message::Message]) -> Str
     let mut total_chars = 0usize;
 
     for message in messages.iter().rev().take(MEMORY_CONTEXT_MAX_MESSAGES) {
-        let chunk = format_message_context(message);
+        let chunk = format_message_context_with(message, format_content_block_for_relevance);
         if chunk.is_empty() {
             continue;
         }
@@ -584,7 +618,7 @@ pub fn format_context_for_extraction(messages: &[crate::message::Message]) -> St
     let mut total_chars = 0usize;
 
     for message in messages.iter().rev().take(EXTRACTION_CONTEXT_MAX_MESSAGES) {
-        let chunk = format_message_context(message);
+        let chunk = format_message_context_with(message, format_content_block_for_extraction);
         if chunk.is_empty() {
             continue;
         }
@@ -1957,13 +1991,16 @@ impl MemoryManager {
             return;
         }
 
-        let project_dir = self.project_dir.clone();
+        let manager = self.clone();
 
         tokio::spawn(async move {
-            let manager = MemoryManager {
-                project_dir: project_dir.or_else(|| std::env::current_dir().ok()),
-                test_mode: false,
-                include_skills: true,
+            let manager = if manager.project_dir.is_none() {
+                MemoryManager {
+                    project_dir: std::env::current_dir().ok(),
+                    ..manager
+                }
+            } else {
+                manager
             };
 
             match manager
@@ -2751,6 +2788,59 @@ mod tests {
     }
 
     #[test]
+    fn pending_memory_suppresses_overlapping_memory_sets() {
+        let _guard = PENDING_MEMORY_TEST_LOCK
+            .lock()
+            .expect("pending memory test lock poisoned");
+        clear_all_pending_memory();
+
+        let sid = "test-session-overlap";
+        set_pending_memory_with_ids(
+            sid,
+            "first payload".to_string(),
+            2,
+            vec!["mem-a".to_string(), "mem-b".to_string()],
+        );
+        assert!(take_pending_memory(sid).is_some());
+
+        set_pending_memory_with_ids(
+            sid,
+            "second payload with same memories".to_string(),
+            2,
+            vec!["mem-b".to_string(), "mem-a".to_string()],
+        );
+        assert!(
+            take_pending_memory(sid).is_none(),
+            "same memory set should be suppressed even if prompt text differs"
+        );
+    }
+
+    #[test]
+    fn pending_memory_keeps_existing_similar_payload_instead_of_replacing_it() {
+        let _guard = PENDING_MEMORY_TEST_LOCK
+            .lock()
+            .expect("pending memory test lock poisoned");
+        clear_all_pending_memory();
+
+        let sid = "test-session-queued-overlap";
+        set_pending_memory_with_ids(
+            sid,
+            "original payload".to_string(),
+            2,
+            vec!["mem-a".to_string(), "mem-b".to_string()],
+        );
+        set_pending_memory_with_ids(
+            sid,
+            "replacement payload".to_string(),
+            2,
+            vec!["mem-a".to_string(), "mem-b".to_string()],
+        );
+
+        let pending = take_pending_memory(sid).expect("existing pending payload should remain");
+        assert_eq!(pending.prompt, "original payload");
+    }
+
+    #[test]
     fn pending_memory_per_session_isolation() {
         let _guard = PENDING_MEMORY_TEST_LOCK
             .lock()
@@ -2806,9 +2896,31 @@ mod tests {
 
         let context = format_context_for_relevance(&messages);
         assert!(context.contains("User:\nHello world"));
+        assert!(context.contains("[Tool: memory]"));
+        assert!(!context.contains("[Tool result: ok]"));
+        assert!(context.contains("[Tool error: boom]"));
+    }
+
+    #[test]
+    fn extraction_context_keeps_tool_io_details() {
+        let messages = vec![
+            Message::user("Hello world"),
+            Message {
+                role: Role::Assistant,
+                content: vec![ContentBlock::ToolUse {
+                    id: "tool-1".to_string(),
+                    name: "memory".to_string(),
+                    input: json!({"action": "list"}),
+                }],
+                timestamp: None,
+                tool_duration_ms: None,
+            },
+            Message::tool_result("tool-1", "ok", false),
+        ];
+
+        let context = format_context_for_extraction(&messages);
         assert!(context.contains("[Tool: memory input:"));
         assert!(context.contains("[Tool result: ok]"));
-        assert!(context.contains("[Tool error: boom]"));
     }
 
     #[test]

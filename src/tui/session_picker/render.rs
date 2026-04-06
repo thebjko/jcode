@@ -127,22 +127,38 @@ impl SessionPicker {
         } else {
             format!("~{} tok", session.estimated_tokens)
         };
-        let line3 = Line::from(vec![
-            Span::styled("     ", Style::default()),
-            Span::styled(
-                format!("{}", session.user_message_count),
-                Style::default().fg(user_clr),
-            ),
-            Span::styled(" user", Style::default().fg(dimmer)),
-            Span::styled(" · ", Style::default().fg(dimmer)),
-            Span::styled(
-                format!("{}", session.assistant_message_count),
-                Style::default().fg(rgb(129, 199, 132)),
-            ),
-            Span::styled(" assistant", Style::default().fg(dimmer)),
-            Span::styled(" · ", Style::default().fg(dimmer)),
-            Span::styled(tokens_display, Style::default().fg(dimmer)),
-        ]);
+        let line3 = if session.message_count > 0
+            && session.user_message_count == 0
+            && session.assistant_message_count == 0
+        {
+            Line::from(vec![
+                Span::styled("     ", Style::default()),
+                Span::styled(
+                    format!("{}", session.message_count),
+                    Style::default().fg(user_clr),
+                ),
+                Span::styled(" messages", Style::default().fg(dimmer)),
+                Span::styled(" · ", Style::default().fg(dimmer)),
+                Span::styled(tokens_display, Style::default().fg(dimmer)),
+            ])
+        } else {
+            Line::from(vec![
+                Span::styled("     ", Style::default()),
+                Span::styled(
+                    format!("{}", session.user_message_count),
+                    Style::default().fg(user_clr),
+                ),
+                Span::styled(" user", Style::default().fg(dimmer)),
+                Span::styled(" · ", Style::default().fg(dimmer)),
+                Span::styled(
+                    format!("{}", session.assistant_message_count),
+                    Style::default().fg(rgb(129, 199, 132)),
+                ),
+                Span::styled(" assistant", Style::default().fg(dimmer)),
+                Span::styled(" · ", Style::default().fg(dimmer)),
+                Span::styled(tokens_display, Style::default().fg(dimmer)),
+            ])
+        };
 
         let dir_part = if let Some(ref dir) = session.working_dir {
             let dir_display = if dir.chars().count() > 28 {

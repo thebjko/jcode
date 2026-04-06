@@ -9,6 +9,11 @@ static PENDING_MEMORY: Mutex<Option<HashMap<String, PendingMemory>>> = Mutex::ne
 static LAST_INJECTED_PROMPT_SIGNATURE: Mutex<Option<HashMap<String, (String, Instant)>>> =
     Mutex::new(None);
 
+/// Recently injected memory ID sets per session.
+/// Used to suppress near-duplicate re-injection even when formatting differs.
+static LAST_INJECTED_MEMORY_SET: Mutex<Option<HashMap<String, (HashSet<String>, Instant)>>> =
+    Mutex::new(None);
+
 /// Memory IDs that have already been injected into the conversation.
 /// Used to prevent the same memory from being re-injected on subsequent turns.
 /// Keyed by session ID.
@@ -20,6 +25,11 @@ static MEMORY_CHECK_IN_PROGRESS: Mutex<Option<HashSet<String>>> = Mutex::new(Non
 
 /// Suppress repeated identical memory payloads within this many seconds.
 const MEMORY_REPEAT_SUPPRESSION_SECS: u64 = 90;
+/// Suppress substantially overlapping memory sets for a bit longer.
+const MEMORY_SET_REPEAT_SUPPRESSION_SECS: u64 = 180;
+/// If a new pending payload overlaps this much with the last injected set,
+/// treat it as too similar to surface again immediately.
+const MEMORY_SET_OVERLAP_SUPPRESSION_RATIO: f32 = 0.8;
 
 /// A pending memory result from async checking.
 #[derive(Debug, Clone)]
@@ -54,6 +64,20 @@ fn prompt_signature(prompt: &str) -> String {
         .to_lowercase()
 }
 
+fn memory_set(ids: &[String]) -> HashSet<String> {
+    ids.iter().cloned().collect()
+}
+
+fn memory_overlap_ratio(left: &HashSet<String>, right: &HashSet<String>) -> f32 {
+    if left.is_empty() || right.is_empty() {
+        return 0.0;
+    }
+
+    let intersection = left.intersection(right).count() as f32;
+    let baseline = left.len().max(right.len()) as f32;
+    intersection / baseline
+}
+
 /// Take pending memory if available and fresh for the given session.
 pub fn take_pending_memory(session_id: &str) -> Option<PendingMemory> {
     if let Ok(mut guard) = PENDING_MEMORY.lock() {
@@ -79,6 +103,26 @@ pub fn take_pending_memory(session_id: &str) -> Option<PendingMemory> {
                     }
                 }
                 sig_map.insert(session_id.to_string(), (sig, Instant::now()));
+            }
+
+            if !pending.memory_ids.is_empty() {
+                let pending_set = memory_set(&pending.memory_ids);
+                if let Ok(mut last_guard) = LAST_INJECTED_MEMORY_SET.lock() {
+                    let set_map = last_guard.get_or_insert_with(HashMap::new);
+                    if let Some((last_set, last_at)) = set_map.get(session_id) {
+                        let overlap = memory_overlap_ratio(last_set, &pending_set);
+                        if overlap >= MEMORY_SET_OVERLAP_SUPPRESSION_RATIO
+                            && last_at.elapsed().as_secs() < MEMORY_SET_REPEAT_SUPPRESSION_SECS
+                        {
+                            crate::memory_log::log_pending_discarded(
+                                session_id,
+                                "overlapping memory set suppressed",
+                            );
+                            return None;
+                        }
+                    }
+                    set_map.insert(session_id.to_string(), (pending_set, Instant::now()));
+                }
             }
 
             if !pending.memory_ids.is_empty() {
@@ -125,6 +169,23 @@ pub fn set_pending_memory_with_ids_and_display(
 
     if let Ok(mut guard) = PENDING_MEMORY.lock() {
         let map = guard.get_or_insert_with(HashMap::new);
+        let new_sig = prompt_signature(&prompt);
+        let new_memory_set = memory_set(&memory_ids);
+
+        if let Some(existing) = map.get(session_id)
+            && existing.is_fresh()
+        {
+            let existing_sig = prompt_signature(&existing.prompt);
+            let overlap = memory_overlap_ratio(&memory_set(&existing.memory_ids), &new_memory_set);
+            if existing_sig == new_sig || overlap >= MEMORY_SET_OVERLAP_SUPPRESSION_RATIO {
+                crate::memory_log::log_pending_discarded(
+                    session_id,
+                    "similar pending payload already queued",
+                );
+                return;
+            }
+        }
+
         map.insert(
             session_id.to_string(),
             PendingMemory {
@@ -202,6 +263,17 @@ pub fn is_memory_injected_any(id: &str) -> bool {
 
 /// Clear injected memory tracking for a session (call on session reset or topic change).
 pub fn clear_injected_memories(session_id: &str) {
+    if let Ok(mut guard) = LAST_INJECTED_PROMPT_SIGNATURE.lock() {
+        if let Some(map) = guard.as_mut() {
+            map.remove(session_id);
+        }
+    }
+    if let Ok(mut guard) = LAST_INJECTED_MEMORY_SET.lock() {
+        if let Some(map) = guard.as_mut() {
+            map.remove(session_id);
+        }
+    }
+
     if let Ok(mut guard) = INJECTED_MEMORY_IDS.lock() {
         if let Some(outer) = guard.as_mut() {
             if let Some(set) = outer.remove(session_id) {
@@ -219,6 +291,13 @@ pub fn clear_injected_memories(session_id: &str) {
 
 /// Clear all injected memory tracking across all sessions.
 pub fn clear_all_injected_memories() {
+    if let Ok(mut guard) = LAST_INJECTED_PROMPT_SIGNATURE.lock() {
+        *guard = None;
+    }
+    if let Ok(mut guard) = LAST_INJECTED_MEMORY_SET.lock() {
+        *guard = None;
+    }
+
     if let Ok(mut guard) = INJECTED_MEMORY_IDS.lock() {
         if let Some(outer) = guard.as_ref() {
             let total: usize = outer.values().map(|s| s.len()).sum();
@@ -246,6 +325,11 @@ pub fn clear_pending_memory(session_id: &str) {
             map.remove(session_id);
         }
     }
+    if let Ok(mut guard) = LAST_INJECTED_MEMORY_SET.lock() {
+        if let Some(map) = guard.as_mut() {
+            map.remove(session_id);
+        }
+    }
     clear_injected_memories(session_id);
 }
 
@@ -255,6 +339,9 @@ pub fn clear_all_pending_memory() {
         *guard = None;
     }
     if let Ok(mut guard) = LAST_INJECTED_PROMPT_SIGNATURE.lock() {
+        *guard = None;
+    }
+    if let Ok(mut guard) = LAST_INJECTED_MEMORY_SET.lock() {
         *guard = None;
     }
     clear_all_injected_memories();

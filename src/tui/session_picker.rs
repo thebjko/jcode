@@ -64,6 +64,8 @@ pub struct SessionInfo {
     pub source: SessionSource,
     /// How this entry should be resumed when selected.
     pub resume_target: ResumeTarget,
+    /// Backing external transcript/storage path when available.
+    pub external_path: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -533,36 +535,53 @@ impl SessionPicker {
             return;
         }
 
-        let Some(session_id) =
-            self.session_by_ref(session_ref)
-                .and_then(|s| match &s.resume_target {
-                    ResumeTarget::JcodeSession { session_id } => Some(session_id.clone()),
-                    ResumeTarget::ClaudeCodeSession { session_id } => Some(session_id.clone()),
-                    ResumeTarget::CodexSession { session_id } => Some(session_id.clone()),
-                    _ => None,
-                })
+        let Some((resume_target, session_id, external_path)) =
+            self.session_by_ref(session_ref).map(|s| {
+                (
+                    s.resume_target.clone(),
+                    match &s.resume_target {
+                        ResumeTarget::JcodeSession { session_id } => Some(session_id.clone()),
+                        ResumeTarget::ClaudeCodeSession { session_id } => Some(session_id.clone()),
+                        ResumeTarget::CodexSession { session_id } => Some(session_id.clone()),
+                        _ => None,
+                    },
+                    s.external_path.clone(),
+                )
+            })
         else {
             return;
         };
+        let Some(session_id) = session_id else {
+            return;
+        };
 
-        let preview = match self
-            .session_by_ref(session_ref)
-            .map(|s| s.resume_target.clone())
-        {
-            Some(ResumeTarget::JcodeSession { .. }) => {
+        let preview = match resume_target {
+            ResumeTarget::JcodeSession { .. } => {
                 let Ok(session) = Session::load(&session_id) else {
                     return;
                 };
                 build_messages_preview(&session)
             }
-            Some(ResumeTarget::ClaudeCodeSession { .. }) => {
-                let Some(preview) = loading::load_claude_code_preview(&session_id) else {
+            ResumeTarget::ClaudeCodeSession { .. } => {
+                let preview = external_path
+                    .as_deref()
+                    .and_then(|path| {
+                        loading::load_claude_code_preview_from_path(std::path::Path::new(path))
+                    })
+                    .or_else(|| loading::load_claude_code_preview(&session_id));
+                let Some(preview) = preview else {
                     return;
                 };
                 preview
             }
-            Some(ResumeTarget::CodexSession { .. }) => {
-                let Some(preview) = loading::load_codex_preview(&session_id) else {
+            ResumeTarget::CodexSession { .. } => {
+                let preview = external_path
+                    .as_deref()
+                    .and_then(|path| {
+                        loading::load_codex_preview_from_path(std::path::Path::new(path))
+                    })
+                    .or_else(|| loading::load_codex_preview(&session_id));
+                let Some(preview) = preview else {
                     return;
                 };
                 preview
@@ -1385,6 +1404,7 @@ mod tests {
             resume_target: ResumeTarget::JcodeSession {
                 session_id: id.to_string(),
             },
+            external_path: None,
         }
     }
 

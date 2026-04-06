@@ -245,6 +245,19 @@ const MIN_TURNS_FOR_EXTRACTION: usize = 4;
 /// This ensures memories are captured during long single-topic sessions.
 const PERIODIC_EXTRACTION_INTERVAL: usize = 12;
 
+/// Skip repeated relevance checks when the formatted context is unchanged.
+const RELEVANCE_CONTEXT_REPEAT_SUPPRESSION_SECS: u64 = 30;
+
+fn relevance_context_signature(context: &str) -> String {
+    context
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_lowercase)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn bump_turn_stat() {
     if let Ok(mut stats) = MEMORY_AGENT_STATS.lock() {
         stats.turns_processed = stats.turns_processed.saturating_add(1);
@@ -267,6 +280,10 @@ struct SessionState {
     last_context_embedding: Option<Vec<f32>>,
     /// Last context string (for extraction when topic changes)
     last_context_string: Option<String>,
+    /// Signature of the last relevance-check context.
+    last_relevance_context_signature: Option<String>,
+    /// When the last relevance check was started for this session.
+    last_relevance_check_at: Option<Instant>,
     /// IDs of memories already surfaced to this session (avoid repetition)
     surfaced_memories: HashSet<String>,
     /// Conversation turn count for this session
@@ -385,6 +402,25 @@ impl MemoryAgent {
         let context = memory::format_context_for_relevance(&messages);
         if context.is_empty() {
             return Ok(());
+        }
+
+        let context_signature = relevance_context_signature(&context);
+        {
+            let ss = self.session_state(session_id);
+            if ss.last_relevance_context_signature.as_deref() == Some(context_signature.as_str())
+                && ss.last_relevance_check_at.is_some_and(|at| {
+                    at.elapsed().as_secs() < RELEVANCE_CONTEXT_REPEAT_SUPPRESSION_SECS
+                })
+            {
+                crate::logging::info(&format!(
+                    "[{}] Skipping memory relevance check for unchanged context",
+                    session_id
+                ));
+                return Ok(());
+            }
+
+            ss.last_relevance_context_signature = Some(context_signature);
+            ss.last_relevance_check_at = Some(Instant::now());
         }
 
         self.session_state(session_id).turns_since_extraction += 1;
