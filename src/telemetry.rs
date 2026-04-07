@@ -1,16 +1,18 @@
 use crate::storage;
+use chrono::{NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 const TELEMETRY_ENDPOINT: &str = "https://jcode-telemetry.jeremyhuang55555.workers.dev/v1/event";
 const ASYNC_SEND_TIMEOUT: Duration = Duration::from_secs(5);
 const BLOCKING_INSTALL_TIMEOUT: Duration = Duration::from_millis(1200);
 const BLOCKING_LIFECYCLE_TIMEOUT: Duration = Duration::from_millis(800);
+const TELEMETRY_SCHEMA_VERSION: u32 = 2;
 
 static SESSION_STATE: Mutex<Option<SessionTelemetry>> = Mutex::new(None);
 
@@ -24,25 +26,38 @@ static MODEL_SWITCHES: AtomicU32 = AtomicU32::new(0);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct InstallEvent {
+    event_id: String,
     id: String,
     event: &'static str,
     version: String,
     os: &'static str,
     arch: &'static str,
+    schema_version: u32,
+    build_channel: String,
+    is_git_checkout: bool,
+    is_ci: bool,
+    ran_from_cargo: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct UpgradeEvent {
+    event_id: String,
     id: String,
     event: &'static str,
     version: String,
     os: &'static str,
     arch: &'static str,
     from_version: String,
+    schema_version: u32,
+    build_channel: String,
+    is_git_checkout: bool,
+    is_ci: bool,
+    ran_from_cargo: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct AuthEvent {
+    event_id: String,
     id: String,
     event: &'static str,
     version: String,
@@ -50,11 +65,18 @@ struct AuthEvent {
     arch: &'static str,
     auth_provider: String,
     auth_method: String,
+    schema_version: u32,
+    build_channel: String,
+    is_git_checkout: bool,
+    is_ci: bool,
+    ran_from_cargo: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SessionStartEvent {
+    event_id: String,
     id: String,
+    session_id: String,
     event: &'static str,
     version: String,
     os: &'static str,
@@ -62,11 +84,62 @@ struct SessionStartEvent {
     provider_start: String,
     model_start: String,
     resumed_session: bool,
+    schema_version: u32,
+    build_channel: String,
+    is_git_checkout: bool,
+    is_ci: bool,
+    ran_from_cargo: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct OnboardingStepEvent {
+    event_id: String,
+    id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session_id: Option<String>,
+    event: &'static str,
+    version: String,
+    os: &'static str,
+    arch: &'static str,
+    step: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    auth_provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    auth_method: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    milestone_elapsed_ms: Option<u64>,
+    schema_version: u32,
+    build_channel: String,
+    is_git_checkout: bool,
+    is_ci: bool,
+    ran_from_cargo: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct FeedbackEvent {
+    event_id: String,
+    id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session_id: Option<String>,
+    event: &'static str,
+    version: String,
+    os: &'static str,
+    arch: &'static str,
+    feedback_rating: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    feedback_reason: Option<String>,
+    schema_version: u32,
+    build_channel: String,
+    is_git_checkout: bool,
+    is_ci: bool,
+    ran_from_cargo: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SessionLifecycleEvent {
+    event_id: String,
     id: String,
+    session_id: String,
     event: &'static str,
     version: String,
     os: &'static str,
@@ -86,6 +159,8 @@ struct SessionLifecycleEvent {
     first_assistant_response_ms: Option<u64>,
     first_tool_call_ms: Option<u64>,
     first_tool_success_ms: Option<u64>,
+    first_file_edit_ms: Option<u64>,
+    first_test_pass_ms: Option<u64>,
     tool_calls: u32,
     tool_failures: u32,
     executed_tool_calls: u32,
@@ -115,8 +190,52 @@ struct SessionLifecycleEvent {
     transport_cli_subprocess: u32,
     transport_native_http2: u32,
     transport_other: u32,
+    tool_cat_read_search: u32,
+    tool_cat_write: u32,
+    tool_cat_shell: u32,
+    tool_cat_web: u32,
+    tool_cat_memory: u32,
+    tool_cat_subagent: u32,
+    tool_cat_swarm: u32,
+    tool_cat_email: u32,
+    tool_cat_side_panel: u32,
+    tool_cat_goal: u32,
+    tool_cat_mcp: u32,
+    tool_cat_other: u32,
+    command_login_used: bool,
+    command_model_used: bool,
+    command_usage_used: bool,
+    command_resume_used: bool,
+    command_memory_used: bool,
+    command_swarm_used: bool,
+    command_goal_used: bool,
+    command_selfdev_used: bool,
+    command_feedback_used: bool,
+    command_other_used: bool,
+    workflow_chat_only: bool,
+    workflow_coding_used: bool,
+    workflow_research_used: bool,
+    workflow_tests_used: bool,
+    workflow_background_used: bool,
+    workflow_subagent_used: bool,
+    workflow_swarm_used: bool,
+    project_repo_present: bool,
+    project_lang_rust: bool,
+    project_lang_js_ts: bool,
+    project_lang_python: bool,
+    project_lang_go: bool,
+    project_lang_markdown: bool,
+    project_lang_mixed: bool,
+    days_since_install: Option<u32>,
+    active_days_7d: u32,
+    active_days_30d: u32,
     resumed_session: bool,
     end_reason: &'static str,
+    schema_version: u32,
+    build_channel: String,
+    is_git_checkout: bool,
+    is_ci: bool,
+    ran_from_cargo: bool,
     errors: ErrorCounts,
 }
 
@@ -130,6 +249,7 @@ struct ErrorCounts {
 }
 
 struct SessionTelemetry {
+    session_id: String,
     started_at: Instant,
     provider_start: String,
     model_start: String,
@@ -140,6 +260,8 @@ struct SessionTelemetry {
     first_assistant_response_ms: Option<u64>,
     first_tool_call_ms: Option<u64>,
     first_tool_success_ms: Option<u64>,
+    first_file_edit_ms: Option<u64>,
+    first_test_pass_ms: Option<u64>,
     tool_calls: u32,
     tool_failures: u32,
     executed_tool_calls: u32,
@@ -167,8 +289,72 @@ struct SessionTelemetry {
     transport_cli_subprocess: u32,
     transport_native_http2: u32,
     transport_other: u32,
+    tool_cat_read_search: u32,
+    tool_cat_write: u32,
+    tool_cat_shell: u32,
+    tool_cat_web: u32,
+    tool_cat_memory: u32,
+    tool_cat_subagent: u32,
+    tool_cat_swarm: u32,
+    tool_cat_email: u32,
+    tool_cat_side_panel: u32,
+    tool_cat_goal: u32,
+    tool_cat_mcp: u32,
+    tool_cat_other: u32,
+    command_login_used: bool,
+    command_model_used: bool,
+    command_usage_used: bool,
+    command_resume_used: bool,
+    command_memory_used: bool,
+    command_swarm_used: bool,
+    command_goal_used: bool,
+    command_selfdev_used: bool,
+    command_feedback_used: bool,
+    command_other_used: bool,
     resumed_session: bool,
     start_event_sent: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ProjectProfile {
+    repo_present: bool,
+    lang_rust: bool,
+    lang_js_ts: bool,
+    lang_python: bool,
+    lang_go: bool,
+    lang_markdown: bool,
+}
+
+impl ProjectProfile {
+    fn mixed(&self) -> bool {
+        [
+            self.lang_rust,
+            self.lang_js_ts,
+            self.lang_python,
+            self.lang_go,
+            self.lang_markdown,
+        ]
+        .into_iter()
+        .filter(|value| *value)
+        .count()
+            > 1
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ToolCategory {
+    ReadSearch,
+    Write,
+    Shell,
+    Web,
+    Memory,
+    Subagent,
+    Swarm,
+    Email,
+    SidePanel,
+    Goal,
+    Mcp,
+    Other,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -226,6 +412,22 @@ fn version_recorded_path() -> Option<PathBuf> {
     storage::jcode_dir()
         .ok()
         .map(|d| d.join("telemetry_version_sent"))
+}
+
+fn telemetry_state_path(name: &str) -> Option<PathBuf> {
+    storage::jcode_dir().ok().map(|d| d.join(name))
+}
+
+fn milestone_recorded_path(id: &str, step: &str) -> Option<PathBuf> {
+    telemetry_state_path(&format!(
+        "telemetry_milestone_{}_{}",
+        sanitize_telemetry_label(step),
+        id
+    ))
+}
+
+fn active_days_path(id: &str) -> Option<PathBuf> {
+    telemetry_state_path(&format!("telemetry_active_days_{}.txt", id))
 }
 
 fn write_private_file(path: &PathBuf, value: &str) {
@@ -287,11 +489,334 @@ fn mark_current_version_recorded() {
     }
 }
 
+fn new_event_id() -> String {
+    uuid::Uuid::new_v4().to_string()
+}
+
+fn build_channel() -> String {
+    if std::env::var(crate::cli::selfdev::CLIENT_SELFDEV_ENV).is_ok() {
+        return "selfdev".to_string();
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        let path = exe.to_string_lossy();
+        if path.contains("/target/debug/") || path.contains("\\target\\debug\\") {
+            return "debug".to_string();
+        }
+        if path.contains("/target/release/") || path.contains("\\target\\release\\") {
+            return "local_build".to_string();
+        }
+    }
+    if crate::build::get_repo_dir().is_some() {
+        return "git_checkout".to_string();
+    }
+    "release".to_string()
+}
+
+fn is_git_checkout() -> bool {
+    crate::build::get_repo_dir().is_some()
+}
+
+fn is_ci() -> bool {
+    [
+        "CI",
+        "GITHUB_ACTIONS",
+        "BUILDKITE",
+        "JENKINS_URL",
+        "GITLAB_CI",
+        "CIRCLECI",
+    ]
+    .iter()
+    .any(|key| std::env::var(key).is_ok())
+}
+
+fn ran_from_cargo() -> bool {
+    std::env::var("CARGO").is_ok() || std::env::var("CARGO_MANIFEST_DIR").is_ok()
+}
+
+fn install_anchor_time(id: &str) -> Option<SystemTime> {
+    install_recorded_path()
+        .filter(|path| install_recorded_for_id(id) && path.exists())
+        .and_then(|path| std::fs::metadata(path).ok())
+        .and_then(|meta| meta.modified().ok())
+        .or_else(|| {
+            telemetry_id_path()
+                .and_then(|path| std::fs::metadata(path).ok())
+                .and_then(|meta| meta.modified().ok())
+        })
+}
+
+fn elapsed_since_install_ms(id: &str) -> Option<u64> {
+    let anchor = install_anchor_time(id)?;
+    let elapsed = SystemTime::now().duration_since(anchor).ok()?;
+    Some(elapsed.as_millis().min(u128::from(u64::MAX)) as u64)
+}
+
+fn days_since_install(id: &str) -> Option<u32> {
+    let anchor = install_anchor_time(id)?;
+    let elapsed = SystemTime::now().duration_since(anchor).ok()?;
+    Some((elapsed.as_secs() / 86_400).min(u64::from(u32::MAX)) as u32)
+}
+
+fn milestone_recorded(id: &str, step: &str) -> bool {
+    milestone_recorded_path(id, step)
+        .map(|path| path.exists())
+        .unwrap_or(false)
+}
+
+fn mark_milestone_recorded(id: &str, step: &str) {
+    if let Some(path) = milestone_recorded_path(id, step) {
+        write_private_file(&path, "1");
+    }
+}
+
+fn current_session_id() -> Option<String> {
+    SESSION_STATE
+        .lock()
+        .ok()
+        .and_then(|guard| guard.as_ref().map(|state| state.session_id.clone()))
+}
+
+fn telemetry_envelope() -> (u32, String, bool, bool, bool) {
+    (
+        TELEMETRY_SCHEMA_VERSION,
+        build_channel(),
+        is_git_checkout(),
+        is_ci(),
+        ran_from_cargo(),
+    )
+}
+
+fn emit_onboarding_step_once(
+    step: &'static str,
+    auth_provider: Option<&str>,
+    auth_method: Option<&str>,
+) {
+    if !is_enabled() {
+        return;
+    }
+    let Some(id) = get_or_create_id() else {
+        return;
+    };
+    if milestone_recorded(&id, step) {
+        return;
+    }
+    let (schema_version, build_channel, git_checkout, ci, from_cargo) = telemetry_envelope();
+    let event = OnboardingStepEvent {
+        event_id: new_event_id(),
+        id: id.clone(),
+        session_id: current_session_id(),
+        event: "onboarding_step",
+        version: version(),
+        os: std::env::consts::OS,
+        arch: std::env::consts::ARCH,
+        step,
+        auth_provider: auth_provider.map(sanitize_telemetry_label),
+        auth_method: auth_method.map(sanitize_telemetry_label),
+        milestone_elapsed_ms: elapsed_since_install_ms(&id),
+        schema_version,
+        build_channel,
+        is_git_checkout: git_checkout,
+        is_ci: ci,
+        ran_from_cargo: from_cargo,
+    };
+    if let Ok(payload) = serde_json::to_value(&event)
+        && send_payload(payload, DeliveryMode::Background)
+    {
+        mark_milestone_recorded(&id, step);
+    }
+}
+
+pub fn record_feedback(rating: &str, reason: Option<&str>) {
+    if !is_enabled() {
+        return;
+    }
+    let Some(id) = get_or_create_id() else {
+        return;
+    };
+    let normalized_rating = sanitize_telemetry_label(rating).to_ascii_lowercase();
+    if normalized_rating.is_empty() {
+        return;
+    }
+    let normalized_reason = reason
+        .map(sanitize_telemetry_label)
+        .filter(|value| !value.is_empty());
+    let (schema_version, build_channel, git_checkout, ci, from_cargo) = telemetry_envelope();
+    let event = FeedbackEvent {
+        event_id: new_event_id(),
+        id,
+        session_id: current_session_id(),
+        event: "feedback",
+        version: version(),
+        os: std::env::consts::OS,
+        arch: std::env::consts::ARCH,
+        feedback_rating: normalized_rating,
+        feedback_reason: normalized_reason,
+        schema_version,
+        build_channel,
+        is_git_checkout: git_checkout,
+        is_ci: ci,
+        ran_from_cargo: from_cargo,
+    };
+    if let Ok(payload) = serde_json::to_value(&event) {
+        let _ = send_payload(payload, DeliveryMode::Background);
+    }
+}
+
+fn update_active_days(id: &str) -> (u32, u32) {
+    let Some(path) = active_days_path(id) else {
+        return (0, 0);
+    };
+    let today = Utc::now().date_naive();
+    let mut days = std::fs::read_to_string(&path)
+        .ok()
+        .into_iter()
+        .flat_map(|text| {
+            text.lines()
+                .map(str::trim)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .filter_map(|line| NaiveDate::parse_from_str(&line, "%Y-%m-%d").ok())
+        .collect::<Vec<_>>();
+    days.push(today);
+    days.sort_unstable();
+    days.dedup();
+    let rendered = days
+        .iter()
+        .map(NaiveDate::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    write_private_file(&path, &rendered);
+    let days_7 = days
+        .iter()
+        .filter(|day| (today.signed_duration_since(**day).num_days()) < 7)
+        .count()
+        .min(u32::MAX as usize) as u32;
+    let days_30 = days
+        .iter()
+        .filter(|day| (today.signed_duration_since(**day).num_days()) < 30)
+        .count()
+        .min(u32::MAX as usize) as u32;
+    (days_7, days_30)
+}
+
+fn detect_project_profile() -> ProjectProfile {
+    fn keep_project_entry(entry: &walkdir::DirEntry) -> bool {
+        if !entry.file_type().is_dir() {
+            return true;
+        }
+        let name = entry.file_name().to_str().unwrap_or_default();
+        !matches!(
+            name,
+            ".git" | "target" | "node_modules" | "dist" | "build" | ".next"
+        )
+    }
+
+    let cwd = std::env::current_dir().ok();
+    let mut profile = ProjectProfile::default();
+    let Some(root) = cwd.as_deref() else {
+        return profile;
+    };
+    profile.repo_present = root.join(".git").exists() || crate::build::is_jcode_repo(root);
+    let mut scanned_files = 0usize;
+    for entry in walkdir::WalkDir::new(root)
+        .max_depth(3)
+        .into_iter()
+        .filter_entry(keep_project_entry)
+        .filter_map(Result::ok)
+    {
+        if scanned_files >= 400 {
+            break;
+        }
+        if entry.file_type().is_dir() {
+            continue;
+        }
+        scanned_files += 1;
+        match entry
+            .path()
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .unwrap_or_default()
+        {
+            "rs" => profile.lang_rust = true,
+            "js" | "jsx" | "ts" | "tsx" => profile.lang_js_ts = true,
+            "py" => profile.lang_python = true,
+            "go" => profile.lang_go = true,
+            "md" | "mdx" => profile.lang_markdown = true,
+            _ => {}
+        }
+    }
+    profile
+}
+
 fn now_ms_since(started_at: Instant) -> u64 {
     started_at.elapsed().as_millis().min(u128::from(u64::MAX)) as u64
 }
 
+fn classify_tool_category(name: &str) -> ToolCategory {
+    match name {
+        "read"
+        | "glob"
+        | "grep"
+        | "agentgrep"
+        | "ls"
+        | "conversation_search"
+        | "session_search" => ToolCategory::ReadSearch,
+        "write" | "edit" | "multiedit" | "patch" | "apply_patch" => ToolCategory::Write,
+        "bash" | "bg" => ToolCategory::Shell,
+        "webfetch" | "websearch" | "codesearch" | "open" => ToolCategory::Web,
+        "memory" => ToolCategory::Memory,
+        "subagent" => ToolCategory::Subagent,
+        "communicate" => ToolCategory::Swarm,
+        "gmail" => ToolCategory::Email,
+        "side_panel" => ToolCategory::SidePanel,
+        "goal" => ToolCategory::Goal,
+        "mcp" => ToolCategory::Mcp,
+        other if other.starts_with("mcp__") => ToolCategory::Mcp,
+        _ => ToolCategory::Other,
+    }
+}
+
+fn increment_tool_category(state: &mut SessionTelemetry, category: ToolCategory) {
+    match category {
+        ToolCategory::ReadSearch => state.tool_cat_read_search += 1,
+        ToolCategory::Write => state.tool_cat_write += 1,
+        ToolCategory::Shell => state.tool_cat_shell += 1,
+        ToolCategory::Web => state.tool_cat_web += 1,
+        ToolCategory::Memory => state.tool_cat_memory += 1,
+        ToolCategory::Subagent => state.tool_cat_subagent += 1,
+        ToolCategory::Swarm => state.tool_cat_swarm += 1,
+        ToolCategory::Email => state.tool_cat_email += 1,
+        ToolCategory::SidePanel => state.tool_cat_side_panel += 1,
+        ToolCategory::Goal => state.tool_cat_goal += 1,
+        ToolCategory::Mcp => state.tool_cat_mcp += 1,
+        ToolCategory::Other => state.tool_cat_other += 1,
+    }
+}
+
+fn mark_command_family_usage(state: &mut SessionTelemetry, command: &str) {
+    let family = command
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .trim_start_matches('/');
+    match family {
+        "login" | "auth" => state.command_login_used = true,
+        "model" => state.command_model_used = true,
+        "usage" => state.command_usage_used = true,
+        "resume" | "session" | "back" | "catchup" => state.command_resume_used = true,
+        "memory" => state.command_memory_used = true,
+        "swarm" | "agents" => state.command_swarm_used = true,
+        "goal" | "goals" => state.command_goal_used = true,
+        "selfdev" | "dev" => state.command_selfdev_used = true,
+        "feedback" => state.command_feedback_used = true,
+        _ => state.command_other_used = true,
+    }
+}
+
 fn mark_tool_feature_usage(state: &mut SessionTelemetry, name: &str, input: &Value) {
+    increment_tool_category(state, classify_tool_category(name));
+
     match name {
         "memory" => state.feature_memory_used = true,
         "communicate" => state.feature_swarm_used = true,
@@ -327,15 +852,35 @@ fn mark_tool_feature_usage(state: &mut SessionTelemetry, name: &str, input: &Val
 fn mark_tool_success_side_effects(state: &mut SessionTelemetry, name: &str, input: &Value) {
     if looks_like_test_run(name, input) {
         state.tests_passed += 1;
+        if state.first_test_pass_ms.is_none() {
+            state.first_test_pass_ms = Some(now_ms_since(state.started_at));
+        }
     }
 
     if state.first_tool_success_ms.is_none() {
         state.first_tool_success_ms = Some(now_ms_since(state.started_at));
     }
 
+    if matches!(
+        name,
+        "write" | "edit" | "multiedit" | "patch" | "apply_patch"
+    ) && state.first_file_edit_ms.is_none()
+    {
+        state.first_file_edit_ms = Some(now_ms_since(state.started_at));
+    }
+
     if name == "memory" {
         state.feature_memory_used = true;
     }
+}
+
+pub fn record_command_family(command: &str) {
+    if let Ok(mut guard) = SESSION_STATE.lock() {
+        if let Some(ref mut state) = *guard {
+            mark_command_family_usage(state, command);
+        }
+    }
+    maybe_emit_session_start();
 }
 
 fn looks_like_test_run(name: &str, input: &Value) -> bool {
@@ -497,11 +1042,14 @@ fn maybe_emit_session_start() {
             return;
         }
         state.start_event_sent = true;
+        let (schema_version, build_channel, git_checkout, ci, from_cargo) = telemetry_envelope();
         SessionStartEvent {
+            event_id: new_event_id(),
             id: match get_or_create_id() {
                 Some(id) => id,
                 None => return,
             },
+            session_id: state.session_id.clone(),
             event: "session_start",
             version: version(),
             os: std::env::consts::OS,
@@ -509,6 +1057,11 @@ fn maybe_emit_session_start() {
             provider_start: state.provider_start.clone(),
             model_start: state.model_start.clone(),
             resumed_session: state.resumed_session,
+            schema_version,
+            build_channel,
+            is_git_checkout: git_checkout,
+            is_ci: ci,
+            ran_from_cargo: from_cargo,
         }
     };
     if let Ok(payload) = serde_json::to_value(&event) {
@@ -517,8 +1070,11 @@ fn maybe_emit_session_start() {
 }
 
 fn emit_session_start_for_state(id: String, state: &SessionTelemetry, mode: DeliveryMode) -> bool {
+    let (schema_version, build_channel, git_checkout, ci, from_cargo) = telemetry_envelope();
     let event = SessionStartEvent {
+        event_id: new_event_id(),
         id,
+        session_id: state.session_id.clone(),
         event: "session_start",
         version: version(),
         os: std::env::consts::OS,
@@ -526,6 +1082,11 @@ fn emit_session_start_for_state(id: String, state: &SessionTelemetry, mode: Deli
         provider_start: state.provider_start.clone(),
         model_start: state.model_start.clone(),
         resumed_session: state.resumed_session,
+        schema_version,
+        build_channel,
+        is_git_checkout: git_checkout,
+        is_ci: ci,
+        ran_from_cargo: from_cargo,
     };
     if let Ok(payload) = serde_json::to_value(&event) {
         return send_payload(payload, mode);
@@ -545,12 +1106,19 @@ pub fn record_install_if_first_run() {
     if install_recorded_for_id(&id) {
         return;
     }
+    let (schema_version, build_channel, git_checkout, ci, from_cargo) = telemetry_envelope();
     let event = InstallEvent {
+        event_id: new_event_id(),
         id: id.clone(),
         event: "install",
         version: version(),
         os: std::env::consts::OS,
         arch: std::env::consts::ARCH,
+        schema_version,
+        build_channel,
+        is_git_checkout: git_checkout,
+        is_ci: ci,
+        ran_from_cargo: from_cargo,
     };
     if let Ok(payload) = serde_json::to_value(&event) {
         if send_payload(payload, DeliveryMode::Blocking(BLOCKING_INSTALL_TIMEOUT)) {
@@ -558,6 +1126,7 @@ pub fn record_install_if_first_run() {
         }
     }
     if first_run {
+        emit_onboarding_step_once("first_run", None, None);
         show_first_run_notice();
     }
     mark_current_version_recorded();
@@ -578,18 +1147,33 @@ pub fn record_upgrade_if_needed() {
     let Some(id) = get_or_create_id() else {
         return;
     };
+    let (schema_version, build_channel, git_checkout, ci, from_cargo) = telemetry_envelope();
     let event = UpgradeEvent {
+        event_id: new_event_id(),
         id,
         event: "upgrade",
         version: current,
         os: std::env::consts::OS,
         arch: std::env::consts::ARCH,
         from_version: previous,
+        schema_version,
+        build_channel,
+        is_git_checkout: git_checkout,
+        is_ci: ci,
+        ran_from_cargo: from_cargo,
     };
     if let Ok(payload) = serde_json::to_value(&event) {
         let _ = send_payload(payload, DeliveryMode::Background);
     }
     mark_current_version_recorded();
+}
+
+pub fn record_provider_selected(provider: &str) {
+    emit_onboarding_step_once("provider_selected", Some(provider), None);
+}
+
+pub fn record_auth_started(provider: &str, method: &str) {
+    emit_onboarding_step_once("auth_started", Some(provider), Some(method));
 }
 
 pub fn record_auth_success(provider: &str, method: &str) {
@@ -599,7 +1183,9 @@ pub fn record_auth_success(provider: &str, method: &str) {
     let Some(id) = get_or_create_id() else {
         return;
     };
+    let (schema_version, build_channel, git_checkout, ci, from_cargo) = telemetry_envelope();
     let event = AuthEvent {
+        event_id: new_event_id(),
         id,
         event: "auth_success",
         version: version(),
@@ -607,10 +1193,16 @@ pub fn record_auth_success(provider: &str, method: &str) {
         arch: std::env::consts::ARCH,
         auth_provider: sanitize_telemetry_label(provider),
         auth_method: sanitize_telemetry_label(method),
+        schema_version,
+        build_channel,
+        is_git_checkout: git_checkout,
+        is_ci: ci,
+        ran_from_cargo: from_cargo,
     };
     if let Ok(payload) = serde_json::to_value(&event) {
         let _ = send_payload(payload, DeliveryMode::Background);
     }
+    emit_onboarding_step_once("auth_success", Some(provider), Some(method));
 }
 
 pub fn begin_session(provider: &str, model: &str) {
@@ -626,6 +1218,7 @@ fn begin_session_with_mode(provider: &str, model: &str, resumed_session: bool) {
         return;
     }
     let state = SessionTelemetry {
+        session_id: uuid::Uuid::new_v4().to_string(),
         started_at: Instant::now(),
         provider_start: sanitize_telemetry_label(provider),
         model_start: sanitize_telemetry_label(model),
@@ -636,6 +1229,8 @@ fn begin_session_with_mode(provider: &str, model: &str, resumed_session: bool) {
         first_assistant_response_ms: None,
         first_tool_call_ms: None,
         first_tool_success_ms: None,
+        first_file_edit_ms: None,
+        first_test_pass_ms: None,
         tool_calls: 0,
         tool_failures: 0,
         executed_tool_calls: 0,
@@ -663,6 +1258,28 @@ fn begin_session_with_mode(provider: &str, model: &str, resumed_session: bool) {
         transport_cli_subprocess: 0,
         transport_native_http2: 0,
         transport_other: 0,
+        tool_cat_read_search: 0,
+        tool_cat_write: 0,
+        tool_cat_shell: 0,
+        tool_cat_web: 0,
+        tool_cat_memory: 0,
+        tool_cat_subagent: 0,
+        tool_cat_swarm: 0,
+        tool_cat_email: 0,
+        tool_cat_side_panel: 0,
+        tool_cat_goal: 0,
+        tool_cat_mcp: 0,
+        tool_cat_other: 0,
+        command_login_used: false,
+        command_model_used: false,
+        command_usage_used: false,
+        command_resume_used: false,
+        command_memory_used: false,
+        command_swarm_used: false,
+        command_goal_used: false,
+        command_selfdev_used: false,
+        command_feedback_used: false,
+        command_other_used: false,
         resumed_session,
         start_event_sent: false,
     };
@@ -679,6 +1296,7 @@ pub fn record_turn() {
             state.had_user_prompt = true;
         }
     }
+    emit_onboarding_step_once("first_prompt_sent", None, None);
     maybe_emit_session_start();
 }
 
@@ -692,6 +1310,7 @@ pub fn record_assistant_response() {
             state.assistant_responses += 1;
         }
     }
+    emit_onboarding_step_once("first_assistant_response", None, None);
     maybe_emit_session_start();
 }
 
@@ -795,6 +1414,15 @@ pub fn record_tool_execution(name: &str, input: &Value, succeeded: bool, latency
             }
         }
     }
+    if succeeded {
+        emit_onboarding_step_once("first_successful_tool", None, None);
+        if matches!(
+            name,
+            "write" | "edit" | "multiedit" | "patch" | "apply_patch"
+        ) {
+            emit_onboarding_step_once("first_file_edit", None, None);
+        }
+    }
     maybe_emit_session_start();
 }
 
@@ -839,6 +1467,7 @@ fn emit_lifecycle_event(
         };
         let state = match guard.as_ref() {
             Some(s) => SessionTelemetry {
+                session_id: s.session_id.clone(),
                 started_at: s.started_at,
                 provider_start: s.provider_start.clone(),
                 model_start: s.model_start.clone(),
@@ -849,6 +1478,8 @@ fn emit_lifecycle_event(
                 first_assistant_response_ms: s.first_assistant_response_ms,
                 first_tool_call_ms: s.first_tool_call_ms,
                 first_tool_success_ms: s.first_tool_success_ms,
+                first_file_edit_ms: s.first_file_edit_ms,
+                first_test_pass_ms: s.first_test_pass_ms,
                 tool_calls: s.tool_calls,
                 tool_failures: s.tool_failures,
                 executed_tool_calls: s.executed_tool_calls,
@@ -876,6 +1507,28 @@ fn emit_lifecycle_event(
                 transport_cli_subprocess: s.transport_cli_subprocess,
                 transport_native_http2: s.transport_native_http2,
                 transport_other: s.transport_other,
+                tool_cat_read_search: s.tool_cat_read_search,
+                tool_cat_write: s.tool_cat_write,
+                tool_cat_shell: s.tool_cat_shell,
+                tool_cat_web: s.tool_cat_web,
+                tool_cat_memory: s.tool_cat_memory,
+                tool_cat_subagent: s.tool_cat_subagent,
+                tool_cat_swarm: s.tool_cat_swarm,
+                tool_cat_email: s.tool_cat_email,
+                tool_cat_side_panel: s.tool_cat_side_panel,
+                tool_cat_goal: s.tool_cat_goal,
+                tool_cat_mcp: s.tool_cat_mcp,
+                tool_cat_other: s.tool_cat_other,
+                command_login_used: s.command_login_used,
+                command_model_used: s.command_model_used,
+                command_usage_used: s.command_usage_used,
+                command_resume_used: s.command_resume_used,
+                command_memory_used: s.command_memory_used,
+                command_swarm_used: s.command_swarm_used,
+                command_goal_used: s.command_goal_used,
+                command_selfdev_used: s.command_selfdev_used,
+                command_feedback_used: s.command_feedback_used,
+                command_other_used: s.command_other_used,
                 resumed_session: s.resumed_session,
                 start_event_sent: s.start_event_sent,
             },
@@ -906,8 +1559,27 @@ fn emit_lifecycle_event(
     let abandoned_before_response = state.had_user_prompt
         && !state.had_assistant_response
         && state.executed_tool_successes == 0;
+    let workflow_coding_used = state.file_write_calls > 0 || state.tool_cat_write > 0;
+    let workflow_research_used = state.feature_web_used || state.tool_cat_web > 0;
+    let workflow_tests_used = state.tests_run > 0 || state.tests_passed > 0;
+    let workflow_background_used = state.feature_background_used;
+    let workflow_subagent_used = state.feature_subagent_used || state.tool_cat_subagent > 0;
+    let workflow_swarm_used = state.feature_swarm_used || state.tool_cat_swarm > 0;
+    let workflow_chat_only = state.had_user_prompt
+        && !workflow_coding_used
+        && !workflow_research_used
+        && !workflow_tests_used
+        && !workflow_background_used
+        && !workflow_subagent_used
+        && !workflow_swarm_used;
+    let project_profile = detect_project_profile();
+    let (active_days_7d, active_days_30d) = update_active_days(&id);
+    let days_since_install = days_since_install(&id);
+    let (schema_version, build_channel, git_checkout, ci, from_cargo) = telemetry_envelope();
     let event = SessionLifecycleEvent {
+        event_id: new_event_id(),
         id,
+        session_id: state.session_id.clone(),
         event: event_name,
         version: version(),
         os: std::env::consts::OS,
@@ -927,6 +1599,8 @@ fn emit_lifecycle_event(
         first_assistant_response_ms: state.first_assistant_response_ms,
         first_tool_call_ms: state.first_tool_call_ms,
         first_tool_success_ms: state.first_tool_success_ms,
+        first_file_edit_ms: state.first_file_edit_ms,
+        first_test_pass_ms: state.first_test_pass_ms,
         tool_calls: state.tool_calls,
         tool_failures: state.tool_failures,
         executed_tool_calls: state.executed_tool_calls,
@@ -956,12 +1630,59 @@ fn emit_lifecycle_event(
         transport_cli_subprocess: state.transport_cli_subprocess,
         transport_native_http2: state.transport_native_http2,
         transport_other: state.transport_other,
+        tool_cat_read_search: state.tool_cat_read_search,
+        tool_cat_write: state.tool_cat_write,
+        tool_cat_shell: state.tool_cat_shell,
+        tool_cat_web: state.tool_cat_web,
+        tool_cat_memory: state.tool_cat_memory,
+        tool_cat_subagent: state.tool_cat_subagent,
+        tool_cat_swarm: state.tool_cat_swarm,
+        tool_cat_email: state.tool_cat_email,
+        tool_cat_side_panel: state.tool_cat_side_panel,
+        tool_cat_goal: state.tool_cat_goal,
+        tool_cat_mcp: state.tool_cat_mcp,
+        tool_cat_other: state.tool_cat_other,
+        command_login_used: state.command_login_used,
+        command_model_used: state.command_model_used,
+        command_usage_used: state.command_usage_used,
+        command_resume_used: state.command_resume_used,
+        command_memory_used: state.command_memory_used,
+        command_swarm_used: state.command_swarm_used,
+        command_goal_used: state.command_goal_used,
+        command_selfdev_used: state.command_selfdev_used,
+        command_feedback_used: state.command_feedback_used,
+        command_other_used: state.command_other_used,
+        workflow_chat_only,
+        workflow_coding_used,
+        workflow_research_used,
+        workflow_tests_used,
+        workflow_background_used,
+        workflow_subagent_used,
+        workflow_swarm_used,
+        project_repo_present: project_profile.repo_present,
+        project_lang_rust: project_profile.lang_rust,
+        project_lang_js_ts: project_profile.lang_js_ts,
+        project_lang_python: project_profile.lang_python,
+        project_lang_go: project_profile.lang_go,
+        project_lang_markdown: project_profile.lang_markdown,
+        project_lang_mixed: project_profile.mixed(),
+        days_since_install,
+        active_days_7d,
+        active_days_30d,
         resumed_session: state.resumed_session,
         end_reason: reason.as_str(),
+        schema_version,
+        build_channel,
+        is_git_checkout: git_checkout,
+        is_ci: ci,
+        ran_from_cargo: from_cargo,
         errors,
     };
     if let Ok(payload) = serde_json::to_value(&event) {
         let _ = send_payload(payload, DeliveryMode::Blocking(BLOCKING_LIFECYCLE_TIMEOUT));
+    }
+    if session_success {
+        emit_onboarding_step_once("first_session_success", None, None);
     }
     reset_counters();
 }
@@ -1036,7 +1757,9 @@ mod tests {
     #[test]
     fn test_session_start_event_serialization() {
         let event = SessionStartEvent {
+            event_id: "event-1".to_string(),
             id: "test-uuid".to_string(),
+            session_id: "session-1".to_string(),
             event: "session_start",
             version: "0.6.1".to_string(),
             os: "linux",
@@ -1044,16 +1767,24 @@ mod tests {
             provider_start: "claude".to_string(),
             model_start: "claude-sonnet-4".to_string(),
             resumed_session: true,
+            schema_version: TELEMETRY_SCHEMA_VERSION,
+            build_channel: "release".to_string(),
+            is_git_checkout: false,
+            is_ci: false,
+            ran_from_cargo: false,
         };
         let json = serde_json::to_value(&event).unwrap();
         assert_eq!(json["event"], "session_start");
         assert_eq!(json["resumed_session"], true);
+        assert_eq!(json["session_id"], "session-1");
     }
 
     #[test]
     fn test_session_end_event_serialization() {
         let event = SessionLifecycleEvent {
+            event_id: "event-2".to_string(),
             id: "test-uuid".to_string(),
+            session_id: "session-2".to_string(),
             event: "session_end",
             version: "0.6.1".to_string(),
             os: "linux",
@@ -1073,6 +1804,8 @@ mod tests {
             first_assistant_response_ms: Some(1200),
             first_tool_call_ms: Some(900),
             first_tool_success_ms: Some(1500),
+            first_file_edit_ms: Some(2200),
+            first_test_pass_ms: Some(4100),
             tool_calls: 4,
             tool_failures: 1,
             executed_tool_calls: 5,
@@ -1102,8 +1835,52 @@ mod tests {
             transport_cli_subprocess: 0,
             transport_native_http2: 0,
             transport_other: 0,
+            tool_cat_read_search: 2,
+            tool_cat_write: 2,
+            tool_cat_shell: 1,
+            tool_cat_web: 1,
+            tool_cat_memory: 1,
+            tool_cat_subagent: 1,
+            tool_cat_swarm: 0,
+            tool_cat_email: 0,
+            tool_cat_side_panel: 1,
+            tool_cat_goal: 0,
+            tool_cat_mcp: 1,
+            tool_cat_other: 0,
+            command_login_used: false,
+            command_model_used: true,
+            command_usage_used: false,
+            command_resume_used: false,
+            command_memory_used: true,
+            command_swarm_used: false,
+            command_goal_used: false,
+            command_selfdev_used: false,
+            command_feedback_used: false,
+            command_other_used: false,
+            workflow_chat_only: false,
+            workflow_coding_used: true,
+            workflow_research_used: true,
+            workflow_tests_used: true,
+            workflow_background_used: false,
+            workflow_subagent_used: true,
+            workflow_swarm_used: false,
+            project_repo_present: true,
+            project_lang_rust: true,
+            project_lang_js_ts: false,
+            project_lang_python: false,
+            project_lang_go: false,
+            project_lang_markdown: true,
+            project_lang_mixed: true,
+            days_since_install: Some(12),
+            active_days_7d: 4,
+            active_days_30d: 9,
             resumed_session: false,
             end_reason: "normal_exit",
+            schema_version: TELEMETRY_SCHEMA_VERSION,
+            build_channel: "release".to_string(),
+            is_git_checkout: false,
+            is_ci: false,
+            ran_from_cargo: false,
             errors: ErrorCounts {
                 provider_timeout: 2,
                 auth_failed: 0,
@@ -1118,6 +1895,9 @@ mod tests {
         assert_eq!(json["duration_secs"], 2700);
         assert_eq!(json["executed_tool_calls"], 5);
         assert_eq!(json["transport_https"], 2);
+        assert_eq!(json["tool_cat_write"], 2);
+        assert_eq!(json["workflow_coding_used"], true);
+        assert_eq!(json["active_days_30d"], 9);
         assert_eq!(json["transport_persistent_ws_reuse"], 5);
         assert_eq!(json["end_reason"], "normal_exit");
         assert_eq!(json["errors"]["provider_timeout"], 2);

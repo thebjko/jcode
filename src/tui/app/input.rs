@@ -1631,17 +1631,21 @@ impl App {
         }
 
         let trimmed = input.trim();
-        if commands::handle_help_command(self, trimmed)
+        let handled = commands::handle_help_command(self, trimmed)
             || commands::handle_session_command(self, trimmed)
             || commands::handle_dictation_command(self, trimmed)
             || commands::handle_config_command(self, trimmed)
             || super::debug::handle_debug_command(self, trimmed)
             || super::model_context::handle_model_command(self, trimmed)
             || super::commands::handle_usage_command(self, trimmed)
+            || super::commands::handle_feedback_command(self, trimmed)
             || super::state_ui::handle_info_command(self, trimmed)
             || super::auth::handle_auth_command(self, trimmed)
-            || super::tui_lifecycle::handle_dev_command(self, trimmed)
-        {
+            || super::tui_lifecycle::handle_dev_command(self, trimmed);
+        if handled {
+            if trimmed.starts_with('/') {
+                crate::telemetry::record_command_family(trimmed);
+            }
             return;
         }
 

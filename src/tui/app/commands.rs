@@ -3154,6 +3154,68 @@ pub(super) fn handle_usage_command(app: &mut App, trimmed: &str) -> bool {
     true
 }
 
+pub(super) fn handle_feedback_command(app: &mut App, trimmed: &str) -> bool {
+    let Some(rest) = trimmed.strip_prefix("/feedback") else {
+        return false;
+    };
+
+    let rest = rest.trim();
+    if rest.is_empty() {
+        app.push_display_message(DisplayMessage::error(
+            "Usage: `/feedback <up|down> [wrong_answer|slow|bad_edit|auth_problem|tool_failure|crash|confusing_ux|other]`"
+                .to_string(),
+        ));
+        return true;
+    }
+
+    let mut parts = rest.split_whitespace();
+    let rating = match parts.next().unwrap_or_default() {
+        "up" | "+" | "good" | "positive" => "up",
+        "down" | "-" | "bad" | "negative" => "down",
+        _ => {
+            app.push_display_message(DisplayMessage::error(
+                "Feedback rating must be `up` or `down`.".to_string(),
+            ));
+            return true;
+        }
+    };
+
+    let reason = parts
+        .next()
+        .map(|value| value.trim().to_ascii_lowercase().replace('-', "_"));
+    if let Some(reason) = reason.as_deref()
+        && !matches!(
+            reason,
+            "wrong_answer"
+                | "slow"
+                | "bad_edit"
+                | "auth_problem"
+                | "tool_failure"
+                | "crash"
+                | "confusing_ux"
+                | "other"
+        )
+    {
+        app.push_display_message(DisplayMessage::error(
+            "Feedback reason must be one of: wrong_answer, slow, bad_edit, auth_problem, tool_failure, crash, confusing_ux, other"
+                .to_string(),
+        ));
+        return true;
+    }
+
+    crate::telemetry::record_feedback(rating, reason.as_deref());
+    let detail = reason
+        .as_deref()
+        .map(|value| format!(" ({value})"))
+        .unwrap_or_default();
+    app.push_display_message(DisplayMessage::system(format!(
+        "Thanks, recorded feedback: **{}**{}.",
+        rating, detail
+    )));
+    app.set_status_notice("Feedback recorded");
+    true
+}
+
 pub(super) fn handle_info_command(app: &mut App, trimmed: &str) -> bool {
     super::state_ui::handle_info_command(app, trimmed)
 }

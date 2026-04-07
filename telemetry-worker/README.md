@@ -27,6 +27,7 @@ apply all remote migrations:
 wrangler d1 execute jcode-telemetry --remote --file=migrations/0001_expand_events.sql
 wrangler d1 execute jcode-telemetry --remote --file=migrations/0002_transport_metrics.sql
 wrangler d1 execute jcode-telemetry --remote --file=migrations/0003_usage_expansion.sql
+wrangler d1 execute jcode-telemetry --remote --file=migrations/0004_telemetry_phase123.sql
 ```
 
 Then redeploy the worker:
@@ -49,6 +50,7 @@ npm run deploy
 npm run migrate:expand
 npm run migrate:transport
 npm run migrate:usage
+npm run migrate:phase123
 
 # Run the health dashboard query
 npm run health
@@ -92,6 +94,15 @@ wrangler d1 execute jcode-telemetry --file=health.sql
 
 # Auth activation funnel by provider
 wrangler d1 execute jcode-telemetry --command "SELECT auth_provider, COUNT(DISTINCT telemetry_id) AS users FROM events WHERE event = 'auth_success' GROUP BY auth_provider ORDER BY users DESC"
+
+# Onboarding funnel steps
+wrangler d1 execute jcode-telemetry --command "SELECT step, COUNT(DISTINCT telemetry_id) AS users FROM events WHERE event = 'onboarding_step' GROUP BY step ORDER BY users DESC"
+
+# Explicit feedback breakdown
+wrangler d1 execute jcode-telemetry --command "SELECT feedback_rating, feedback_reason, COUNT(*) AS events FROM events WHERE event = 'feedback' GROUP BY feedback_rating, feedback_reason ORDER BY events DESC"
+
+# Build-channel cleanup for active users
+wrangler d1 execute jcode-telemetry --command "SELECT build_channel, COUNT(DISTINCT telemetry_id) AS users FROM events WHERE event IN ('session_end', 'session_crash') AND created_at > datetime('now', '-30 days') GROUP BY build_channel ORDER BY users DESC"
 
 # D7 retention for users who installed 8-14 days ago
 wrangler d1 execute jcode-telemetry --command "WITH cohort AS (SELECT DISTINCT telemetry_id FROM events WHERE event = 'install' AND created_at >= datetime('now', '-14 days') AND created_at < datetime('now', '-7 days')), retained AS (SELECT DISTINCT telemetry_id FROM events WHERE event IN ('session_end', 'session_crash') AND created_at >= datetime('now', '-7 days')) SELECT COUNT(*) AS cohort_users, (SELECT COUNT(*) FROM cohort WHERE telemetry_id IN retained) AS retained_users FROM cohort"

@@ -1,4 +1,5 @@
 let cachedEventColumns = null;
+let cachedSessionDetailColumns = null;
 
 export default {
   async fetch(request, env) {
@@ -32,6 +33,8 @@ export default {
       "install",
       "upgrade",
       "auth_success",
+      "onboarding_step",
+      "feedback",
       "session_start",
       "session_end",
       "session_crash",
@@ -51,30 +54,34 @@ export default {
 
 async function insertEvent(env, body) {
   const columns = await getEventColumns(env);
+  const sessionDetailColumns = await getSessionDetailColumns(env);
+  const common = commonEventEntries(body, columns);
 
   if (body.event === "install") {
-    return insertDynamic(env, [
+    return insertDynamic(env, "events", [
       ["telemetry_id", body.id],
       ["event", body.event],
       ["version", body.version],
       ["os", body.os],
       ["arch", body.arch],
-    ]);
+      ...common,
+    ].filter(([name]) => columns.has(name)));
   }
 
   if (body.event === "upgrade") {
-    return insertDynamic(env, [
+    return insertDynamic(env, "events", [
       ["telemetry_id", body.id],
       ["event", body.event],
       ["version", body.version],
       ["os", body.os],
       ["arch", body.arch],
       ["from_version", body.from_version || null],
+      ...common,
     ].filter(([name]) => columns.has(name)));
   }
 
   if (body.event === "auth_success") {
-    return insertDynamic(env, [
+    return insertDynamic(env, "events", [
       ["telemetry_id", body.id],
       ["event", body.event],
       ["version", body.version],
@@ -82,6 +89,35 @@ async function insertEvent(env, body) {
       ["arch", body.arch],
       ["auth_provider", body.auth_provider || null],
       ["auth_method", body.auth_method || null],
+      ...common,
+    ].filter(([name]) => columns.has(name)));
+  }
+
+  if (body.event === "onboarding_step") {
+    return insertDynamic(env, "events", [
+      ["telemetry_id", body.id],
+      ["event", body.event],
+      ["version", body.version],
+      ["os", body.os],
+      ["arch", body.arch],
+      ["step", body.step || null],
+      ["auth_provider", body.auth_provider || null],
+      ["auth_method", body.auth_method || null],
+      ["milestone_elapsed_ms", body.milestone_elapsed_ms || null],
+      ...common,
+    ].filter(([name]) => columns.has(name)));
+  }
+
+  if (body.event === "feedback") {
+    return insertDynamic(env, "events", [
+      ["telemetry_id", body.id],
+      ["event", body.event],
+      ["version", body.version],
+      ["os", body.os],
+      ["arch", body.arch],
+      ["feedback_rating", body.feedback_rating || null],
+      ["feedback_reason", body.feedback_reason || null],
+      ...common,
     ].filter(([name]) => columns.has(name)));
   }
 
@@ -94,11 +130,12 @@ async function insertEvent(env, body) {
       ["arch", body.arch],
       ["provider_start", body.provider_start || null],
       ["model_start", body.model_start || null],
+      ...common,
     ];
     if (columns.has("resumed_session")) {
       values.push(["resumed_session", boolToInt(body.resumed_session)]);
     }
-    return insertDynamic(env, values);
+    return insertDynamic(env, "events", values);
   }
 
   if (["session_end", "session_crash"].includes(body.event)) {
@@ -160,9 +197,91 @@ async function insertEvent(env, body) {
       ["error_tool_error", errors.tool_error || 0],
       ["error_mcp_error", errors.mcp_error || 0],
       ["error_rate_limited", errors.rate_limited || 0],
+      ...common,
     ].filter(([name]) => columns.has(name));
-    return insertDynamic(env, values);
+    await insertDynamic(env, 'events', values);
+    await insertSessionDetails(env, body, sessionDetailColumns);
+    return;
   }
+}
+
+async function insertSessionDetails(env, body, columns) {
+  if (!columns || columns.size === 0 || !body.event_id || !columns.has("event_id")) {
+    return;
+  }
+  const values = [
+    ["event_id", body.event_id],
+    ["first_file_edit_ms", body.first_file_edit_ms || null],
+    ["first_test_pass_ms", body.first_test_pass_ms || null],
+    ["tool_cat_read_search", body.tool_cat_read_search || 0],
+    ["tool_cat_write", body.tool_cat_write || 0],
+    ["tool_cat_shell", body.tool_cat_shell || 0],
+    ["tool_cat_web", body.tool_cat_web || 0],
+    ["tool_cat_memory", body.tool_cat_memory || 0],
+    ["tool_cat_subagent", body.tool_cat_subagent || 0],
+    ["tool_cat_swarm", body.tool_cat_swarm || 0],
+    ["tool_cat_email", body.tool_cat_email || 0],
+    ["tool_cat_side_panel", body.tool_cat_side_panel || 0],
+    ["tool_cat_goal", body.tool_cat_goal || 0],
+    ["tool_cat_mcp", body.tool_cat_mcp || 0],
+    ["tool_cat_other", body.tool_cat_other || 0],
+    ["command_login_used", boolToInt(body.command_login_used)],
+    ["command_model_used", boolToInt(body.command_model_used)],
+    ["command_usage_used", boolToInt(body.command_usage_used)],
+    ["command_resume_used", boolToInt(body.command_resume_used)],
+    ["command_memory_used", boolToInt(body.command_memory_used)],
+    ["command_swarm_used", boolToInt(body.command_swarm_used)],
+    ["command_goal_used", boolToInt(body.command_goal_used)],
+    ["command_selfdev_used", boolToInt(body.command_selfdev_used)],
+    ["command_feedback_used", boolToInt(body.command_feedback_used)],
+    ["command_other_used", boolToInt(body.command_other_used)],
+    ["workflow_chat_only", boolToInt(body.workflow_chat_only)],
+    ["workflow_coding_used", boolToInt(body.workflow_coding_used)],
+    ["workflow_research_used", boolToInt(body.workflow_research_used)],
+    ["workflow_tests_used", boolToInt(body.workflow_tests_used)],
+    ["workflow_background_used", boolToInt(body.workflow_background_used)],
+    ["workflow_subagent_used", boolToInt(body.workflow_subagent_used)],
+    ["workflow_swarm_used", boolToInt(body.workflow_swarm_used)],
+    ["project_repo_present", boolToInt(body.project_repo_present)],
+    ["project_lang_rust", boolToInt(body.project_lang_rust)],
+    ["project_lang_js_ts", boolToInt(body.project_lang_js_ts)],
+    ["project_lang_python", boolToInt(body.project_lang_python)],
+    ["project_lang_go", boolToInt(body.project_lang_go)],
+    ["project_lang_markdown", boolToInt(body.project_lang_markdown)],
+    ["project_lang_mixed", boolToInt(body.project_lang_mixed)],
+    ["days_since_install", body.days_since_install || null],
+    ["active_days_7d", body.active_days_7d || 0],
+    ["active_days_30d", body.active_days_30d || 0],
+  ].filter(([name]) => columns.has(name));
+  if (values.length > 1) {
+    await insertDynamic(env, 'session_details', values);
+  }
+}
+
+function commonEventEntries(body, columns) {
+  const values = [];
+  if (columns.has("event_id")) {
+    values.push(["event_id", body.event_id || null]);
+  }
+  if (columns.has("session_id")) {
+    values.push(["session_id", body.session_id || null]);
+  }
+  if (columns.has("schema_version")) {
+    values.push(["schema_version", body.schema_version || 1]);
+  }
+  if (columns.has("build_channel")) {
+    values.push(["build_channel", body.build_channel || null]);
+  }
+  if (columns.has("is_git_checkout")) {
+    values.push(["is_git_checkout", boolToInt(body.is_git_checkout)]);
+  }
+  if (columns.has("is_ci")) {
+    values.push(["is_ci", boolToInt(body.is_ci)]);
+  }
+  if (columns.has("ran_from_cargo")) {
+    values.push(["ran_from_cargo", boolToInt(body.ran_from_cargo)]);
+  }
+  return values;
 }
 
 async function getEventColumns(env) {
@@ -174,10 +293,23 @@ async function getEventColumns(env) {
   return cachedEventColumns;
 }
 
-async function insertDynamic(env, entries) {
+async function getSessionDetailColumns(env) {
+  if (cachedSessionDetailColumns) {
+    return cachedSessionDetailColumns;
+  }
+  try {
+    const result = await env.DB.prepare("PRAGMA table_info(session_details)").all();
+    cachedSessionDetailColumns = new Set((result.results || []).map((row) => row.name));
+  } catch {
+    cachedSessionDetailColumns = new Set();
+  }
+  return cachedSessionDetailColumns;
+}
+
+async function insertDynamic(env, table, entries) {
   const columns = entries.map(([name]) => name);
   const placeholders = columns.map(() => "?").join(", ");
-  const sql = `INSERT INTO events (${columns.join(", ")}) VALUES (${placeholders})`;
+  const sql = `INSERT OR IGNORE INTO ${table} (${columns.join(", ")}) VALUES (${placeholders})`;
   const values = entries.map(([, value]) => value);
   await env.DB.prepare(sql).bind(...values).run();
 }
