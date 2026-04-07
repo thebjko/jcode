@@ -734,6 +734,215 @@ impl MultiProvider {
         crate::usage::account_usage_probe_sync(kind)
     }
 
+    fn same_provider_account_failover_enabled() -> bool {
+        crate::config::Config::load()
+            .provider
+            .same_provider_account_failover
+    }
+
+    fn active_account_label_for_provider(provider: ActiveProvider) -> Option<String> {
+        match provider {
+            ActiveProvider::Claude => crate::auth::claude::active_account_label(),
+            ActiveProvider::OpenAI => crate::auth::codex::active_account_label(),
+            _ => None,
+        }
+    }
+
+    fn set_account_override_for_provider(provider: ActiveProvider, label: Option<String>) {
+        match provider {
+            ActiveProvider::Claude => crate::auth::claude::set_active_account_override(label),
+            ActiveProvider::OpenAI => crate::auth::codex::set_active_account_override(label),
+            _ => {}
+        }
+    }
+
+    async fn invalidate_provider_credentials_for_account_switch(&self, provider: ActiveProvider) {
+        match provider {
+            ActiveProvider::Claude => {
+                if let Some(anthropic) = self.anthropic_provider() {
+                    anthropic.invalidate_credentials().await;
+                }
+                if let Some(claude) = self.claude_provider() {
+                    claude.invalidate_credentials().await;
+                }
+            }
+            ActiveProvider::OpenAI => {
+                if let Some(openai) = self.openai_provider() {
+                    openai.invalidate_credentials().await;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn same_provider_account_candidates(provider: ActiveProvider) -> Vec<String> {
+        let current_label = Self::active_account_label_for_provider(provider);
+        let mut labels = Vec::new();
+
+        let mut push_unique = |label: String| {
+            if current_label.as_deref() == Some(label.as_str()) {
+                return;
+            }
+            if !labels.iter().any(|existing| existing == &label) {
+                labels.push(label);
+            }
+        };
+
+        if let Some(probe) = Self::account_usage_probe(provider) {
+            let mut preferred = probe
+                .accounts
+                .iter()
+                .filter(|account| account.label != probe.current_label)
+                .filter(|account| !account.exhausted && account.error.is_none())
+                .collect::<Vec<_>>();
+            preferred.sort_by(|a, b| {
+                let a_score = a
+                    .five_hour_ratio
+                    .unwrap_or(0.0)
+                    .max(a.seven_day_ratio.unwrap_or(0.0));
+                let b_score = b
+                    .five_hour_ratio
+                    .unwrap_or(0.0)
+                    .max(b.seven_day_ratio.unwrap_or(0.0));
+                a_score.total_cmp(&b_score)
+            });
+            for account in preferred {
+                push_unique(account.label.clone());
+            }
+
+            for account in probe.accounts {
+                push_unique(account.label);
+            }
+        }
+
+        match provider {
+            ActiveProvider::Claude => {
+                for account in crate::auth::claude::list_accounts().unwrap_or_default() {
+                    push_unique(account.label);
+                }
+            }
+            ActiveProvider::OpenAI => {
+                for account in crate::auth::codex::list_accounts().unwrap_or_default() {
+                    push_unique(account.label);
+                }
+            }
+            _ => {}
+        }
+
+        labels
+    }
+
+    async fn try_same_provider_account_failover(
+        &self,
+        provider: ActiveProvider,
+        messages: &[Message],
+        tools: &[ToolDefinition],
+        mode: CompletionMode<'_>,
+        initial_reason: &str,
+        notes: &mut Vec<String>,
+    ) -> Result<Option<EventStream>> {
+        if !Self::same_provider_account_failover_enabled() {
+            return Ok(None);
+        }
+
+        let original_label = Self::active_account_label_for_provider(provider);
+        let Some(original_label) = original_label else {
+            return Ok(None);
+        };
+
+        let alternatives = Self::same_provider_account_candidates(provider);
+        if alternatives.is_empty() {
+            return Ok(None);
+        }
+
+        let provider_key = Self::provider_key(provider);
+        let provider_label = Self::provider_label(provider);
+
+        for alternative_label in &alternatives {
+            crate::logging::info(&format!(
+                "Same-provider failover{}: retrying {} using account '{}'",
+                mode.log_suffix(),
+                provider_label,
+                alternative_label
+            ));
+
+            Self::set_account_override_for_provider(provider, Some(alternative_label.clone()));
+            clear_provider_unavailable_for_account(provider_key);
+            if provider == ActiveProvider::OpenAI {
+                clear_all_model_unavailability_for_account();
+            }
+            self.invalidate_provider_credentials_for_account_switch(provider)
+                .await;
+
+            let attempt = match mode {
+                CompletionMode::Unified { system } => {
+                    self.complete_on_provider(provider, messages, tools, system, None)
+                        .await
+                }
+                CompletionMode::Split {
+                    system_static,
+                    system_dynamic,
+                } => {
+                    self.complete_split_on_provider(
+                        provider,
+                        messages,
+                        tools,
+                        system_static,
+                        system_dynamic,
+                        None,
+                    )
+                    .await
+                }
+            };
+
+            match attempt {
+                Ok(stream) => {
+                    self.startup_notices.write().unwrap().push(format!(
+                        "⚡ Auto-switched {} account: {} → {}. To turn this off, set `[provider].same_provider_account_failover = false` in `~/.jcode/config.toml` or export `JCODE_SAME_PROVIDER_ACCOUNT_FAILOVER=false`.",
+                        provider_label, original_label, alternative_label
+                    ));
+                    return Ok(Some(stream));
+                }
+                Err(err) => {
+                    let summary =
+                        Self::maybe_annotate_limit_summary(provider, Self::summarize_error(&err));
+                    let decision = Self::classify_failover_error(&err);
+                    crate::logging::info(&format!(
+                        "Same-provider account {} failed{}: {} (failover={} decision={})",
+                        alternative_label,
+                        mode.log_suffix(),
+                        summary,
+                        decision.should_failover(),
+                        decision.as_str()
+                    ));
+                    notes.push(format!(
+                        "{} account {}: {}",
+                        provider_label, alternative_label, summary
+                    ));
+                    if decision.should_mark_provider_unavailable() {
+                        record_provider_unavailable_for_account(provider_key, &summary);
+                    }
+                }
+            }
+        }
+
+        Self::set_account_override_for_provider(provider, Some(original_label));
+        self.invalidate_provider_credentials_for_account_switch(provider)
+            .await;
+        if provider == ActiveProvider::OpenAI {
+            clear_all_model_unavailability_for_account();
+        }
+
+        crate::logging::info(&format!(
+            "Same-provider failover{} exhausted all alternate {} accounts after: {}",
+            mode.log_suffix(),
+            provider_label,
+            initial_reason
+        ));
+
+        Ok(None)
+    }
+
     fn account_switch_guidance(provider: ActiveProvider) -> Option<String> {
         let probe = Self::account_usage_probe(provider)?;
         probe.switch_guidance().or_else(|| {
@@ -945,6 +1154,16 @@ impl MultiProvider {
                     if decision.should_failover() {
                         if decision.should_mark_provider_unavailable() {
                             record_provider_unavailable_for_account(key, &summary);
+                        }
+                        if candidate == active {
+                            if let Some(stream) = self
+                                .try_same_provider_account_failover(
+                                    candidate, messages, tools, mode, &summary, &mut notes,
+                                )
+                                .await?
+                            {
+                                return Ok(stream);
+                            }
                         }
                         if candidate == active {
                             failover_reason = Some(summary);
@@ -3653,6 +3872,38 @@ mod tests {
         assert!(!known_openai_model_ids().contains(&personal_model.to_string()));
 
         crate::auth::codex::set_active_account_override(None);
+    }
+
+    #[test]
+    fn test_same_provider_account_candidates_include_other_openai_accounts() {
+        with_clean_provider_test_env(|| {
+            let now_ms = chrono::Utc::now().timestamp_millis() + 60_000;
+            crate::auth::codex::upsert_account(crate::auth::codex::OpenAiAccount {
+                label: "seed-a".to_string(),
+                access_token: "acc-a".to_string(),
+                refresh_token: "ref-a".to_string(),
+                id_token: None,
+                account_id: Some("acct-a".to_string()),
+                expires_at: Some(now_ms),
+                email: Some("a@example.com".to_string()),
+            })
+            .unwrap();
+            crate::auth::codex::upsert_account(crate::auth::codex::OpenAiAccount {
+                label: "seed-b".to_string(),
+                access_token: "acc-b".to_string(),
+                refresh_token: "ref-b".to_string(),
+                id_token: None,
+                account_id: Some("acct-b".to_string()),
+                expires_at: Some(now_ms),
+                email: Some("b@example.com".to_string()),
+            })
+            .unwrap();
+
+            crate::auth::codex::set_active_account("openai-1").unwrap();
+            let candidates =
+                MultiProvider::same_provider_account_candidates(ActiveProvider::OpenAI);
+            assert_eq!(candidates, vec!["openai-2".to_string()]);
+        });
     }
 
     #[test]

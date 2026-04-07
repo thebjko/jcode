@@ -561,11 +561,11 @@ impl Default for FeatureConfig {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum CrossProviderFailoverMode {
-    /// Do not resend the prompt to another provider automatically.
-    #[default]
-    Manual,
     /// Show a 3-second cancelable countdown, then resend on another provider.
+    #[default]
     Countdown,
+    /// Do not resend the prompt to another provider automatically.
+    Manual,
 }
 
 impl CrossProviderFailoverMode {
@@ -604,6 +604,9 @@ pub struct ProviderConfig {
     pub openai_native_compaction_threshold_tokens: usize,
     /// How to handle cross-provider failover when the same input would be resent elsewhere.
     pub cross_provider_failover: CrossProviderFailoverMode,
+    /// Whether jcode should automatically try another account on the same provider
+    /// before falling back to a different provider.
+    pub same_provider_account_failover: bool,
     /// Copilot premium request mode: "normal", "one", or "zero"
     /// "zero" means all requests are free (no premium requests consumed)
     pub copilot_premium: Option<String>,
@@ -619,7 +622,8 @@ impl Default for ProviderConfig {
             openai_service_tier: None,
             openai_native_compaction_mode: "auto".to_string(),
             openai_native_compaction_threshold_tokens: 200_000,
-            cross_provider_failover: CrossProviderFailoverMode::Manual,
+            cross_provider_failover: CrossProviderFailoverMode::Countdown,
+            same_provider_account_failover: true,
             copilot_premium: None,
         }
     }
@@ -1194,6 +1198,11 @@ impl Config {
                 self.provider.cross_provider_failover = mode;
             }
         }
+        if let Ok(v) = std::env::var("JCODE_SAME_PROVIDER_ACCOUNT_FAILOVER") {
+            if let Some(enabled) = parse_env_bool(&v) {
+                self.provider.same_provider_account_failover = enabled;
+            }
+        }
 
         // Copilot premium mode: env var overrides config
         // If set in config but not in env, propagate config -> env
@@ -1588,9 +1597,12 @@ openai_reasoning_effort = "high"
 # Set `priority` to match Codex /fast behavior (higher speed, higher usage)
 # openai_service_tier = "priority"
 # Cross-provider failover when the same prompt would be resent elsewhere.
-# manual = show a notice and let you switch yourself (default)
-# countdown = 3-second countdown before retrying on another provider; press Esc to cancel
-cross_provider_failover = "manual"
+# countdown = 3-second countdown before retrying on another provider; press Esc to cancel (default)
+# manual = show a notice and let you switch yourself
+# cross_provider_failover = "manual"
+# Try another account on the same provider before switching providers (default: true)
+# same_provider_account_failover = false
+cross_provider_failover = "countdown"
 # Copilot premium mode: "normal" (default), "one" (first msg only), "zero" (all free)
 # Set to "zero" if you have premium Copilot and want free requests
 # copilot_premium = "zero"
@@ -2001,6 +2013,16 @@ mod tests {
     #[test]
     fn test_display_auto_server_reload_defaults_to_true() {
         assert!(DisplayConfig::default().auto_server_reload);
+    }
+
+    #[test]
+    fn test_provider_failover_defaults_match_new_behavior() {
+        let provider = Config::default().provider;
+        assert_eq!(
+            provider.cross_provider_failover,
+            super::CrossProviderFailoverMode::Countdown
+        );
+        assert!(provider.same_provider_account_failover);
     }
 
     #[test]

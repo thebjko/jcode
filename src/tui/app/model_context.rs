@@ -18,7 +18,7 @@ impl App {
     }
 
     fn failover_config_hint() -> &'static str {
-        "Set `[provider].cross_provider_failover = \"countdown\"` in `~/.jcode/config.toml` to enable a 3-second cancelable auto-switch."
+        "To turn this off, set `[provider].cross_provider_failover = \"manual\"` in `~/.jcode/config.toml` or export `JCODE_CROSS_PROVIDER_FAILOVER=manual`."
     }
 
     fn apply_provider_switch_for_failover(
@@ -71,11 +71,12 @@ impl App {
         match self.apply_provider_switch_for_failover(&pending.prompt) {
             Ok(active_model) => {
                 self.push_display_message(DisplayMessage::system(format!(
-                    "⚡ **Auto-switched provider** after countdown: **{}** → **{}**.\n\nResending {} on model `{}`.",
+                    "⚡ **Auto-switched provider** after countdown: **{}** → **{}**.\n\nResending {} on model `{}`.\n\n{}",
                     pending.prompt.from_label,
                     pending.prompt.to_label,
                     Self::format_failover_input_summary(&pending.prompt),
                     active_model,
+                    Self::failover_config_hint(),
                 )));
                 self.set_status_notice(format!(
                     "Provider → {} (retrying)",
@@ -122,11 +123,12 @@ impl App {
                     deadline: Instant::now() + Duration::from_secs(3),
                 });
                 self.push_display_message(DisplayMessage::system(format!(
-                    "⚠ **{} became unavailable** — jcode will switch to **{}** in **3 seconds** unless you cancel.\n\nReason: {}\n\nRetrying would send {}. Press **Esc** to cancel.",
+                    "⚠ **{} became unavailable** — jcode will switch to **{}** in **3 seconds** unless you cancel.\n\nReason: {}\n\nRetrying would send {}. Press **Esc** to cancel.\n\n{}",
                     prompt.from_label,
                     prompt.to_label,
                     prompt.reason,
                     input_summary,
+                    Self::failover_config_hint(),
                 )));
                 self.set_status_notice(format!(
                     "Provider auto-switch → {} in 3s (Esc to cancel)",
