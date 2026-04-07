@@ -56,7 +56,17 @@ impl NormalizedReadRange {
 
 fn normalize_read_range(params: &ReadInput) -> Result<NormalizedReadRange> {
     let has_start_end = params.start_line.is_some() || params.end_line.is_some();
-    let has_mixed_offset = params.offset.is_some();
+    let has_mixed_offset = match (params.start_line, params.end_line, params.offset) {
+        (Some(start_line), _, Some(offset)) => {
+            if start_line == 0 {
+                true
+            } else {
+                offset.checked_add(1) != Some(start_line)
+            }
+        }
+        (None, Some(_), Some(offset)) => offset != 0,
+        _ => params.offset.is_some(),
+    };
 
     if has_start_end && has_mixed_offset {
         return Err(anyhow::anyhow!(
@@ -344,6 +354,47 @@ mod tests {
             err.to_string().contains("Use either start_line/end_line")
                 || err.to_string().contains("not both"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn normalize_read_range_accepts_matching_start_line_and_offset() {
+        let params: ReadInput = serde_json::from_value(json!({
+            "file_path": "src/lib.rs",
+            "start_line": 10,
+            "offset": 9,
+            "limit": 20
+        }))
+        .expect("deserialize params");
+
+        let range = normalize_read_range(&params).expect("matching range styles should work");
+        assert_eq!(
+            range,
+            NormalizedReadRange {
+                offset: 9,
+                limit: 20,
+                style: ReadRangeStyle::StartEnd,
+            }
+        );
+    }
+
+    #[test]
+    fn normalize_read_range_accepts_end_line_with_zero_offset() {
+        let params: ReadInput = serde_json::from_value(json!({
+            "file_path": "src/lib.rs",
+            "end_line": 20,
+            "offset": 0
+        }))
+        .expect("deserialize params");
+
+        let range = normalize_read_range(&params).expect("redundant zero offset should work");
+        assert_eq!(
+            range,
+            NormalizedReadRange {
+                offset: 0,
+                limit: 20,
+                style: ReadRangeStyle::StartEnd,
+            }
         );
     }
 
