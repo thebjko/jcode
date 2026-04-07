@@ -121,7 +121,7 @@ fn picker_render_width(picker: &crate::tui::PickerState, max_width: usize) -> us
     let marker_width = 3usize;
     let is_preview = picker.preview;
 
-    if picker.kind.uses_compact_navigation() {
+    if picker.uses_compact_navigation() {
         let show_provider_badge = account_picker_shows_provider_badge(picker);
         let mut max_title_len = display_width("ACCOUNT");
         let mut max_state_len = display_width("STATE");
@@ -247,10 +247,10 @@ pub(super) fn draw_picker_line(frame: &mut Frame, app: &dyn TuiState, area: Rect
     let filtered_count = picker.filtered.len();
     let col = picker.column;
     let is_preview = picker.preview;
-    let is_account_picker = picker.kind.uses_compact_navigation();
+    let is_account_picker = picker.uses_compact_navigation();
     let is_usage_picker = picker.kind == crate::tui::PickerKind::Usage;
 
-    let col_focus_style = Style::default().fg(Color::White).bold().underlined();
+    let col_focus_style = Style::default().fg(accent_color()).bold();
     let col_dim_style = Style::default().fg(dim_color());
     let marker_width = 3usize;
 
@@ -312,38 +312,14 @@ pub(super) fn draw_picker_line(frame: &mut Frame, app: &dyn TuiState, area: Rect
     let account_title_width = width.saturating_sub(marker_width + account_state_width);
     let model_width = width.saturating_sub(marker_width + provider_width + via_width);
 
-    let (col_widths, col_labels, col_logical): ([usize; 3], [&str; 3], [usize; 3]) =
-        if is_account_picker {
-            (
-                [account_title_width, account_state_width, 0],
-                [
-                    picker.primary_label(),
-                    picker.secondary_label(is_preview),
-                    "",
-                ],
-                [0, 0, 0],
-            )
-        } else if is_preview {
-            (
-                [provider_width, model_width, via_width],
-                [
-                    picker.secondary_label(true),
-                    picker.primary_label(),
-                    picker.tertiary_label(),
-                ],
-                [1, 0, 2],
-            )
-        } else {
-            (
-                [model_width, provider_width, via_width],
-                [
-                    picker.primary_label(),
-                    picker.secondary_label(false),
-                    picker.tertiary_label(),
-                ],
-                [0, 1, 2],
-            )
-        };
+    let (col_labels, col_logical) = picker.header_layout(is_preview);
+    let col_widths: [usize; 3] = if is_account_picker {
+        [account_title_width, account_state_width, 0]
+    } else if is_preview {
+        [provider_width, model_width, via_width]
+    } else {
+        [model_width, provider_width, via_width]
+    };
 
     let mut header_spans: Vec<Span> = Vec::new();
 
@@ -399,12 +375,12 @@ pub(super) fn draw_picker_line(frame: &mut Frame, app: &dyn TuiState, area: Rect
 
     if is_preview {
         header_spans.push(Span::styled(
-            picker.kind.preview_submit_hint(),
+            picker.preview_submit_hint(),
             Style::default().fg(rgb(60, 60, 80)).italic(),
         ));
     } else {
         header_spans.push(Span::styled(
-            picker.kind.active_submit_hint(),
+            picker.active_submit_hint(),
             Style::default().fg(rgb(60, 60, 80)),
         ));
         if picker.shows_default_shortcut_hint() {

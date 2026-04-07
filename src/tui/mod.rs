@@ -379,6 +379,25 @@ pub enum PickerKind {
     Usage,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InlineInteractiveLayout {
+    Compact,
+    ThreeColumn,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InlineInteractiveSchema {
+    pub layout: InlineInteractiveLayout,
+    pub primary_label: &'static str,
+    pub secondary_label: &'static str,
+    pub secondary_preview_label: &'static str,
+    pub tertiary_label: &'static str,
+    pub preview_submit_hint: &'static str,
+    pub active_submit_hint: &'static str,
+    pub shows_default_shortcut_hint: bool,
+    pub preview_activation_column: usize,
+}
+
 pub type InlineInteractiveState = PickerState;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -395,8 +414,57 @@ pub enum InlineUiStateRef<'a> {
 }
 
 impl PickerKind {
+    pub fn schema(&self) -> InlineInteractiveSchema {
+        match self {
+            Self::Model => InlineInteractiveSchema {
+                layout: InlineInteractiveLayout::ThreeColumn,
+                primary_label: "ITEM",
+                secondary_label: "PROVIDER",
+                secondary_preview_label: "PROVIDER",
+                tertiary_label: "ACTION",
+                preview_submit_hint: "  ↵ open",
+                active_submit_hint: "  ↑↓ ←→ ↵ Esc",
+                shows_default_shortcut_hint: true,
+                preview_activation_column: 2,
+            },
+            Self::Account => InlineInteractiveSchema {
+                layout: InlineInteractiveLayout::Compact,
+                primary_label: "ACCOUNT",
+                secondary_label: "STATE",
+                secondary_preview_label: "STATE",
+                tertiary_label: "",
+                preview_submit_hint: "  ↵ select",
+                active_submit_hint: "  ↑↓/jk ↵ Esc",
+                shows_default_shortcut_hint: false,
+                preview_activation_column: 0,
+            },
+            Self::Login => InlineInteractiveSchema {
+                layout: InlineInteractiveLayout::ThreeColumn,
+                primary_label: "ITEM",
+                secondary_label: "PROVIDER",
+                secondary_preview_label: "PROVIDER",
+                tertiary_label: "ACTION",
+                preview_submit_hint: "  ↵ open",
+                active_submit_hint: "  ↑↓ ←→ ↵ Esc",
+                shows_default_shortcut_hint: true,
+                preview_activation_column: 2,
+            },
+            Self::Usage => InlineInteractiveSchema {
+                layout: InlineInteractiveLayout::ThreeColumn,
+                primary_label: "ITEM",
+                secondary_label: "STATUS",
+                secondary_preview_label: "ITEM",
+                tertiary_label: "WINDOW",
+                preview_submit_hint: "  ↵ inspect",
+                active_submit_hint: "  ↑↓ ←→ ↵ Esc",
+                shows_default_shortcut_hint: false,
+                preview_activation_column: 2,
+            },
+        }
+    }
+
     pub fn uses_compact_navigation(&self) -> bool {
-        matches!(self, Self::Account)
+        self.schema().layout == InlineInteractiveLayout::Compact
     }
 
     pub fn supports_option_columns(&self) -> bool {
@@ -549,6 +617,24 @@ pub struct PickerState {
 }
 
 impl PickerState {
+    pub fn schema(&self) -> InlineInteractiveSchema {
+        if self.is_agent_target_picker() {
+            InlineInteractiveSchema {
+                layout: InlineInteractiveLayout::ThreeColumn,
+                primary_label: "TARGET",
+                secondary_label: "MODEL",
+                secondary_preview_label: "MODEL",
+                tertiary_label: "CONFIG",
+                preview_submit_hint: "  ↵ open",
+                active_submit_hint: "  ↑↓ ←→ ↵ Esc",
+                shows_default_shortcut_hint: false,
+                preview_activation_column: 2,
+            }
+        } else {
+            self.kind.schema()
+        }
+    }
+
     pub fn selected_entry_index(&self) -> Option<usize> {
         self.filtered.get(self.selected).copied()
     }
@@ -572,32 +658,95 @@ impl PickerState {
                 .all(|entry| matches!(entry.action, PickerAction::AgentTarget(_)))
     }
 
-    pub fn primary_label(&self) -> &'static str {
-        if self.is_agent_target_picker() {
-            "TARGET"
-        } else {
-            self.kind.primary_label()
+    pub fn uses_compact_navigation(&self) -> bool {
+        self.schema().layout == InlineInteractiveLayout::Compact
+    }
+
+    pub fn preview_submit_hint(&self) -> &'static str {
+        self.schema().preview_submit_hint
+    }
+
+    pub fn active_submit_hint(&self) -> &'static str {
+        self.schema().active_submit_hint
+    }
+
+    pub fn preview_activation_column(&self) -> usize {
+        self.schema().preview_activation_column
+    }
+
+    pub fn max_navigable_column(&self) -> usize {
+        match self.schema().layout {
+            InlineInteractiveLayout::Compact => 0,
+            InlineInteractiveLayout::ThreeColumn => 2,
         }
     }
 
-    pub fn secondary_label(&self, preview: bool) -> &'static str {
-        if self.is_agent_target_picker() {
-            "MODEL"
+    pub fn header_layout(&self, preview: bool) -> ([&'static str; 3], [usize; 3]) {
+        if self.uses_compact_navigation() {
+            (
+                [self.primary_label(), self.secondary_label(preview), ""],
+                [0, 0, 0],
+            )
+        } else if preview {
+            (
+                [
+                    self.secondary_label(true),
+                    self.primary_label(),
+                    self.tertiary_label(),
+                ],
+                [1, 0, 2],
+            )
         } else {
-            self.kind.secondary_label(preview)
+            (
+                [
+                    self.primary_label(),
+                    self.secondary_label(false),
+                    self.tertiary_label(),
+                ],
+                [0, 1, 2],
+            )
+        }
+    }
+
+    pub fn filter_text(&self, entry: &PickerEntry) -> String {
+        if self.is_agent_target_picker() {
+            let model = entry
+                .active_option()
+                .map(|option| option.provider.as_str())
+                .unwrap_or("");
+            let config = entry
+                .active_option()
+                .map(|option| option.api_method.as_str())
+                .unwrap_or("");
+            let detail = entry
+                .active_option()
+                .map(|option| option.detail.as_str())
+                .unwrap_or("");
+            format!("{} {} {} {}", entry.name, model, config, detail)
+        } else {
+            self.kind.filter_text(entry)
+        }
+    }
+
+    pub fn primary_label(&self) -> &'static str {
+        self.schema().primary_label
+    }
+
+    pub fn secondary_label(&self, preview: bool) -> &'static str {
+        let schema = self.schema();
+        if preview {
+            schema.secondary_preview_label
+        } else {
+            schema.secondary_label
         }
     }
 
     pub fn tertiary_label(&self) -> &'static str {
-        if self.is_agent_target_picker() {
-            "CONFIG"
-        } else {
-            self.kind.tertiary_label()
-        }
+        self.schema().tertiary_label
     }
 
     pub fn shows_default_shortcut_hint(&self) -> bool {
-        !self.is_agent_target_picker() && self.kind.shows_default_shortcut_hint()
+        self.schema().shows_default_shortcut_hint
     }
 }
 

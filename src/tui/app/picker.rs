@@ -1142,11 +1142,7 @@ impl App {
                         self.request_usage_report();
                         return Ok(true);
                     }
-                    picker.column = if picker.kind == PickerKind::Account {
-                        0
-                    } else {
-                        2
-                    };
+                    picker.column = picker.preview_activation_column();
                 }
                 self.input.clear();
                 self.cursor_pos = 0;
@@ -1527,7 +1523,7 @@ impl App {
                 let vim_nav = self
                     .picker_state
                     .as_ref()
-                    .map(|picker| picker.kind == PickerKind::Account)
+                    .map(|picker| picker.uses_compact_navigation())
                     .unwrap_or(false);
                 if matches!(code, KeyCode::Char('k'))
                     && !modifiers.contains(KeyModifiers::CONTROL)
@@ -1552,7 +1548,7 @@ impl App {
                 let vim_nav = self
                     .picker_state
                     .as_ref()
-                    .map(|picker| picker.kind == PickerKind::Account)
+                    .map(|picker| picker.uses_compact_navigation())
                     .unwrap_or(false);
                 if matches!(code, KeyCode::Char('j'))
                     && !modifiers.contains(KeyModifiers::CONTROL)
@@ -1577,10 +1573,10 @@ impl App {
             }
             KeyCode::Right => {
                 if let Some(ref mut picker) = self.picker_state {
-                    if picker.kind == PickerKind::Account {
+                    if picker.uses_compact_navigation() {
                         return Ok(());
                     }
-                    if picker.column < 2 {
+                    if picker.column < picker.max_navigable_column() {
                         if let Some(&idx) = picker.filtered.get(picker.selected) {
                             if picker.entries[idx].options.len() > 1 || picker.column > 0 {
                                 picker.column += 1;
@@ -1591,7 +1587,7 @@ impl App {
             }
             KeyCode::Left | KeyCode::BackTab => {
                 if let Some(ref mut picker) = self.picker_state {
-                    if picker.kind == PickerKind::Account {
+                    if picker.uses_compact_navigation() {
                         return Ok(());
                     }
                     if picker.column > 0 {
@@ -1601,12 +1597,12 @@ impl App {
             }
             KeyCode::Tab => {
                 if let Some(ref mut picker) = self.picker_state {
-                    if picker.kind == PickerKind::Account {
+                    if picker.uses_compact_navigation() {
                         return Ok(());
                     }
                     if picker.column == 0 && !picker.filter.is_empty() {
                         Self::tab_complete_filter(picker);
-                    } else if picker.column < 2 {
+                    } else if picker.column < picker.max_navigable_column() {
                         if let Some(&idx) = picker.filtered.get(picker.selected) {
                             if picker.entries[idx].options.len() > 1 || picker.column > 0 {
                                 picker.column += 1;
@@ -1617,7 +1613,7 @@ impl App {
             }
             KeyCode::Char('d') if modifiers.contains(KeyModifiers::CONTROL) => {
                 if let Some(ref picker) = self.picker_state {
-                    if picker.kind == PickerKind::Account {
+                    if picker.uses_compact_navigation() {
                         return Ok(());
                     }
                     if picker.filtered.is_empty() {
@@ -1696,7 +1692,7 @@ impl App {
                         return Ok(());
                     }
                     if picker.column == 1 {
-                        picker.column = 2;
+                        picker.column = picker.max_navigable_column();
                         return Ok(());
                     }
                 }
@@ -1933,65 +1929,7 @@ impl App {
                 .iter()
                 .enumerate()
                 .filter_map(|(i, m)| {
-                    let filter_text = if picker.kind == PickerKind::Account {
-                        let provider = m
-                            .options
-                            .get(m.selected_option)
-                            .map(|route| route.provider.as_str())
-                            .unwrap_or("");
-                        let state = match &m.action {
-                            PickerAction::Account(AccountPickerAction::Switch { .. }) => {
-                                if m.is_current { "active" } else { "saved" }
-                            }
-                            PickerAction::Account(AccountPickerAction::Add { .. }) => "add",
-                            PickerAction::Account(AccountPickerAction::Replace { .. }) => "replace",
-                            PickerAction::Account(AccountPickerAction::OpenCenter { .. }) => {
-                                "manage"
-                            }
-                            PickerAction::Model
-                            | PickerAction::Usage { .. }
-                            | PickerAction::Login(_)
-                            | PickerAction::AgentTarget(_)
-                            | PickerAction::AgentModelChoice { .. } => "",
-                        };
-                        format!("{} {} {}", m.name, provider, state)
-                    } else if picker.kind == PickerKind::Login {
-                        let auth_kind = m
-                            .options
-                            .get(m.selected_option)
-                            .map(|route| route.provider.as_str())
-                            .unwrap_or("");
-                        let state = m
-                            .options
-                            .get(m.selected_option)
-                            .map(|route| route.api_method.as_str())
-                            .unwrap_or("");
-                        let detail = m
-                            .options
-                            .get(m.selected_option)
-                            .map(|route| route.detail.as_str())
-                            .unwrap_or("");
-                        format!("{} {} {} {}", m.name, auth_kind, state, detail)
-                    } else if picker.kind == PickerKind::Usage {
-                        let status = m
-                            .options
-                            .get(m.selected_option)
-                            .map(|route| route.provider.as_str())
-                            .unwrap_or("");
-                        let window = m
-                            .options
-                            .get(m.selected_option)
-                            .map(|route| route.api_method.as_str())
-                            .unwrap_or("");
-                        let detail = m
-                            .options
-                            .get(m.selected_option)
-                            .map(|route| route.detail.as_str())
-                            .unwrap_or("");
-                        format!("{} {} {} {}", m.name, status, window, detail)
-                    } else {
-                        m.name.clone()
-                    };
+                    let filter_text = picker.filter_text(m);
                     Self::picker_fuzzy_score(&picker.filter, &filter_text).map(|s| {
                         let bonus = if m.recommended { 5 } else { 0 };
                         (i, s + bonus)
