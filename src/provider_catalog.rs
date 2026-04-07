@@ -3,6 +3,20 @@ use std::collections::HashSet;
 
 pub const OPENAI_COMPAT_LOCAL_ENABLED_ENV: &str = "JCODE_OPENAI_COMPAT_LOCAL_ENABLED";
 
+fn api_base_uses_localhost(raw: &str) -> bool {
+    let Ok(parsed) = url::Url::parse(raw) else {
+        return false;
+    };
+
+    matches!(
+        parsed
+            .host_str()
+            .map(|host| host.to_ascii_lowercase())
+            .as_deref(),
+        Some("localhost") | Some("127.0.0.1") | Some("::1")
+    )
+}
+
 pub fn resolve_openai_compatible_profile(
     profile: OpenAiCompatibleProfile,
 ) -> ResolvedOpenAiCompatibleProfile {
@@ -60,6 +74,10 @@ pub fn resolve_openai_compatible_profile(
 
     if let Some(model) = env_override("JCODE_OPENAI_COMPAT_DEFAULT_MODEL") {
         resolved.default_model = Some(model);
+    }
+
+    if api_base_uses_localhost(&resolved.api_base) {
+        resolved.requires_api_key = false;
     }
 
     resolved
@@ -151,6 +169,10 @@ pub fn openai_compatible_profile_is_configured(profile: OpenAiCompatibleProfile)
 
     if resolved.requires_api_key {
         return false;
+    }
+
+    if profile.id == OPENAI_COMPAT_PROFILE.id && api_base_uses_localhost(&resolved.api_base) {
+        return true;
     }
 
     load_env_value_from_env_or_config(OPENAI_COMPAT_LOCAL_ENABLED_ENV, &resolved.env_file)
@@ -662,6 +684,29 @@ mod tests {
         assert_eq!(resolved.api_key_env, "EXAMPLE_API_KEY");
         assert_eq!(resolved.env_file, "example.env");
         assert_eq!(resolved.default_model.as_deref(), Some("example/model"));
+    }
+
+    #[test]
+    fn matrix_openai_compatible_localhost_override_allows_no_auth() {
+        let _lock = crate::storage::lock_test_env();
+        let _guard = EnvGuard::save(&[
+            "JCODE_OPENAI_COMPAT_API_BASE",
+            "JCODE_OPENAI_COMPAT_API_KEY_NAME",
+            "JCODE_OPENAI_COMPAT_ENV_FILE",
+            "JCODE_OPENAI_COMPAT_LOCAL_ENABLED",
+        ]);
+
+        crate::env::set_var("JCODE_OPENAI_COMPAT_API_BASE", "http://localhost:11434/v1");
+        crate::env::remove_var("JCODE_OPENAI_COMPAT_API_KEY_NAME");
+        crate::env::remove_var("JCODE_OPENAI_COMPAT_ENV_FILE");
+        crate::env::remove_var("JCODE_OPENAI_COMPAT_LOCAL_ENABLED");
+
+        let resolved = resolve_openai_compatible_profile(OPENAI_COMPAT_PROFILE);
+        assert_eq!(resolved.api_base, "http://localhost:11434/v1");
+        assert!(!resolved.requires_api_key);
+        assert!(openai_compatible_profile_is_configured(
+            OPENAI_COMPAT_PROFILE
+        ));
     }
 
     #[test]
