@@ -77,9 +77,16 @@ pub(super) fn parse_batch_sub_outputs(content: &str) -> Vec<BatchSubResult> {
     let mut current_content_start: Option<usize> = None;
     let mut current_pos = 0usize;
 
-    for line in content.split_inclusive('\n') {
+    while current_pos < content.len() {
         let line_start = current_pos;
-        current_pos += line.len();
+        let rest = &content[current_pos..];
+        let (line, next_pos) = if let Some(rel_end) = rest.find('\n') {
+            let end = current_pos + rel_end + 1;
+            (&content[current_pos..end], end)
+        } else {
+            (&content[current_pos..], content.len())
+        };
+        current_pos = next_pos;
         let trimmed = line.trim_end_matches(['\n', '\r']);
 
         if is_batch_section_header(trimmed) {

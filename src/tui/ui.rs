@@ -4291,6 +4291,18 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_batch_sub_outputs_keeps_final_header_without_trailing_newline() {
+        let content = "--- [1] read ---\n1234\n\n--- [2] grep ---";
+
+        let results = tools_ui::parse_batch_sub_outputs(content);
+
+        assert_eq!(results.len(), 2, "results={results:?}");
+        assert_eq!(results[0].content, "1234");
+        assert_eq!(results[1].content, "");
+        assert!(!results[1].errored);
+    }
+
+    #[test]
     fn test_render_tool_message_batch_flat_subcall_params_include_read_details() {
         let msg = DisplayMessage {
             role: "tool".to_string(),
@@ -4365,6 +4377,41 @@ mod tests {
         );
         assert!(
             rendered[2].contains("grep 'TODO' in src") && rendered[2].contains("2 tok"),
+            "rendered={rendered:?}"
+        );
+    }
+
+    #[test]
+    fn test_render_tool_message_batch_last_subcall_keeps_token_badge_without_trailing_newline() {
+        let msg = DisplayMessage {
+            role: "tool".to_string(),
+            content: "--- [1] read ---\n1234\n\n--- [2] grep ---".to_string(),
+            tool_calls: vec![],
+            duration_secs: None,
+            title: None,
+            tool_data: Some(ToolCall {
+                id: "call_batch_tokens_no_newline".to_string(),
+                name: "batch".to_string(),
+                input: serde_json::json!({
+                    "tool_calls": [
+                        {"tool": "read", "file_path": "src/session.rs", "offset": 0, "limit": 1},
+                        {"tool": "grep", "pattern": "TODO", "path": "src"}
+                    ]
+                }),
+                intent: None,
+            }),
+        };
+
+        let lines = render_tool_message(&msg, 120, crate::config::DiffDisplayMode::Off);
+        let rendered: Vec<String> = lines.iter().map(extract_line_text).collect();
+
+        assert_eq!(rendered.len(), 3, "rendered={rendered:?}");
+        assert!(
+            rendered[1].contains("read src/session.rs:0-1") && rendered[1].contains("1 tok"),
+            "rendered={rendered:?}"
+        );
+        assert!(
+            rendered[2].contains("grep 'TODO' in src") && rendered[2].contains("0 tok"),
             "rendered={rendered:?}"
         );
     }
