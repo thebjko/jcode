@@ -25,7 +25,7 @@ impl App {
 
     pub(super) fn open_usage_overlay_loading(&mut self) {
         self.inline_view_state = None;
-        self.picker_state = None;
+        self.inline_interactive_state = None;
         self.usage_overlay = Some(std::cell::RefCell::new(
             crate::tui::usage_overlay::UsageOverlay::loading(),
         ));
@@ -34,7 +34,7 @@ impl App {
 
     pub(super) fn open_usage_inline_loading(&mut self) {
         self.usage_overlay = None;
-        self.picker_state = None;
+        self.inline_interactive_state = None;
         self.inline_view_state = Some(crate::tui::InlineViewState {
             title: "USAGE".to_string(),
             status: Some("refreshing".to_string()),

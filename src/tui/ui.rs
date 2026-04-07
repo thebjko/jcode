@@ -37,6 +37,8 @@ mod diagram_pane;
 mod file_diff_ui;
 #[path = "ui_header.rs"]
 mod header;
+#[path = "ui_inline_interactive.rs"]
+mod inline_interactive_ui;
 #[path = "ui_inline.rs"]
 mod inline_ui;
 #[path = "ui_input.rs"]
@@ -47,8 +49,6 @@ mod memory_ui;
 mod messages;
 #[path = "ui_overlays.rs"]
 mod overlays;
-#[path = "ui_picker.rs"]
-mod picker_ui;
 #[path = "ui_pinned.rs"]
 mod pinned_ui;
 #[path = "ui_prepare.rs"]
@@ -3297,7 +3297,7 @@ mod tests {
         time_since_activity: Option<Duration>,
         remote_startup_phase_active: bool,
         inline_view_state: Option<crate::tui::InlineViewState>,
-        picker_state: Option<crate::tui::PickerState>,
+        inline_interactive_state: Option<crate::tui::InlineInteractiveState>,
     }
 
     impl crate::tui::TuiState for TestState {
@@ -3517,8 +3517,8 @@ mod tests {
         fn diff_line_wrap(&self) -> bool {
             true
         }
-        fn picker_state(&self) -> Option<&crate::tui::PickerState> {
-            self.picker_state.as_ref()
+        fn inline_interactive_state(&self) -> Option<&crate::tui::InlineInteractiveState> {
+            self.inline_interactive_state.as_ref()
         }
         fn inline_view_state(&self) -> Option<&crate::tui::InlineViewState> {
             self.inline_view_state.as_ref()
@@ -3637,7 +3637,7 @@ mod tests {
         let state = TestState::default();
         assert_eq!(inline_ui_gap_height(&state), 0);
 
-        let picker_state = crate::tui::PickerState {
+        let inline_interactive_state = crate::tui::InlineInteractiveState {
             kind: crate::tui::PickerKind::Model,
             entries: vec![],
             filtered: vec![],
@@ -3647,7 +3647,7 @@ mod tests {
             preview: false,
         };
         let state_with_picker = TestState {
-            picker_state: Some(picker_state),
+            inline_interactive_state: Some(inline_interactive_state),
             ..Default::default()
         };
         assert_eq!(inline_ui_gap_height(&state_with_picker), 1);

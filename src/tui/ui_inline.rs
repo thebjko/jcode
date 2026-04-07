@@ -25,7 +25,7 @@ pub(super) fn inline_ui_height(app: &dyn TuiState) -> u16 {
 pub(super) fn draw_inline_ui(frame: &mut Frame, app: &dyn TuiState, area: Rect) {
     match app.inline_ui_state() {
         Some(crate::tui::InlineUiStateRef::Interactive(_)) => {
-            super::picker_ui::draw_picker_line(frame, app, area)
+            super::inline_interactive_ui::draw_inline_interactive(frame, app, area)
         }
         Some(crate::tui::InlineUiStateRef::View(view)) => draw_inline_view(frame, app, view, area),
         None => {}

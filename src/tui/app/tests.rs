@@ -1209,7 +1209,7 @@ fn test_usage_command_requests_usage_report_with_inline_view() {
 
     assert!(super::commands::handle_usage_command(&mut app, "/usage"));
 
-    assert!(app.picker_state.is_none());
+    assert!(app.inline_interactive_state.is_none());
     assert!(app.usage_overlay.is_none());
     assert!(app.inline_view_state.is_some());
     assert!(app.usage_report_refreshing);
@@ -1222,7 +1222,7 @@ fn test_usage_submit_input_requests_usage_report_with_inline_view() {
 
     app.submit_input();
 
-    assert!(app.picker_state.is_none());
+    assert!(app.inline_interactive_state.is_none());
     assert!(app.usage_overlay.is_none());
     assert!(app.inline_view_state.is_some());
     assert!(app.display_messages().is_empty());
@@ -1238,7 +1238,7 @@ fn test_usage_typing_does_not_open_picker_preview() {
             .expect("type /usage");
     }
 
-    assert!(app.picker_state.is_none());
+    assert!(app.inline_interactive_state.is_none());
     assert_eq!(app.input(), "/usage");
     assert!(!app.usage_report_refreshing);
 }
@@ -1255,7 +1255,7 @@ fn test_usage_enter_requests_report_with_inline_view() {
     app.handle_key(KeyCode::Enter, KeyModifiers::empty())
         .expect("submit /usage");
 
-    assert!(app.picker_state.is_none());
+    assert!(app.inline_interactive_state.is_none());
     assert!(app.usage_overlay.is_none());
     assert!(app.inline_view_state.is_some());
     assert_eq!(app.input(), "");
@@ -1301,7 +1301,7 @@ fn test_usage_with_suffix_does_not_open_picker_preview() {
             .unwrap();
     }
 
-    assert!(app.picker_state.is_none());
+    assert!(app.inline_interactive_state.is_none());
     assert_eq!(app.input(), "/usage open");
 }
 
@@ -1366,7 +1366,7 @@ fn test_account_openai_command_opens_account_picker() {
 
         assert!(app.account_picker_overlay.is_none());
         let picker = app
-            .picker_state
+            .inline_interactive_state
             .as_ref()
             .expect("/account openai should open the inline account picker");
         assert_eq!(picker.kind, crate::tui::PickerKind::Account);
@@ -1432,7 +1432,7 @@ fn test_account_command_opens_account_picker() {
 
         assert!(app.account_picker_overlay.is_none());
         let picker = app
-            .picker_state
+            .inline_interactive_state
             .as_ref()
             .expect("/account should open the inline account picker");
         assert!(picker.entries.iter().any(|entry| {
@@ -1505,24 +1505,27 @@ fn test_account_picker_supports_arrow_and_vim_navigation() {
         app.submit_input();
 
         let initial_selected = app
-            .picker_state
+            .inline_interactive_state
             .as_ref()
             .expect("inline account picker should open")
             .selected;
 
         app.handle_key(KeyCode::Down, KeyModifiers::empty())
             .unwrap();
-        let after_arrow = app.picker_state.as_ref().unwrap().selected;
+        let after_arrow = app.inline_interactive_state.as_ref().unwrap().selected;
         assert_eq!(after_arrow, initial_selected + 1);
 
         app.handle_key(KeyCode::Char('j'), KeyModifiers::empty())
             .unwrap();
-        let after_vim = app.picker_state.as_ref().unwrap().selected;
+        let after_vim = app.inline_interactive_state.as_ref().unwrap().selected;
         assert_eq!(after_vim, after_arrow + 1);
 
         app.handle_key(KeyCode::Char('k'), KeyModifiers::empty())
             .unwrap();
-        assert_eq!(app.picker_state.as_ref().unwrap().selected, after_arrow);
+        assert_eq!(
+            app.inline_interactive_state.as_ref().unwrap().selected,
+            after_arrow
+        );
     });
 }
 
@@ -1559,7 +1562,7 @@ fn test_account_picker_preview_from_input_filters_accounts() {
         }
 
         let picker = app
-            .picker_state
+            .inline_interactive_state
             .as_ref()
             .expect("account preview should open");
         assert!(picker.preview, "account picker should stay in preview mode");
@@ -1579,7 +1582,7 @@ fn test_account_picker_preview_stays_closed_for_explicit_subcommands() {
             .unwrap();
     }
 
-    assert!(app.picker_state.is_none());
+    assert!(app.inline_interactive_state.is_none());
     assert_eq!(app.input(), "/account openai settings");
 }
 
@@ -1613,7 +1616,7 @@ fn test_account_command_combines_claude_and_openai_accounts() {
         app.submit_input();
 
         let picker = app
-            .picker_state
+            .inline_interactive_state
             .as_ref()
             .expect("inline account picker should open");
         assert!(picker.entries.iter().any(|entry| {
@@ -1674,7 +1677,7 @@ fn test_account_command_uses_fast_auth_snapshot_without_running_cursor_status() 
         app.input = "/account".to_string();
         app.submit_input();
 
-        assert!(app.picker_state.is_some());
+        assert!(app.inline_interactive_state.is_some());
         assert!(
             !marker.exists(),
             "/account should not execute `cursor-agent status` on open"
@@ -1742,7 +1745,7 @@ fn test_login_command_opens_inline_login_picker() {
     app.submit_input();
 
     let picker = app
-        .picker_state
+        .inline_interactive_state
         .as_ref()
         .expect("/login should open inline login picker");
     assert_eq!(picker.kind, crate::tui::PickerKind::Login);
@@ -3705,7 +3708,7 @@ fn test_agents_command_opens_agent_picker() {
     app.submit_input();
 
     let picker = app
-        .picker_state
+        .inline_interactive_state
         .as_ref()
         .expect("/agents should open the agent picker");
     assert!(
@@ -3734,7 +3737,7 @@ fn test_agents_picker_uses_provider_default_when_inherited_model_is_unknown() {
         app.open_agents_picker();
 
         let picker = app
-            .picker_state
+            .inline_interactive_state
             .as_ref()
             .expect("/agents should open the agent picker");
         let swarm_entry = picker
@@ -3760,7 +3763,7 @@ fn test_agent_model_picker_inherit_row_uses_provider_default_when_inherited_mode
         app.open_agent_model_picker(crate::tui::AgentModelTarget::Swarm);
 
         let picker = app
-            .picker_state
+            .inline_interactive_state
             .as_ref()
             .expect("agent model picker should open");
         let inherit_entry = picker.entries.first().expect("inherit row should exist");
@@ -3784,7 +3787,7 @@ fn test_agents_review_picker_saves_config_override() {
         app.open_agent_model_picker(crate::tui::AgentModelTarget::Review);
 
         let selected = app
-            .picker_state
+            .inline_interactive_state
             .as_ref()
             .and_then(|picker| {
                 picker.filtered.iter().position(|&idx| {
@@ -3798,12 +3801,13 @@ fn test_agents_review_picker_saves_config_override() {
                 })
             })
             .expect("review picker should include at least one model option");
-        app.picker_state.as_mut().unwrap().selected = selected;
-        let selected_model_idx = app.picker_state.as_ref().unwrap().filtered[selected];
-        app.picker_state.as_mut().unwrap().entries[selected_model_idx].options[0].available = true;
+        app.inline_interactive_state.as_mut().unwrap().selected = selected;
+        let selected_model_idx = app.inline_interactive_state.as_ref().unwrap().filtered[selected];
+        app.inline_interactive_state.as_mut().unwrap().entries[selected_model_idx].options[0]
+            .available = true;
 
         let expected = {
-            let picker = app.picker_state.as_ref().unwrap();
+            let picker = app.inline_interactive_state.as_ref().unwrap();
             let entry = &picker.entries[picker.filtered[selected]];
             let base = if entry.effort.is_some() {
                 entry
@@ -3830,12 +3834,12 @@ fn test_agents_review_picker_saves_config_override() {
             }
         };
 
-        app.handle_picker_key(KeyCode::Enter, KeyModifiers::NONE)
+        app.handle_inline_interactive_key(KeyCode::Enter, KeyModifiers::NONE)
             .expect("save agent model override");
 
         let cfg = crate::config::Config::load();
         assert_eq!(cfg.autoreview.model.as_deref(), Some(expected.as_str()));
-        assert!(app.picker_state.is_none());
+        assert!(app.inline_interactive_state.is_none());
     });
 }
 
@@ -3903,7 +3907,7 @@ fn test_model_picker_preview_stays_open_and_updates_filter() {
     }
 
     let picker = app
-        .picker_state
+        .inline_interactive_state
         .as_ref()
         .expect("model picker preview should be open");
     assert!(picker.preview);
@@ -3930,7 +3934,7 @@ fn test_model_picker_preview_enter_selects_model() {
         .unwrap();
 
     // Enter from preview mode selects the model and closes the picker
-    assert!(app.picker_state.is_none());
+    assert!(app.inline_interactive_state.is_none());
     assert!(app.input().is_empty());
     assert_eq!(app.cursor_pos(), 0);
 }
@@ -3947,7 +3951,7 @@ fn test_model_picker_preview_arrow_keys_navigate() {
     }
 
     let picker = app
-        .picker_state
+        .inline_interactive_state
         .as_ref()
         .expect("model picker preview should be open");
     assert!(picker.preview);
@@ -3958,7 +3962,7 @@ fn test_model_picker_preview_arrow_keys_navigate() {
         .unwrap();
 
     let picker = app
-        .picker_state
+        .inline_interactive_state
         .as_ref()
         .expect("picker should still be open");
     assert!(picker.preview, "should remain in preview mode");
@@ -3968,7 +3972,7 @@ fn test_model_picker_preview_arrow_keys_navigate() {
     app.handle_key(KeyCode::Up, KeyModifiers::empty()).unwrap();
 
     let picker = app
-        .picker_state
+        .inline_interactive_state
         .as_ref()
         .expect("picker should still be open");
     assert!(picker.preview, "should remain in preview mode");
@@ -3988,7 +3992,7 @@ fn test_login_picker_preview_stays_open_and_updates_filter() {
     }
 
     let picker = app
-        .picker_state
+        .inline_interactive_state
         .as_ref()
         .expect("login picker preview should be open");
     assert!(picker.preview);
@@ -4014,7 +4018,7 @@ fn test_login_picker_preview_enter_starts_login_flow() {
     app.handle_key(KeyCode::Enter, KeyModifiers::empty())
         .unwrap();
 
-    assert!(app.picker_state.is_none());
+    assert!(app.inline_interactive_state.is_none());
     match app.pending_login {
         Some(crate::tui::app::auth::PendingLogin::ApiKeyProfile {
             provider,
@@ -4474,7 +4478,7 @@ fn test_model_picker_includes_copilot_models_in_remote_mode() {
     app.open_model_picker();
 
     let picker = app
-        .picker_state
+        .inline_interactive_state
         .as_ref()
         .expect("model picker should be open");
 
@@ -4509,7 +4513,7 @@ fn test_model_picker_remote_falls_back_to_current_model_when_catalog_empty() {
     app.open_model_picker();
 
     let picker = app
-        .picker_state
+        .inline_interactive_state
         .as_ref()
         .expect("model picker should open with current-model fallback");
 
@@ -4572,7 +4576,7 @@ fn test_model_picker_copilot_models_have_copilot_route() {
     app.open_model_picker();
 
     let picker = app
-        .picker_state
+        .inline_interactive_state
         .as_ref()
         .expect("model picker should be open");
 
@@ -4599,7 +4603,7 @@ fn test_model_picker_preserves_recommendation_priority_order() {
     app.open_model_picker();
 
     let picker = app
-        .picker_state
+        .inline_interactive_state
         .as_ref()
         .expect("model picker should be open");
 
@@ -4666,7 +4670,7 @@ fn test_model_picker_copilot_selection_prefixes_model() {
     app.open_model_picker();
 
     let picker = app
-        .picker_state
+        .inline_interactive_state
         .as_ref()
         .expect("model picker should be open");
 
@@ -4685,7 +4689,7 @@ fn test_model_picker_copilot_selection_prefixes_model() {
         .expect("grok-code-fast-1 should be in filtered list");
 
     // Set the selected position to grok's position
-    app.picker_state.as_mut().unwrap().selected = filtered_pos;
+    app.inline_interactive_state.as_mut().unwrap().selected = filtered_pos;
 
     // Press Enter to select
     app.handle_key(KeyCode::Enter, KeyModifiers::empty())
@@ -4700,7 +4704,7 @@ fn test_model_picker_copilot_selection_prefixes_model() {
         );
     }
     // Picker should be closed
-    assert!(app.picker_state.is_none());
+    assert!(app.inline_interactive_state.is_none());
 }
 
 #[test]
@@ -4711,7 +4715,7 @@ fn test_model_picker_cursor_models_have_cursor_route() {
     app.open_model_picker();
 
     let picker = app
-        .picker_state
+        .inline_interactive_state
         .as_ref()
         .expect("model picker should be open");
 
@@ -4739,7 +4743,7 @@ fn test_model_picker_cursor_selection_prefixes_model() {
     app.open_model_picker();
 
     let picker = app
-        .picker_state
+        .inline_interactive_state
         .as_ref()
         .expect("model picker should be open");
 
@@ -4755,7 +4759,7 @@ fn test_model_picker_cursor_selection_prefixes_model() {
         .position(|&i| i == composer_idx)
         .expect("composer-2-fast should be in filtered list");
 
-    app.picker_state.as_mut().unwrap().selected = filtered_pos;
+    app.inline_interactive_state.as_mut().unwrap().selected = filtered_pos;
 
     app.handle_key(KeyCode::Enter, KeyModifiers::empty())
         .unwrap();
@@ -4764,7 +4768,7 @@ fn test_model_picker_cursor_selection_prefixes_model() {
         app.pending_model_switch.as_deref(),
         Some("cursor:composer-2-fast")
     );
-    assert!(app.picker_state.is_none());
+    assert!(app.inline_interactive_state.is_none());
 }
 
 #[test]
@@ -10502,7 +10506,10 @@ fn test_disconnected_key_handler_runs_model_picker_locally() {
 
     assert!(app.input.is_empty());
     assert!(app.queued_messages().is_empty());
-    let picker = app.picker_state.as_ref().expect("model picker should open");
+    let picker = app
+        .inline_interactive_state
+        .as_ref()
+        .expect("model picker should open");
     assert!(!picker.entries.is_empty());
     assert_eq!(picker.entries[picker.selected].name, "gpt-5.3-codex");
 }

@@ -1,8 +1,8 @@
 use super::*;
 use crate::tui::session_picker::{self, OverlayAction, PickerResult, ResumeTarget, SessionPicker};
 use crate::tui::{
-    AccountPickerAction, AgentModelTarget, PickerAction, PickerEntry, PickerKind, PickerOption,
-    PickerState,
+    AccountPickerAction, AgentModelTarget, InlineInteractiveState, PickerAction, PickerEntry,
+    PickerKind, PickerOption,
 };
 
 enum InlinePickerPreviewRequest {
@@ -64,7 +64,7 @@ impl InlinePickerPreviewRequest {
         }
     }
 
-    fn matches_picker(&self, app: &App, picker: &PickerState) -> bool {
+    fn matches_picker(&self, app: &App, picker: &InlineInteractiveState) -> bool {
         if !picker.preview || picker.kind != self.kind() {
             return false;
         }
@@ -79,7 +79,7 @@ impl InlinePickerPreviewRequest {
     }
 }
 
-fn picker_account_provider_scope(picker: &PickerState) -> Option<&str> {
+fn picker_account_provider_scope(picker: &InlineInteractiveState) -> Option<&str> {
     picker.entries.first().and_then(|entry| match entry.action {
         PickerAction::Account(
             AccountPickerAction::Switch {
@@ -402,18 +402,18 @@ impl App {
     pub(super) fn sync_model_picker_preview_from_input(&mut self) {
         let Some(request) = self.inline_picker_preview_request(&self.input) else {
             if self
-                .picker_state
+                .inline_interactive_state
                 .as_ref()
                 .map(|picker| picker.preview)
                 .unwrap_or(false)
             {
-                self.picker_state = None;
+                self.inline_interactive_state = None;
             }
             return;
         };
 
         let should_open = self
-            .picker_state
+            .inline_interactive_state
             .as_ref()
             .map(|picker| !request.matches_picker(self, picker))
             .unwrap_or(true);
@@ -422,7 +422,7 @@ impl App {
             let saved_input = self.input.clone();
             let saved_cursor = self.cursor_pos;
             request.open(self);
-            if let Some(ref mut picker) = self.picker_state {
+            if let Some(ref mut picker) = self.inline_interactive_state {
                 picker.preview = true;
             }
             // Preview must not steal the user's command input.
@@ -430,17 +430,17 @@ impl App {
             self.cursor_pos = saved_cursor;
         }
 
-        if let Some(ref mut picker) = self.picker_state {
+        if let Some(ref mut picker) = self.inline_interactive_state {
             if picker.preview {
                 picker.filter = request.filter().to_string();
-                Self::apply_picker_filter(picker);
+                Self::apply_inline_interactive_filter(picker);
             }
         }
     }
 
     pub(super) fn activate_picker_from_preview(&mut self) -> bool {
         if !self
-            .picker_state
+            .inline_interactive_state
             .as_ref()
             .map(|picker| picker.preview)
             .unwrap_or(false)
@@ -448,16 +448,16 @@ impl App {
             return false;
         }
 
-        if let Some(ref mut picker) = self.picker_state {
+        if let Some(ref mut picker) = self.inline_interactive_state {
             picker.preview = false;
         }
         if self
-            .picker_state
+            .inline_interactive_state
             .as_ref()
             .map(|picker| picker.kind == PickerKind::Usage)
             .unwrap_or(false)
         {
-            if let Some(ref mut picker) = self.picker_state {
+            if let Some(ref mut picker) = self.inline_interactive_state {
                 picker.column = 0;
             }
             self.input.clear();
@@ -466,7 +466,7 @@ impl App {
         }
         self.input.clear();
         self.cursor_pos = 0;
-        let _ = self.handle_picker_key(KeyCode::Enter, KeyModifiers::NONE);
+        let _ = self.handle_inline_interactive_key(KeyCode::Enter, KeyModifiers::NONE);
         true
     }
 
@@ -507,7 +507,7 @@ impl App {
         .collect();
 
         self.inline_view_state = None;
-        self.picker_state = Some(PickerState {
+        self.inline_interactive_state = Some(InlineInteractiveState {
             kind: PickerKind::Model,
             filtered: (0..5).collect(),
             entries: models,
@@ -556,7 +556,7 @@ impl App {
             .collect::<Vec<_>>();
 
         self.inline_view_state = None;
-        self.picker_state = Some(PickerState {
+        self.inline_interactive_state = Some(InlineInteractiveState {
             kind: PickerKind::Login,
             filtered: (0..models.len()).collect(),
             entries: models,
@@ -574,7 +574,7 @@ impl App {
         let inherit_summary = agent_model_default_summary(target, self);
         self.open_model_picker();
 
-        if let Some(ref mut picker) = self.picker_state {
+        if let Some(ref mut picker) = self.inline_interactive_state {
             if target == AgentModelTarget::Memory {
                 picker.entries.retain(|entry| {
                     matches!(
@@ -919,7 +919,7 @@ impl App {
         });
 
         self.inline_view_state = None;
-        self.picker_state = Some(PickerState {
+        self.inline_interactive_state = Some(InlineInteractiveState {
             kind: PickerKind::Model,
             filtered: (0..entries.len()).collect(),
             entries,
@@ -1077,59 +1077,62 @@ impl App {
             )
     }
 
-    pub(super) fn handle_picker_preview_key(
+    pub(super) fn handle_inline_interactive_preview_key(
         &mut self,
         code: &KeyCode,
         modifiers: KeyModifiers,
     ) -> Result<bool> {
-        let is_preview = self.picker_state.as_ref().map_or(false, |p| p.preview);
+        let is_preview = self
+            .inline_interactive_state
+            .as_ref()
+            .map_or(false, |p| p.preview);
         if !is_preview {
             return Ok(false);
         }
         match code {
             KeyCode::Down => {
-                if let Some(picker) = self.picker_state.as_mut() {
+                if let Some(picker) = self.inline_interactive_state.as_mut() {
                     let max = picker.filtered.len().saturating_sub(1);
                     picker.selected = (picker.selected + 1).min(max);
                 }
                 Ok(true)
             }
             KeyCode::Up => {
-                if let Some(picker) = self.picker_state.as_mut() {
+                if let Some(picker) = self.inline_interactive_state.as_mut() {
                     picker.selected = picker.selected.saturating_sub(1);
                 }
                 Ok(true)
             }
             KeyCode::Char('j') if modifiers.contains(KeyModifiers::CONTROL) => {
-                if let Some(picker) = self.picker_state.as_mut() {
+                if let Some(picker) = self.inline_interactive_state.as_mut() {
                     let max = picker.filtered.len().saturating_sub(1);
                     picker.selected = (picker.selected + 1).min(max);
                 }
                 Ok(true)
             }
             KeyCode::Char('k') if modifiers.contains(KeyModifiers::CONTROL) => {
-                if let Some(picker) = self.picker_state.as_mut() {
+                if let Some(picker) = self.inline_interactive_state.as_mut() {
                     picker.selected = picker.selected.saturating_sub(1);
                 }
                 Ok(true)
             }
             KeyCode::PageDown => {
-                if let Some(picker) = self.picker_state.as_mut() {
+                if let Some(picker) = self.inline_interactive_state.as_mut() {
                     let max = picker.filtered.len().saturating_sub(1);
                     picker.selected = (picker.selected + 5).min(max);
                 }
                 Ok(true)
             }
             KeyCode::PageUp => {
-                if let Some(picker) = self.picker_state.as_mut() {
+                if let Some(picker) = self.inline_interactive_state.as_mut() {
                     picker.selected = picker.selected.saturating_sub(5);
                 }
                 Ok(true)
             }
             KeyCode::Enter => {
-                if let Some(ref mut picker) = self.picker_state {
+                if let Some(ref mut picker) = self.inline_interactive_state {
                     if picker.filtered.is_empty() {
-                        self.picker_state = None;
+                        self.inline_interactive_state = None;
                         self.input.clear();
                         self.cursor_pos = 0;
                         return Ok(true);
@@ -1146,11 +1149,11 @@ impl App {
                 }
                 self.input.clear();
                 self.cursor_pos = 0;
-                self.handle_picker_key(KeyCode::Enter, modifiers)?;
+                self.handle_inline_interactive_key(KeyCode::Enter, modifiers)?;
                 Ok(true)
             }
             KeyCode::Esc => {
-                self.picker_state = None;
+                self.inline_interactive_state = None;
                 self.input.clear();
                 self.cursor_pos = 0;
                 Ok(true)
@@ -1503,25 +1506,25 @@ impl App {
         Ok(())
     }
 
-    pub(super) fn handle_picker_key(
+    pub(super) fn handle_inline_interactive_key(
         &mut self,
         code: KeyCode,
         modifiers: KeyModifiers,
     ) -> Result<()> {
         match code {
             KeyCode::Esc => {
-                if let Some(ref mut picker) = self.picker_state {
+                if let Some(ref mut picker) = self.inline_interactive_state {
                     if !picker.filter.is_empty() {
                         picker.filter.clear();
-                        Self::apply_picker_filter(picker);
+                        Self::apply_inline_interactive_filter(picker);
                         return Ok(());
                     }
                 }
-                self.picker_state = None;
+                self.inline_interactive_state = None;
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 let vim_nav = self
-                    .picker_state
+                    .inline_interactive_state
                     .as_ref()
                     .map(|picker| picker.uses_compact_navigation())
                     .unwrap_or(false);
@@ -1529,13 +1532,13 @@ impl App {
                     && !modifiers.contains(KeyModifiers::CONTROL)
                     && !vim_nav
                 {
-                    if let Some(ref mut picker) = self.picker_state {
+                    if let Some(ref mut picker) = self.inline_interactive_state {
                         picker.filter.push('k');
-                        Self::apply_picker_filter(picker);
+                        Self::apply_inline_interactive_filter(picker);
                     }
                     return Ok(());
                 }
-                if let Some(ref mut picker) = self.picker_state {
+                if let Some(ref mut picker) = self.inline_interactive_state {
                     if picker.column == 0 {
                         picker.selected = picker.selected.saturating_sub(1);
                     } else if let Some(&idx) = picker.filtered.get(picker.selected) {
@@ -1546,7 +1549,7 @@ impl App {
             }
             KeyCode::Down | KeyCode::Char('j') => {
                 let vim_nav = self
-                    .picker_state
+                    .inline_interactive_state
                     .as_ref()
                     .map(|picker| picker.uses_compact_navigation())
                     .unwrap_or(false);
@@ -1554,13 +1557,13 @@ impl App {
                     && !modifiers.contains(KeyModifiers::CONTROL)
                     && !vim_nav
                 {
-                    if let Some(ref mut picker) = self.picker_state {
+                    if let Some(ref mut picker) = self.inline_interactive_state {
                         picker.filter.push('j');
-                        Self::apply_picker_filter(picker);
+                        Self::apply_inline_interactive_filter(picker);
                     }
                     return Ok(());
                 }
-                if let Some(ref mut picker) = self.picker_state {
+                if let Some(ref mut picker) = self.inline_interactive_state {
                     if picker.column == 0 {
                         let max = picker.filtered.len().saturating_sub(1);
                         picker.selected = (picker.selected + 1).min(max);
@@ -1572,7 +1575,7 @@ impl App {
                 }
             }
             KeyCode::Right => {
-                if let Some(ref mut picker) = self.picker_state {
+                if let Some(ref mut picker) = self.inline_interactive_state {
                     if picker.uses_compact_navigation() {
                         return Ok(());
                     }
@@ -1586,7 +1589,7 @@ impl App {
                 }
             }
             KeyCode::Left | KeyCode::BackTab => {
-                if let Some(ref mut picker) = self.picker_state {
+                if let Some(ref mut picker) = self.inline_interactive_state {
                     if picker.uses_compact_navigation() {
                         return Ok(());
                     }
@@ -1596,12 +1599,12 @@ impl App {
                 }
             }
             KeyCode::Tab => {
-                if let Some(ref mut picker) = self.picker_state {
+                if let Some(ref mut picker) = self.inline_interactive_state {
                     if picker.uses_compact_navigation() {
                         return Ok(());
                     }
                     if picker.column == 0 && !picker.filter.is_empty() {
-                        Self::tab_complete_filter(picker);
+                        Self::tab_complete_inline_interactive_filter(picker);
                     } else if picker.column < picker.max_navigable_column() {
                         if let Some(&idx) = picker.filtered.get(picker.selected) {
                             if picker.entries[idx].options.len() > 1 || picker.column > 0 {
@@ -1612,7 +1615,7 @@ impl App {
                 }
             }
             KeyCode::Char('d') if modifiers.contains(KeyModifiers::CONTROL) => {
-                if let Some(ref picker) = self.picker_state {
+                if let Some(ref picker) = self.inline_interactive_state {
                     if picker.uses_compact_navigation() {
                         return Ok(());
                     }
@@ -1673,11 +1676,11 @@ impl App {
                         Ok(()) => self.set_status_notice(notice),
                         Err(e) => self.set_status_notice(format!("Failed to save default: {}", e)),
                     }
-                    self.picker_state = None;
+                    self.inline_interactive_state = None;
                 }
             }
             KeyCode::Enter => {
-                let Some(ref mut picker) = self.picker_state else {
+                let Some(ref mut picker) = self.inline_interactive_state else {
                     return Ok(());
                 };
                 if picker.filtered.is_empty() {
@@ -1705,18 +1708,18 @@ impl App {
                     } else {
                         route.detail.clone()
                     };
-                    self.picker_state = None;
+                    self.inline_interactive_state = None;
                     self.set_status_notice(format!("{} — {}", entry.name, detail));
                     return Ok(());
                 }
 
                 match entry.action {
                     PickerAction::Account(selection) => {
-                        self.picker_state = None;
+                        self.inline_interactive_state = None;
                         self.handle_account_picker_selection(selection);
                     }
                     PickerAction::Login(provider) => {
-                        self.picker_state = None;
+                        self.inline_interactive_state = None;
                         self.start_login_provider(provider);
                     }
                     PickerAction::Usage {
@@ -1726,7 +1729,7 @@ impl App {
                         status,
                         detail_lines,
                     } => {
-                        self.picker_state = None;
+                        self.inline_interactive_state = None;
                         self.usage_overlay = Some(std::cell::RefCell::new(
                             crate::tui::usage_overlay::UsageOverlay::new(
                                 "Usage",
@@ -1749,7 +1752,7 @@ impl App {
                         target,
                         clear_override,
                     } => {
-                        self.picker_state = None;
+                        self.inline_interactive_state = None;
                         let result = if clear_override {
                             save_agent_model_override(target, None)
                         } else {
@@ -1810,7 +1813,7 @@ impl App {
                             entry.name, route.provider, route.api_method
                         );
 
-                        self.picker_state = None;
+                        self.inline_interactive_state = None;
                         self.upstream_provider = None;
                         self.status_detail = None;
                         if self.is_remote {
@@ -1826,17 +1829,17 @@ impl App {
                 }
             }
             KeyCode::Backspace => {
-                if let Some(ref mut picker) = self.picker_state {
+                if let Some(ref mut picker) = self.inline_interactive_state {
                     if picker.filter.pop().is_some() {
-                        Self::apply_picker_filter(picker);
+                        Self::apply_inline_interactive_filter(picker);
                     }
                 }
             }
             KeyCode::Char(c) => {
-                if let Some(ref mut picker) = self.picker_state {
+                if let Some(ref mut picker) = self.inline_interactive_state {
                     if !c.is_whitespace() {
                         picker.filter.push(c);
-                        Self::apply_picker_filter(picker);
+                        Self::apply_inline_interactive_filter(picker);
                     }
                 }
             }
@@ -1920,7 +1923,7 @@ impl App {
         }
     }
 
-    pub(super) fn apply_picker_filter(picker: &mut PickerState) {
+    pub(super) fn apply_inline_interactive_filter(picker: &mut InlineInteractiveState) {
         if picker.filter.is_empty() {
             picker.filtered = (0..picker.entries.len()).collect();
         } else {
@@ -1954,14 +1957,14 @@ impl App {
         }
     }
 
-    pub(super) fn tab_complete_filter(picker: &mut PickerState) {
+    pub(super) fn tab_complete_inline_interactive_filter(picker: &mut InlineInteractiveState) {
         if picker.filtered.is_empty() {
             return;
         }
         if picker.filtered.len() == 1 {
             let name = picker.entries[picker.filtered[0]].name.clone();
             picker.filter = name;
-            Self::apply_picker_filter(picker);
+            Self::apply_inline_interactive_filter(picker);
             return;
         }
         let names: Vec<&str> = picker
@@ -1988,7 +1991,7 @@ impl App {
         if prefix_len > picker.filter.len() {
             let first_original = &picker.entries[picker.filtered[0]].name;
             picker.filter = first_original[..prefix_len].to_string();
-            Self::apply_picker_filter(picker);
+            Self::apply_inline_interactive_filter(picker);
         }
     }
 }

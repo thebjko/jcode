@@ -659,12 +659,12 @@ impl App {
         self.usage_overlay = None;
         self.inline_view_state = None;
         if self
-            .picker_state
+            .inline_interactive_state
             .as_ref()
             .map(|picker| picker.kind == crate::tui::PickerKind::Usage)
             .unwrap_or(false)
         {
-            self.picker_state = None;
+            self.inline_interactive_state = None;
         }
 
         if results.is_empty() {

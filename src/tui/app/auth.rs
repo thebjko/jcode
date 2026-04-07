@@ -729,7 +729,7 @@ impl App {
         self.account_picker_overlay = Some(std::cell::RefCell::new(AccountPicker::with_summary(
             title, items, summary,
         )));
-        self.picker_state = None;
+        self.inline_interactive_state = None;
         self.input.clear();
         self.cursor_pos = 0;
         self.set_status_notice("Account center: choose an action");
@@ -796,7 +796,7 @@ impl App {
             " Add / Replace Account ",
             items,
         )));
-        self.picker_state = None;
+        self.inline_interactive_state = None;
         self.input.clear();
         self.cursor_pos = 0;
         self.set_status_notice("Account center: choose add/replace target");
@@ -833,7 +833,7 @@ impl App {
         };
 
         self.inline_view_state = None;
-        self.picker_state = Some(crate::tui::PickerState {
+        self.inline_interactive_state = Some(crate::tui::InlineInteractiveState {
             kind: crate::tui::PickerKind::Account,
             filtered: (0..models.len()).collect(),
             entries: models,

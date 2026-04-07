@@ -1082,8 +1082,8 @@ impl crate::tui::TuiState for App {
     fn diff_line_wrap(&self) -> bool {
         crate::config::config().display.diff_line_wrap
     }
-    fn picker_state(&self) -> Option<&crate::tui::PickerState> {
-        self.picker_state.as_ref()
+    fn inline_interactive_state(&self) -> Option<&crate::tui::InlineInteractiveState> {
+        self.inline_interactive_state.as_ref()
     }
 
     fn inline_view_state(&self) -> Option<&crate::tui::InlineViewState> {

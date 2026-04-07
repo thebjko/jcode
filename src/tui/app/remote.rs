@@ -2628,13 +2628,13 @@ async fn handle_remote_key_internal(
         return Ok(());
     }
 
-    if let Some(ref picker) = app.picker_state {
+    if let Some(ref picker) = app.inline_interactive_state {
         if !picker.preview {
-            return app.handle_picker_key(code, modifiers);
+            return app.handle_inline_interactive_key(code, modifiers);
         }
     }
 
-    if app.handle_picker_preview_key(&code, modifiers)? {
+    if app.handle_inline_interactive_preview_key(&code, modifiers)? {
         return Ok(());
     }
 
@@ -2978,14 +2978,14 @@ async fn handle_remote_key_internal(
     }
 
     if app
-        .picker_state
+        .inline_interactive_state
         .as_ref()
         .map(|p| p.preview)
         .unwrap_or(false)
     {
         match code {
             KeyCode::Up | KeyCode::Down | KeyCode::PageUp | KeyCode::PageDown => {
-                return app.handle_picker_key(code, modifiers);
+                return app.handle_inline_interactive_key(code, modifiers);
             }
             _ => {}
         }
@@ -4418,12 +4418,12 @@ async fn handle_remote_key_internal(
         }
         KeyCode::Esc => {
             if app
-                .picker_state
+                .inline_interactive_state
                 .as_ref()
                 .map(|p| p.preview)
                 .unwrap_or(false)
             {
-                app.picker_state = None;
+                app.inline_interactive_state = None;
                 input::clear_input_for_escape(app);
             } else if app.is_processing {
                 remote.cancel().await?;

@@ -46,13 +46,13 @@ mod dictation;
 mod event_wrappers;
 mod handterm_native_scroll;
 mod helpers;
+mod inline_interactive;
 mod input;
 mod local;
 mod misc_ui;
 mod model_context;
 mod navigation;
 mod observe;
-mod picker;
 mod remote;
 mod remote_notifications;
 mod replay;
@@ -586,7 +586,7 @@ pub struct App {
     // Passive inline UI (informational blocks shown above input).
     inline_view_state: Option<super::InlineViewState>,
     // Interactive model/provider picker
-    picker_state: Option<super::PickerState>,
+    inline_interactive_state: Option<super::InlineInteractiveState>,
     // Pending model switch from picker (for remote mode async processing)
     pending_model_switch: Option<String>,
     // Pending account switch from inline picker (for remote mode async processing)

@@ -869,14 +869,14 @@ pub(super) fn handle_modal_key(
         return Ok(handled || true);
     }
 
-    if let Some(ref picker) = app.picker_state {
+    if let Some(ref picker) = app.inline_interactive_state {
         if !picker.preview {
-            app.handle_picker_key(code, modifiers)?;
+            app.handle_inline_interactive_key(code, modifiers)?;
             return Ok(true);
         }
     }
 
-    if app.handle_picker_preview_key(&code, modifiers)? {
+    if app.handle_inline_interactive_preview_key(&code, modifiers)? {
         return Ok(true);
     }
 
@@ -995,12 +995,12 @@ pub(super) fn handle_basic_key(app: &mut App, code: KeyCode) -> bool {
         }
         KeyCode::Esc => {
             if app
-                .picker_state
+                .inline_interactive_state
                 .as_ref()
                 .map(|p| p.preview)
                 .unwrap_or(false)
             {
-                app.picker_state = None;
+                app.inline_interactive_state = None;
                 app.inline_view_state = None;
                 clear_input_for_escape(app);
             } else if app.inline_view_state.is_some() {
@@ -1195,14 +1195,14 @@ impl App {
 
         // When the model picker preview is visible, arrow keys navigate the picker list
         if self
-            .picker_state
+            .inline_interactive_state
             .as_ref()
             .map(|p| p.preview)
             .unwrap_or(false)
         {
             match code {
                 KeyCode::Up | KeyCode::Down | KeyCode::PageUp | KeyCode::PageDown => {
-                    return self.handle_picker_key(code, modifiers);
+                    return self.handle_inline_interactive_key(code, modifiers);
                 }
                 _ => {}
             }

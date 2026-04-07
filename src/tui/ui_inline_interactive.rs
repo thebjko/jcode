@@ -74,7 +74,7 @@ fn picker_entry_display_name(entry: &crate::tui::PickerEntry) -> String {
     format!("{}{}", entry.name, suffix)
 }
 
-fn account_picker_shows_provider_badge(picker: &crate::tui::PickerState) -> bool {
+fn account_picker_shows_provider_badge(picker: &crate::tui::InlineInteractiveState) -> bool {
     let mut providers: Vec<&str> = Vec::new();
     for &fi in &picker.filtered {
         let entry = &picker.entries[fi];
@@ -113,11 +113,11 @@ fn account_picker_entry_title(
     (format!("{}{}", provider_prefix, display_name), prefix_chars)
 }
 
-fn account_picker_state_label(entry: &crate::tui::PickerEntry) -> &'static str {
+fn account_inline_interactive_state_label(entry: &crate::tui::PickerEntry) -> &'static str {
     entry.account_state_label().unwrap_or("—")
 }
 
-fn picker_render_width(picker: &crate::tui::PickerState, max_width: usize) -> usize {
+fn picker_render_width(picker: &crate::tui::InlineInteractiveState, max_width: usize) -> usize {
     let marker_width = 3usize;
     let is_preview = picker.preview;
 
@@ -130,7 +130,8 @@ fn picker_render_width(picker: &crate::tui::PickerState, max_width: usize) -> us
             let entry = &picker.entries[fi];
             let (title, _) = account_picker_entry_title(entry, show_provider_badge);
             max_title_len = max_title_len.max(display_width(title.as_str()));
-            max_state_len = max_state_len.max(display_width(account_picker_state_label(entry)));
+            max_state_len =
+                max_state_len.max(display_width(account_inline_interactive_state_label(entry)));
         }
 
         let state_width = (max_state_len + 1).max(7).min(10);
@@ -230,8 +231,8 @@ fn fuzzy_match_positions(pattern: &str, text: &str) -> Vec<usize> {
     }
 }
 
-pub(super) fn draw_picker_line(frame: &mut Frame, app: &dyn TuiState, area: Rect) {
-    let picker = match app.picker_state() {
+pub(super) fn draw_inline_interactive(frame: &mut Frame, app: &dyn TuiState, area: Rect) {
+    let picker = match app.inline_interactive_state() {
         Some(p) => p,
         None => return,
     };
@@ -270,8 +271,8 @@ pub(super) fn draw_picker_line(frame: &mut Frame, app: &dyn TuiState, area: Rect
         if is_account_picker {
             let (title, _) = account_picker_entry_title(entry, show_account_provider_badge);
             max_account_title_len = max_account_title_len.max(display_width(title.as_str()));
-            max_account_state_len =
-                max_account_state_len.max(display_width(account_picker_state_label(entry)));
+            max_account_state_len = max_account_state_len
+                .max(display_width(account_inline_interactive_state_label(entry)));
         }
     }
     max_provider_len = max_provider_len.max(8);
@@ -478,7 +479,7 @@ pub(super) fn draw_picker_line(frame: &mut Frame, app: &dyn TuiState, area: Rect
             let (title_text, title_prefix_chars) =
                 account_picker_entry_title(entry, show_account_provider_badge);
             let padded_title = pad_left_display(title_text.as_str(), account_title_width);
-            let state_label = account_picker_state_label(entry);
+            let state_label = account_inline_interactive_state_label(entry);
             let state_display = format!(
                 " {}",
                 pad_left_display(state_label, account_state_width.saturating_sub(1))
@@ -667,8 +668,8 @@ pub(super) fn draw_picker_line(frame: &mut Frame, app: &dyn TuiState, area: Rect
 mod tests {
     use super::*;
 
-    fn sample_picker() -> crate::tui::PickerState {
-        crate::tui::PickerState {
+    fn sample_picker() -> crate::tui::InlineInteractiveState {
+        crate::tui::InlineInteractiveState {
             kind: crate::tui::PickerKind::Model,
             filtered: vec![0],
             selected: 0,
@@ -697,7 +698,7 @@ mod tests {
         }
     }
 
-    fn sample_account_picker(mixed_providers: bool) -> crate::tui::PickerState {
+    fn sample_account_picker(mixed_providers: bool) -> crate::tui::InlineInteractiveState {
         let mut models = vec![crate::tui::PickerEntry {
             name: "work".to_string(),
             options: vec![crate::tui::PickerOption {
@@ -748,7 +749,7 @@ mod tests {
             });
         }
 
-        crate::tui::PickerState {
+        crate::tui::InlineInteractiveState {
             kind: crate::tui::PickerKind::Account,
             filtered: (0..models.len()).collect(),
             selected: 0,
@@ -759,8 +760,8 @@ mod tests {
         }
     }
 
-    fn sample_agent_target_picker() -> crate::tui::PickerState {
-        crate::tui::PickerState {
+    fn sample_agent_target_picker() -> crate::tui::InlineInteractiveState {
+        crate::tui::InlineInteractiveState {
             kind: crate::tui::PickerKind::Model,
             filtered: vec![0],
             selected: 0,

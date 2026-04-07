@@ -1007,7 +1007,7 @@ impl TuiState for BenchState {
     fn diff_line_wrap(&self) -> bool {
         true
     }
-    fn picker_state(&self) -> Option<&jcode::tui::PickerState> {
+    fn inline_interactive_state(&self) -> Option<&jcode::tui::InlineInteractiveState> {
         None
     }
 

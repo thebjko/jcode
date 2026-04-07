@@ -267,14 +267,14 @@ pub trait TuiState {
     /// Whether to wrap lines in the pinned diff pane
     fn diff_line_wrap(&self) -> bool;
     /// Interactive inline UI state (picker-like flows shown above input)
-    fn picker_state(&self) -> Option<&PickerState>;
+    fn inline_interactive_state(&self) -> Option<&InlineInteractiveState>;
     /// Passive inline UI state (informational views shown above input)
     fn inline_view_state(&self) -> Option<&InlineViewState> {
         None
     }
     /// General inline UI state shown above input.
     fn inline_ui_state(&self) -> Option<InlineUiStateRef<'_>> {
-        self.picker_state()
+        self.inline_interactive_state()
             .map(InlineUiStateRef::Interactive)
             .or_else(|| self.inline_view_state().map(InlineUiStateRef::View))
     }
@@ -397,8 +397,6 @@ pub struct InlineInteractiveSchema {
     pub shows_default_shortcut_hint: bool,
     pub preview_activation_column: usize,
 }
-
-pub type PickerState = InlineInteractiveState;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct InlineViewState {
