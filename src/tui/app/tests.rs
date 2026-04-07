@@ -8060,7 +8060,7 @@ fn test_info_widget_data_includes_connection_type() {
 }
 
 #[test]
-fn test_remote_tui_state_uses_connecting_phase_before_history_even_with_cached_model() {
+fn test_remote_tui_state_prefers_cached_model_during_brief_connecting_phase() {
     let _guard = crate::storage::lock_test_env();
     let temp_home = tempfile::TempDir::new().expect("create temp home");
     let prev_home = std::env::var_os("JCODE_HOME");
@@ -8077,10 +8077,7 @@ fn test_remote_tui_state_uses_connecting_phase_before_history_even_with_cached_m
 
     let app = App::new_for_remote(Some(session_id.to_string()));
 
-    assert_eq!(
-        crate::tui::TuiState::provider_model(&app),
-        "connecting to server…"
-    );
+    assert_eq!(crate::tui::TuiState::provider_model(&app), "gpt-5.4");
     assert_eq!(crate::tui::TuiState::provider_name(&app), "openai");
     assert_eq!(
         crate::tui::TuiState::session_display_name(&app).as_deref(),
@@ -8160,10 +8157,7 @@ fn test_new_for_remote_uses_startup_stub_without_loading_full_transcript() {
     );
     assert_eq!(app.session.messages.len(), 1);
     assert_eq!(app.remote_session_id.as_deref(), Some(session_id));
-    assert_eq!(
-        crate::tui::TuiState::provider_model(&app),
-        "connecting to server…"
-    );
+    assert_eq!(crate::tui::TuiState::provider_model(&app), "gpt-5.4");
 
     if let Some(prev_home) = prev_home {
         crate::env::set_var("JCODE_HOME", prev_home);
@@ -8179,18 +8173,15 @@ fn test_remote_tui_state_shows_connected_after_startup_phase_clears_without_mode
     app.clear_remote_startup_phase();
 
     assert_eq!(crate::tui::TuiState::provider_model(&app), "connected");
-    assert_eq!(crate::tui::TuiState::provider_name(&app), "remote");
+    assert_eq!(crate::tui::TuiState::provider_name(&app), "");
 }
 
 #[test]
-fn test_remote_tui_state_shows_connecting_phase_without_cached_model() {
+fn test_remote_tui_state_hides_brief_connecting_phase_without_cached_model() {
     let app = App::new_for_remote(None);
 
-    assert_eq!(
-        crate::tui::TuiState::provider_model(&app),
-        "connecting to server…"
-    );
-    assert_eq!(crate::tui::TuiState::provider_name(&app), "remote");
+    assert_eq!(crate::tui::TuiState::provider_model(&app), "");
+    assert_eq!(crate::tui::TuiState::provider_name(&app), "");
 }
 
 #[test]
@@ -8233,10 +8224,7 @@ fn test_remote_startup_phase_does_not_require_duplicate_status_notice() {
     let mut app = App::new_for_remote(None);
     app.set_remote_startup_phase(crate::tui::app::RemoteStartupPhase::Connecting);
 
-    assert_eq!(
-        crate::tui::TuiState::provider_model(&app),
-        "connecting to server…"
-    );
+    assert_eq!(crate::tui::TuiState::provider_model(&app), "");
     assert_eq!(app.status_notice(), None);
 
     app.set_remote_startup_phase(crate::tui::app::RemoteStartupPhase::LoadingSession);

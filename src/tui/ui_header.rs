@@ -403,10 +403,11 @@ pub(crate) fn build_header_lines(app: &dyn TuiState, width: u16) -> Vec<Line<'st
     let provider_name = app.provider_name();
     let upstream = app.upstream_provider();
     let auth = app.auth_status();
+    let model = model.trim().to_string();
     let provider_label = {
         let trimmed = provider_name.trim();
         if trimmed.is_empty() {
-            "unknown".to_string()
+            String::new()
         } else {
             let name = trimmed.to_lowercase();
             let auth_tag = match name.as_str() {
@@ -447,20 +448,38 @@ pub(crate) fn build_header_lines(app: &dyn TuiState, width: u16) -> Vec<Line<'st
     };
 
     let w = width as usize;
-    let model_info = if let Some(ref provider) = upstream {
-        let full = format!(
-            "({}) {} via {} · /model to switch",
-            provider_label, model, provider
-        );
+    let model_info = if model.is_empty() {
+        String::new()
+    } else if let Some(ref provider) = upstream {
+        if provider_label.is_empty() {
+            let full = format!("{} via {} · /model to switch", model, provider);
+            if full.chars().count() <= w {
+                full
+            } else {
+                format!("{} via {}", model, provider)
+            }
+        } else {
+            let full = format!(
+                "({}) {} via {} · /model to switch",
+                provider_label, model, provider
+            );
+            if full.chars().count() <= w {
+                full
+            } else {
+                let short = format!("({}) {} via {}", provider_label, model, provider);
+                if short.chars().count() <= w {
+                    short
+                } else {
+                    format!("({}) {}", provider_label, model)
+                }
+            }
+        }
+    } else if provider_label.is_empty() {
+        let full = format!("{} · /model to switch", model);
         if full.chars().count() <= w {
             full
         } else {
-            let short = format!("({}) {} via {}", provider_label, model, provider);
-            if short.chars().count() <= w {
-                short
-            } else {
-                format!("({}) {}", provider_label, model)
-            }
+            model.clone()
         }
     } else {
         let full = format!("({}) {} · /model to switch", provider_label, model);
@@ -470,9 +489,11 @@ pub(crate) fn build_header_lines(app: &dyn TuiState, width: u16) -> Vec<Line<'st
             format!("({}) {}", provider_label, model)
         }
     };
-    lines.push(
-        Line::from(Span::styled(model_info, Style::default().fg(dim_color()))).alignment(align),
-    );
+    if !model_info.is_empty() {
+        lines.push(
+            Line::from(Span::styled(model_info, Style::default().fg(dim_color()))).alignment(align),
+        );
+    }
 
     let auth_line = build_auth_status_line(&auth, w);
     if !auth_line.spans.is_empty() {
@@ -734,6 +755,25 @@ mod tests {
                 .all(|line| line.alignment == Some(Alignment::Center)),
             "header detail lines should remain centered in left-aligned mode: {non_empty:?}"
         );
+    }
+
+    #[test]
+    fn build_header_lines_omits_placeholder_provider_label_when_unknown() {
+        let mut app = crate::tui::app::App::new_for_remote(None);
+        app.set_remote_startup_phase(crate::tui::app::RemoteStartupPhase::LoadingSession);
+
+        let lines = build_header_lines(&app, 80);
+        let rendered = lines
+            .first()
+            .expect("header line")
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+
+        assert!(rendered.contains("loading session…"));
+        assert!(!rendered.contains("(unknown)"));
+        assert!(!rendered.contains("(remote)"));
     }
 
     #[test]

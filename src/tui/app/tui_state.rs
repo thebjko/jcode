@@ -1,6 +1,9 @@
 use super::*;
 use std::cell::RefCell;
 use std::sync::Mutex;
+use std::time::Duration;
+
+const REMOTE_STARTUP_HEADER_DEBOUNCE: Duration = Duration::from_millis(400);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum WidgetProviderKind {
@@ -45,12 +48,19 @@ impl App {
     fn remote_header_provider_model(&self) -> Option<String> {
         self.remote_startup_phase
             .as_ref()
-            .map(|phase| {
+            .and_then(|phase| {
                 let elapsed = self
                     .remote_startup_phase_started
                     .map(|started| started.elapsed())
                     .unwrap_or_default();
-                phase.header_label_with_elapsed(elapsed)
+                let should_defer_header = matches!(phase, super::RemoteStartupPhase::Connecting)
+                    && elapsed < REMOTE_STARTUP_HEADER_DEBOUNCE;
+
+                if should_defer_header {
+                    None
+                } else {
+                    Some(phase.header_label_with_elapsed(elapsed))
+                }
             })
             .or_else(|| self.effective_remote_provider_model())
             .or_else(|| {
@@ -294,8 +304,7 @@ impl crate::tui::TuiState for App {
 
     fn provider_name(&self) -> String {
         if self.is_remote {
-            self.remote_header_provider_name()
-                .unwrap_or_else(|| self.provider.name().to_string())
+            self.remote_header_provider_name().unwrap_or_default()
         } else {
             self.remote_provider_name
                 .clone()
@@ -305,8 +314,7 @@ impl crate::tui::TuiState for App {
 
     fn provider_model(&self) -> String {
         if self.is_remote {
-            self.remote_header_provider_model()
-                .unwrap_or_else(|| "connecting to server…".to_string())
+            self.remote_header_provider_model().unwrap_or_default()
         } else {
             self.remote_provider_model
                 .clone()
