@@ -43,6 +43,7 @@ use crate::transport::Stream;
 use anyhow::Result;
 use futures::FutureExt;
 use jcode_agent_runtime::{InterruptSignal, SoftInterruptQueue, SoftInterruptSource, StreamError};
+use serde_json;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -105,6 +106,8 @@ pub(super) async fn handle_client(
     let registry_ms = t0.elapsed().as_millis();
 
     let mut swarm_enabled = crate::config::config().features.swarm;
+    let mut last_available_models_snapshot: Option<(Vec<String>, String)> = None;
+    const MAX_LIVE_AVAILABLE_MODELS_UPDATE_BYTES: usize = 64 * 1024;
 
     // Create a new session for this client
     let t0 = std::time::Instant::now();
@@ -130,6 +133,7 @@ pub(super) async fn handle_client(
             ClientConnectionInfo {
                 client_id: client_connection_id.clone(),
                 session_id: client_session_id.clone(),
+                client_instance_id: None,
                 debug_client_id: None,
                 connected_at,
                 last_seen: connected_at,
@@ -182,11 +186,16 @@ pub(super) async fn handle_client(
 
     // Spawn event forwarder for this client only
     let writer_clone = Arc::clone(&writer);
+    let client_connection_id_for_events = client_connection_id.clone();
     let event_handle = tokio::spawn(async move {
         while let Some(event) = client_event_rx.recv().await {
             let json = encode_event(&event);
             let mut w = writer_clone.lock().await;
-            if w.write_all(json.as_bytes()).await.is_err() {
+            if let Err(error) = w.write_all(json.as_bytes()).await {
+                crate::logging::warn(&format!(
+                    "event_forwarder write failed for connection {} while sending {:?}: {}",
+                    client_connection_id_for_events, event, error
+                ));
                 break;
             }
         }
@@ -260,10 +269,29 @@ pub(super) async fn handle_client(
                                 agent_guard.model_routes(),
                             )
                         };
-                        let _ = client_event_tx.send(ServerEvent::AvailableModelsUpdated {
-                            available_models: models,
+                        let routes_json = serde_json::to_string(&model_routes).unwrap_or_default();
+                        if last_available_models_snapshot
+                            .as_ref()
+                            .map(|(prev_models, prev_routes)| prev_models == &models && prev_routes == &routes_json)
+                            .unwrap_or(false)
+                        {
+                            continue;
+                        }
+                        let event = ServerEvent::AvailableModelsUpdated {
+                            available_models: models.clone(),
                             available_model_routes: model_routes,
-                        });
+                        };
+                        let encoded_len = crate::protocol::encode_event(&event).len();
+                        if encoded_len > MAX_LIVE_AVAILABLE_MODELS_UPDATE_BYTES {
+                            crate::logging::warn(&format!(
+                                "Skipping oversized bus AvailableModelsUpdated frame for connection {} ({} bytes)",
+                                client_connection_id, encoded_len
+                            ));
+                            last_available_models_snapshot = Some((models, routes_json));
+                            continue;
+                        }
+                        let _ = client_event_tx.send(event);
+                        last_available_models_snapshot = Some((models, routes_json));
                     }
                     Ok(BusEvent::BatchProgress(progress)) => {
                         if progress.session_id == client_session_id {
@@ -557,15 +585,23 @@ pub(super) async fn handle_client(
                 working_dir: subscribe_working_dir,
                 selfdev,
                 target_session_id,
+                client_instance_id,
                 client_has_local_history,
                 allow_session_takeover,
             } => {
+                {
+                    let mut connections = client_connections.write().await;
+                    if let Some(info) = connections.get_mut(&client_connection_id) {
+                        info.client_instance_id = client_instance_id.clone();
+                    }
+                }
                 if let Some(target_session_id) = target_session_id {
                     if crate::session::session_exists(&target_session_id) {
                         let pre_resume_session_id = client_session_id.clone();
                         if handle_resume_session(
                             id,
                             target_session_id.clone(),
+                            client_instance_id.as_deref(),
                             client_has_local_history,
                             allow_session_takeover,
                             &mut client_selfdev,
@@ -627,11 +663,20 @@ pub(super) async fn handle_client(
                                 &swarm_event_tx,
                             )
                             .await;
+                            let snapshot = {
+                                let agent_guard = agent.lock().await;
+                                let models = agent_guard.available_models_display();
+                                let routes_json = serde_json::to_string(&agent_guard.model_routes()).unwrap_or_default();
+                                (models, routes_json)
+                            };
+                            last_available_models_snapshot = Some(snapshot);
                         } else {
                             crate::logging::warn(&format!(
-                                "Target-aware subscribe failed to bind {} from temporary {}",
+                                "Target-aware subscribe failed to bind {} from temporary {}; closing temporary client connection {}",
                                 target_session_id, pre_resume_session_id
+                                , client_connection_id
                             ));
+                            break;
                         }
                     } else {
                         handle_subscribe(
@@ -684,6 +729,13 @@ pub(super) async fn handle_client(
                         &swarm_event_tx,
                     )
                     .await;
+                    let snapshot = {
+                        let agent_guard = agent.lock().await;
+                        let models = agent_guard.available_models_display();
+                        let routes_json = serde_json::to_string(&agent_guard.model_routes()).unwrap_or_default();
+                        (models, routes_json)
+                    };
+                    last_available_models_snapshot = Some(snapshot);
                 }
             }
 
@@ -704,6 +756,13 @@ pub(super) async fn handle_client(
                 {
                     break;
                 }
+                let snapshot = {
+                    let agent_guard = agent.lock().await;
+                    let models = agent_guard.available_models_display();
+                    let routes_json = serde_json::to_string(&agent_guard.model_routes()).unwrap_or_default();
+                    (models, routes_json)
+                };
+                last_available_models_snapshot = Some(snapshot);
             }
 
             Request::DebugCommand { id, .. } => {
@@ -721,12 +780,20 @@ pub(super) async fn handle_client(
             Request::ResumeSession {
                 id,
                 session_id,
+                client_instance_id,
                 client_has_local_history,
                 allow_session_takeover,
             } => {
+                {
+                    let mut connections = client_connections.write().await;
+                    if let Some(info) = connections.get_mut(&client_connection_id) {
+                        info.client_instance_id = client_instance_id.clone();
+                    }
+                }
                 if handle_resume_session(
                     id,
                     session_id,
+                    client_instance_id.as_deref(),
                     client_has_local_history,
                     allow_session_takeover,
                     &mut client_selfdev,
@@ -763,6 +830,13 @@ pub(super) async fn handle_client(
                 {
                     break;
                 }
+                let snapshot = {
+                    let agent_guard = agent.lock().await;
+                    let models = agent_guard.available_models_display();
+                    let routes_json = serde_json::to_string(&agent_guard.model_routes()).unwrap_or_default();
+                    (models, routes_json)
+                };
+                last_available_models_snapshot = Some(snapshot);
             }
 
             Request::CycleModel { id, direction } => {

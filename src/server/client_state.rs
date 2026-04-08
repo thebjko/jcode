@@ -16,6 +16,8 @@ pub(super) enum HistoryPayloadMode {
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{Mutex, RwLock};
 
+const MAX_LIVE_AVAILABLE_MODELS_UPDATE_BYTES: usize = 64 * 1024;
+
 pub(super) async fn handle_get_state(
     id: u64,
     client_session_id: &str,
@@ -337,13 +339,20 @@ pub(super) fn spawn_model_prefetch_update(
             return;
         }
 
-        let _ = write_event(
-            &writer,
-            &ServerEvent::AvailableModelsUpdated {
-                available_models: refreshed.0,
-                available_model_routes: refreshed.1,
-            },
-        )
-        .await;
+        let event = ServerEvent::AvailableModelsUpdated {
+            available_models: refreshed.0,
+            available_model_routes: refreshed.1,
+        };
+        let json = encode_event(&event);
+        if json.len() > MAX_LIVE_AVAILABLE_MODELS_UPDATE_BYTES {
+            crate::logging::warn(&format!(
+                "Skipping oversized direct AvailableModelsUpdated frame ({} bytes)",
+                json.len()
+            ));
+            return;
+        }
+
+        let mut writer = writer.lock().await;
+        let _ = writer.write_all(json.as_bytes()).await;
     });
 }

@@ -700,6 +700,13 @@ pub(super) fn handle_disconnect(
     } else {
         "connection to server dropped".to_string()
     };
+    crate::logging::warn(&format!(
+        "handle_disconnect: session={:?}, remote_session_id={:?}, reason={:?}, detail={}",
+        app.resume_session_id,
+        app.remote_session_id,
+        reason,
+        detail
+    ));
     state.last_disconnect_reason = Some(detail.clone());
 
     let scheduled_retry =
@@ -2042,10 +2049,9 @@ pub(super) fn handle_server_event(
             ..
         } => {
             if let Some(err) = error {
-                app.push_display_message(DisplayMessage::error(format!(
-                    "Failed to switch model: {}",
-                    err
-                )));
+                app.push_display_message(DisplayMessage::error(
+                    crate::tui::app::model_context::model_switch_failure_message(&err, true),
+                ));
                 app.set_status_notice("Model switch failed");
             } else {
                 app.update_context_limit_for_model(&model);

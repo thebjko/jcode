@@ -224,6 +224,7 @@ pub struct RemoteConnection {
     writer: Arc<Mutex<WriteHalf>>,
     _dummy_peer: Option<Stream>,
     session_id: Option<String>,
+    client_instance_id: Option<String>,
     next_request_id: u64,
     tool_diff: RemoteDiffTracker,
     line_buffer: String,
@@ -254,7 +255,7 @@ pub(crate) struct ReplayRemoteState {
 impl RemoteConnection {
     /// Connect to the server
     pub async fn connect() -> Result<Self> {
-        Self::connect_with_session(None, false, false).await
+        Self::connect_with_session(None, None, false, false).await
     }
 
     /// Connect to the server and optionally resume a specific session.
@@ -263,6 +264,7 @@ impl RemoteConnection {
     /// transcript locally and only needs lightweight session metadata from the server.
     pub async fn connect_with_session(
         resume_session: Option<&str>,
+        client_instance_id: Option<&str>,
         client_has_local_history: bool,
         allow_session_takeover: bool,
     ) -> Result<Self> {
@@ -277,6 +279,7 @@ impl RemoteConnection {
             writer: Arc::new(Mutex::new(writer)),
             _dummy_peer: None,
             session_id: None,
+            client_instance_id: client_instance_id.map(str::to_string),
             next_request_id: 1,
             tool_diff: RemoteDiffTracker::default(),
             line_buffer: String::new(),
@@ -295,6 +298,7 @@ impl RemoteConnection {
             working_dir,
             selfdev,
             target_session_id: resume_target.clone(),
+            client_instance_id: conn.client_instance_id.clone(),
             client_has_local_history,
             allow_session_takeover,
         })
@@ -390,6 +394,7 @@ impl RemoteConnection {
         let request = Request::ResumeSession {
             id: self.next_request_id,
             session_id: session_id.to_string(),
+            client_instance_id: self.client_instance_id.clone(),
             client_has_local_history: false,
             allow_session_takeover: false,
         };
@@ -646,16 +651,48 @@ impl RemoteConnection {
 
     /// Read the next event from the server.
     pub async fn next_event(&mut self) -> RemoteRead {
-        self.line_buffer.clear();
-        match self.reader.read_line(&mut self.line_buffer).await {
-            Ok(0) => RemoteRead::Disconnected(RemoteDisconnectReason::PeerClosed),
-            Ok(_) => match serde_json::from_str(&self.line_buffer) {
-                Ok(event) => RemoteRead::Event(event),
-                Err(error) => {
-                    RemoteRead::Disconnected(RemoteDisconnectReason::Protocol(error.to_string()))
+        loop {
+            self.line_buffer.clear();
+            match self.reader.read_line(&mut self.line_buffer).await {
+                Ok(0) => {
+                    crate::logging::warn(&format!(
+                        "RemoteConnection::next_event: peer closed (session_id={:?}, client_instance_id={:?})",
+                        self.session_id, self.client_instance_id
+                    ));
+                    return RemoteRead::Disconnected(RemoteDisconnectReason::PeerClosed);
                 }
-            },
-            Err(error) => RemoteRead::Disconnected(RemoteDisconnectReason::Io(error.to_string())),
+                Ok(_) => {
+                    if self.line_buffer.trim().is_empty() {
+                        crate::logging::warn(&format!(
+                            "RemoteConnection::next_event: skipping blank line (session_id={:?}, client_instance_id={:?})",
+                            self.session_id, self.client_instance_id
+                        ));
+                        continue;
+                    }
+                    match serde_json::from_str(&self.line_buffer) {
+                        Ok(event) => return RemoteRead::Event(event),
+                        Err(error) => {
+                            crate::logging::warn(&format!(
+                                "RemoteConnection::next_event: protocol error={} line={:?} (session_id={:?}, client_instance_id={:?})",
+                                error,
+                                self.line_buffer,
+                                self.session_id,
+                                self.client_instance_id
+                            ));
+                            return RemoteRead::Disconnected(RemoteDisconnectReason::Protocol(error.to_string()));
+                        }
+                    }
+                }
+                Err(error) => {
+                    crate::logging::warn(&format!(
+                        "RemoteConnection::next_event: io error={} (session_id={:?}, client_instance_id={:?})",
+                        error,
+                        self.session_id,
+                        self.client_instance_id
+                    ));
+                    return RemoteRead::Disconnected(RemoteDisconnectReason::Io(error.to_string()));
+                }
+            }
         }
     }
 
@@ -678,6 +715,7 @@ impl RemoteConnection {
             writer: Arc::new(Mutex::new(writer)),
             _dummy_peer: Some(b),
             session_id: None,
+            client_instance_id: None,
             next_request_id: 1,
             tool_diff: RemoteDiffTracker::default(),
             line_buffer: String::new(),
