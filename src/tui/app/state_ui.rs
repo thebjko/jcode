@@ -4,6 +4,8 @@ use crate::tui::{TuiState, backend, core, is_unexpected_cache_miss, ui};
 pub(super) struct RestoredReloadInput {
     pub input: String,
     pub cursor: usize,
+    pub pending_images: Vec<(String, String)>,
+    pub submit_on_restore: bool,
     pub queued_messages: Vec<String>,
     pub hidden_queued_system_messages: Vec<String>,
     pub startup_status_notice: Option<String>,
@@ -803,6 +805,68 @@ impl App {
             .collect()
     }
 
+    fn model_provider_suggestion_candidates(&self, model: &str) -> Vec<(String, &'static str)> {
+        fn push_unique(
+            seen: &mut std::collections::HashSet<String>,
+            entries: &mut Vec<(String, &'static str)>,
+            command: String,
+            help: &'static str,
+        ) {
+            if !command.is_empty() && seen.insert(command.clone()) {
+                entries.push((command, help));
+            }
+        }
+
+        let model = model.trim();
+        if model.is_empty() {
+            return Vec::new();
+        }
+
+        let mut seen = std::collections::HashSet::new();
+        let mut suggestions = Vec::new();
+        push_unique(
+            &mut seen,
+            &mut suggestions,
+            format!("/model {}@auto", model),
+            "Use automatic OpenRouter provider routing",
+        );
+
+        if self.is_remote {
+            let routes = if !self.remote_model_options.is_empty() {
+                self.remote_model_options.clone()
+            } else {
+                self.build_remote_model_routes_fallback()
+            };
+
+            for route in routes {
+                if route.model == model && route.api_method == "openrouter" {
+                    let help = if route.provider == "auto" {
+                        "Use automatic OpenRouter provider routing"
+                    } else {
+                        "Pin OpenRouter provider"
+                    };
+                    push_unique(
+                        &mut seen,
+                        &mut suggestions,
+                        format!("/model {}@{}", model, route.provider),
+                        help,
+                    );
+                }
+            }
+        } else {
+            for provider in self.provider.available_providers_for_model(model) {
+                push_unique(
+                    &mut seen,
+                    &mut suggestions,
+                    format!("/model {}@{}", model, provider),
+                    "Pin OpenRouter provider",
+                );
+            }
+        }
+
+        suggestions
+    }
+
     /// Get command suggestions based on current input (or base input for cycling)
     pub(super) fn get_suggestions_for(&self, input: &str) -> Vec<(String, &'static str)> {
         let input = input.trim_start();
@@ -816,6 +880,18 @@ impl App {
         let prefix_trimmed = prefix.trim_end();
 
         if prefix.starts_with("/model ") || prefix.starts_with("/models ") {
+            if let Some(model_spec) = input
+                .strip_prefix("/model ")
+                .or_else(|| input.strip_prefix("/models "))
+            {
+                if let Some((model, _provider_prefix)) = model_spec.rsplit_once('@') {
+                    let suggestions = self.model_provider_suggestion_candidates(model);
+                    if !suggestions.is_empty() {
+                        return self.rank_suggestions(input, suggestions);
+                    }
+                }
+            }
+
             let suggestions = self.model_suggestion_candidates();
             if suggestions.is_empty() {
                 return vec![("/model".into(), "Open model picker")];
@@ -1819,6 +1895,7 @@ impl App {
 
     pub(super) fn save_input_for_reload(&self, session_id: &str) {
         if self.input.is_empty()
+            && self.pending_images.is_empty()
             && self.queued_messages.is_empty()
             && self.hidden_queued_system_messages.is_empty()
             && self.interleave_message.is_none()
@@ -1858,6 +1935,11 @@ impl App {
             let data = serde_json::json!({
                 "cursor": self.cursor_pos,
                 "input": self.input,
+                "pending_images": self.pending_images.iter().map(|(media_type, data)| serde_json::json!({
+                    "media_type": media_type,
+                    "data": data,
+                })).collect::<Vec<_>>(),
+                "submit_on_restore": false,
                 "queued_messages": self.queued_messages,
                 "hidden_queued_system_messages": self.hidden_queued_system_messages,
                 "interleave_message": self.interleave_message,
@@ -1883,11 +1965,49 @@ impl App {
             let data = serde_json::json!({
                 "cursor": 0,
                 "input": "",
+                "pending_images": [],
+                "submit_on_restore": false,
                 "queued_messages": [],
                 "hidden_queued_system_messages": [message],
                 "startup_status_notice": inferred_hints.as_ref().map(|(status, _)| status.clone()),
                 "startup_display_message_title": inferred_hints.as_ref().map(|(_, (title, _))| title.clone()),
                 "startup_display_message": inferred_hints.as_ref().map(|(_, (_, body))| body.clone()),
+                "interleave_message": serde_json::Value::Null,
+                "pending_soft_interrupts": [],
+                "pending_soft_interrupt_resend": [],
+                "rate_limit_pending_message": serde_json::Value::Null,
+                "rate_limit_reset_in_ms": serde_json::Value::Null,
+                "observe_mode_enabled": false,
+                "observe_page_markdown": "",
+                "observe_page_updated_at_ms": 0,
+            });
+            let _ = std::fs::write(&path, data.to_string());
+        }
+    }
+
+    pub(crate) fn save_startup_submission_for_session(
+        session_id: &str,
+        input: String,
+        pending_images: Vec<(String, String)>,
+    ) {
+        if input.trim().is_empty() && pending_images.is_empty() {
+            return;
+        }
+        if let Ok(jcode_dir) = crate::storage::jcode_dir() {
+            let path = jcode_dir.join(format!("client-input-{}", session_id));
+            let data = serde_json::json!({
+                "cursor": input.len(),
+                "input": input,
+                "pending_images": pending_images.iter().map(|(media_type, data)| serde_json::json!({
+                    "media_type": media_type,
+                    "data": data,
+                })).collect::<Vec<_>>(),
+                "submit_on_restore": true,
+                "queued_messages": [],
+                "hidden_queued_system_messages": [],
+                "startup_status_notice": "Startup prompt queued",
+                "startup_display_message_title": serde_json::Value::Null,
+                "startup_display_message": serde_json::Value::Null,
                 "interleave_message": serde_json::Value::Null,
                 "pending_soft_interrupts": [],
                 "pending_soft_interrupt_resend": [],
@@ -1917,6 +2037,25 @@ impl App {
                 .unwrap_or_default()
                 .to_string();
             let cursor = value.get("cursor").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            let pending_images = value
+                .get("pending_images")
+                .and_then(|v| v.as_array())
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|item| {
+                            Some((
+                                item.get("media_type")?.as_str()?.to_string(),
+                                item.get("data")?.as_str()?.to_string(),
+                            ))
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let submit_on_restore = value
+                .get("submit_on_restore")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             let queued_messages = value
                 .get("queued_messages")
                 .and_then(|v| v.as_array())
@@ -2049,6 +2188,8 @@ impl App {
             return Some(RestoredReloadInput {
                 input,
                 cursor,
+                pending_images,
+                submit_on_restore,
                 queued_messages,
                 hidden_queued_system_messages,
                 startup_status_notice,
@@ -2070,6 +2211,8 @@ impl App {
         Some(RestoredReloadInput {
             input: input.to_string(),
             cursor,
+            pending_images: Vec::new(),
+            submit_on_restore: false,
             queued_messages: Vec::new(),
             hidden_queued_system_messages: Vec::new(),
             startup_status_notice: None,

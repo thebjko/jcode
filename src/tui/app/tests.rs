@@ -2305,6 +2305,27 @@ fn test_handle_key_event_shift_slash_inserts_question_mark() {
 }
 
 #[test]
+fn test_super_space_toggles_next_prompt_new_session_routing() {
+    let mut app = create_test_app();
+
+    app.handle_key(KeyCode::Char(' '), KeyModifiers::SUPER)
+        .unwrap();
+    assert!(app.route_next_prompt_to_new_session);
+    assert_eq!(
+        app.status_notice(),
+        Some("Next prompt → new session".to_string())
+    );
+
+    app.handle_key(KeyCode::Char(' '), KeyModifiers::SUPER)
+        .unwrap();
+    assert!(!app.route_next_prompt_to_new_session);
+    assert_eq!(
+        app.status_notice(),
+        Some("Next-prompt new session canceled".to_string())
+    );
+}
+
+#[test]
 fn test_handle_key_backspace() {
     let mut app = create_test_app();
 
@@ -3676,6 +3697,39 @@ fn configure_test_remote_models_with_openai_recommendations(app: &mut App) {
         .collect();
 }
 
+fn configure_test_remote_openrouter_provider_routes(app: &mut App) {
+    app.is_remote = true;
+    app.remote_provider_name = Some("openrouter".to_string());
+    app.remote_provider_model = Some("anthropic/claude-sonnet-4".to_string());
+    app.remote_available_entries = vec!["anthropic/claude-sonnet-4".to_string()];
+    app.remote_model_options = vec![
+        crate::provider::ModelRoute {
+            model: "anthropic/claude-sonnet-4".to_string(),
+            provider: "auto".to_string(),
+            api_method: "openrouter".to_string(),
+            available: true,
+            detail: "→ Fireworks".to_string(),
+            cheapness: None,
+        },
+        crate::provider::ModelRoute {
+            model: "anthropic/claude-sonnet-4".to_string(),
+            provider: "Fireworks".to_string(),
+            api_method: "openrouter".to_string(),
+            available: true,
+            detail: String::new(),
+            cheapness: None,
+        },
+        crate::provider::ModelRoute {
+            model: "anthropic/claude-sonnet-4".to_string(),
+            provider: "OpenAI".to_string(),
+            api_method: "openrouter".to_string(),
+            available: true,
+            detail: String::new(),
+            cheapness: None,
+        },
+    ];
+}
+
 #[test]
 fn test_model_picker_preview_filter_parsing() {
     assert_eq!(
@@ -3877,6 +3931,31 @@ fn test_model_command_trailing_space_shows_model_suggestions() {
 }
 
 #[test]
+fn test_model_command_provider_suggestions_include_openrouter_routes() {
+    let mut app = create_test_app();
+    configure_test_remote_openrouter_provider_routes(&mut app);
+
+    let suggestions = app.get_suggestions_for("/model anthropic/claude-sonnet-4@");
+    let commands: Vec<&str> = suggestions.iter().map(|(cmd, _)| cmd.as_str()).collect();
+
+    assert!(commands.contains(&"/model anthropic/claude-sonnet-4@auto"));
+    assert!(commands.contains(&"/model anthropic/claude-sonnet-4@Fireworks"));
+    assert!(commands.contains(&"/model anthropic/claude-sonnet-4@OpenAI"));
+}
+
+#[test]
+fn test_model_command_provider_suggestions_rank_matching_provider_prefix() {
+    let mut app = create_test_app();
+    configure_test_remote_openrouter_provider_routes(&mut app);
+
+    let suggestions = app.get_suggestions_for("/model anthropic/claude-sonnet-4@fi");
+    assert_eq!(
+        suggestions.first().map(|(cmd, _)| cmd.as_str()),
+        Some("/model anthropic/claude-sonnet-4@Fireworks")
+    );
+}
+
+#[test]
 fn test_login_command_suggestions_follow_provider_catalog() {
     let app = create_test_app();
     let suggestions = app.get_suggestions_for("/login ");
@@ -3902,6 +3981,18 @@ fn test_model_autocomplete_completes_unique_match() {
 
     assert!(app.autocomplete());
     assert_eq!(app.input(), "/model gpt-5.2-codex");
+}
+
+#[test]
+fn test_model_autocomplete_completes_unique_provider_match() {
+    let mut app = create_test_app();
+    configure_test_remote_openrouter_provider_routes(&mut app);
+
+    app.input = "/model anthropic/claude-sonnet-4@fi".to_string();
+    app.cursor_pos = app.input.len();
+
+    assert!(app.autocomplete());
+    assert_eq!(app.input(), "/model anthropic/claude-sonnet-4@Fireworks");
 }
 
 #[test]
@@ -5905,6 +5996,26 @@ fn test_save_and_restore_reload_state_preserves_queued_messages() {
 }
 
 #[test]
+fn test_save_and_restore_startup_submission_preserves_pending_images() {
+    with_temp_jcode_home(|| {
+        let session_id = "session_startup_prompt";
+        App::save_startup_submission_for_session(
+            session_id,
+            "describe this".to_string(),
+            vec![("image/png".to_string(), "abc123".to_string())],
+        );
+
+        let restored =
+            App::restore_input_for_reload(session_id).expect("startup submission should restore");
+        assert_eq!(restored.input, "describe this");
+        assert!(restored.submit_on_restore);
+        assert_eq!(restored.pending_images.len(), 1);
+        assert_eq!(restored.pending_images[0].0, "image/png");
+        assert_eq!(restored.pending_images[0].1, "abc123");
+    });
+}
+
+#[test]
 fn test_save_and_restore_reload_state_preserves_interleave_and_pending_retry() {
     let mut app = create_test_app();
     let session_id = format!("test-reload-pending-{}", std::process::id());
@@ -6033,6 +6144,44 @@ fn test_new_for_remote_requeues_restored_pending_soft_interrupts() {
         restored.queued_messages(),
         &["sent one", "sent two", "queued later"]
     );
+}
+
+#[test]
+fn test_new_for_remote_restored_interleave_triggers_dispatch_state() {
+    let mut app = create_test_app();
+    let session_id = format!("test-remote-interleave-dispatch-{}", std::process::id());
+
+    app.interleave_message = Some("interrupt after reload".to_string());
+    app.save_input_for_reload(&session_id);
+
+    let restored = App::new_for_remote(Some(session_id));
+    assert_eq!(
+        restored.interleave_message.as_deref(),
+        Some("interrupt after reload")
+    );
+    assert!(restored.pending_queued_dispatch);
+    assert!(restored.is_processing);
+    assert!(matches!(restored.status, ProcessingStatus::Sending));
+}
+
+#[test]
+fn test_new_for_remote_restored_soft_interrupt_resend_triggers_dispatch_state() {
+    let mut app = create_test_app();
+    let session_id = format!("test-remote-soft-interrupt-dispatch-{}", std::process::id());
+
+    app.pending_soft_interrupts = vec!["sent interrupt".to_string()];
+    app.pending_soft_interrupt_requests = vec![(55, "sent interrupt".to_string())];
+    app.save_input_for_reload(&session_id);
+
+    let restored = App::new_for_remote(Some(session_id));
+    assert_eq!(
+        restored.interleave_message.as_deref(),
+        Some("sent interrupt")
+    );
+    assert!(restored.queued_messages().is_empty());
+    assert!(restored.pending_queued_dispatch);
+    assert!(restored.is_processing);
+    assert!(matches!(restored.status, ProcessingStatus::Sending));
 }
 
 #[test]
@@ -8703,6 +8852,51 @@ fn test_remote_review_shows_processing_until_split_response() {
     assert!(app.processing_started.is_none());
     assert!(app.pending_split_startup_message.is_none());
     assert!(app.pending_split_label.is_none());
+}
+
+#[test]
+fn test_remote_super_space_routes_next_prompt_to_new_session() {
+    with_temp_jcode_home(|| {
+        let mut app = create_test_app();
+        app.is_remote = true;
+        app.input = "hello from split".to_string();
+        app.cursor_pos = app.input.len();
+
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let _guard = rt.enter();
+        let mut remote = crate::tui::backend::RemoteConnection::dummy();
+
+        rt.block_on(app.handle_remote_key(KeyCode::Char(' '), KeyModifiers::SUPER, &mut remote))
+            .expect("Super+Space should arm routing");
+        assert!(app.route_next_prompt_to_new_session);
+
+        rt.block_on(app.handle_remote_key(KeyCode::Enter, KeyModifiers::empty(), &mut remote))
+            .expect("armed prompt should launch split request");
+
+        assert!(!app.route_next_prompt_to_new_session);
+        assert!(app.pending_split_prompt.is_some());
+        assert_eq!(app.pending_split_label.as_deref(), Some("Prompt"));
+        assert!(app.is_processing);
+        assert!(matches!(app.status, ProcessingStatus::Sending));
+        assert!(app.current_message_id.is_none());
+
+        app.handle_server_event(
+            crate::protocol::ServerEvent::SplitResponse {
+                id: 1,
+                new_session_id: "session_prompt_child".to_string(),
+                new_session_name: "prompt_child".to_string(),
+            },
+            &mut remote,
+        );
+
+        let restored = App::restore_input_for_reload("session_prompt_child")
+            .expect("new prompt session should have startup submission saved");
+        assert_eq!(restored.input, "hello from split");
+        assert!(restored.submit_on_restore);
+        assert!(restored.pending_images.is_empty());
+        assert!(app.pending_split_prompt.is_none());
+        assert!(app.pending_split_label.is_none());
+    });
 }
 
 #[test]

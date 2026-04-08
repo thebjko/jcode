@@ -430,12 +430,62 @@ pub(super) fn handle_shift_enter(app: &mut App) {
 
 impl App {
     pub(super) fn has_queued_followups(&self) -> bool {
-        !self.queued_messages.is_empty() || !self.hidden_queued_system_messages.is_empty()
+        self.interleave_message.is_some()
+            || !self.queued_messages.is_empty()
+            || !self.hidden_queued_system_messages.is_empty()
     }
 
     pub(super) fn schedule_queued_dispatch_after_interrupt(&mut self) {
         if self.has_queued_followups() {
             self.pending_queued_dispatch = true;
+        }
+    }
+
+    pub(super) fn toggle_next_prompt_new_session_routing(&mut self) {
+        self.route_next_prompt_to_new_session = !self.route_next_prompt_to_new_session;
+        if self.route_next_prompt_to_new_session {
+            self.set_status_notice("Next prompt → new session");
+        } else {
+            self.set_status_notice("Next-prompt new session canceled");
+        }
+    }
+}
+
+pub(super) fn is_next_prompt_new_session_hotkey(code: KeyCode, modifiers: KeyModifiers) -> bool {
+    code == KeyCode::Char(' ')
+        && modifiers.contains(KeyModifiers::SUPER)
+        && !modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::HYPER)
+}
+
+fn input_routes_to_new_session(app: &App) -> bool {
+    if !app.route_next_prompt_to_new_session || app.input.is_empty() {
+        return false;
+    }
+    let trimmed = app.input.trim_start();
+    !trimmed.starts_with('/') && extract_input_shell_command(trimmed).is_none()
+}
+
+fn route_prompt_to_new_session_local(app: &mut App) -> bool {
+    if !input_routes_to_new_session(app) {
+        return false;
+    }
+
+    app.route_next_prompt_to_new_session = false;
+    let prepared = take_prepared_input(app);
+    let restored_raw = prepared.raw_input.clone();
+    let restored_images = prepared.images.clone();
+    match commands::launch_prompt_in_new_session_local(app, prepared.expanded, prepared.images) {
+        Ok(_) => true,
+        Err(error) => {
+            app.input = restored_raw;
+            app.cursor_pos = app.input.len();
+            app.pending_images = restored_images;
+            app.set_status_notice("Prompt launch failed");
+            app.push_display_message(DisplayMessage::error(format!(
+                "Failed to launch prompt in a new session: {}",
+                error
+            )));
+            true
         }
     }
 }
@@ -446,6 +496,10 @@ pub(super) fn handle_alternate_enter(app: &mut App) {
     }
 
     if app.input.is_empty() {
+        return;
+    }
+
+    if route_prompt_to_new_session_local(app) {
         return;
     }
 
@@ -923,6 +977,9 @@ pub(super) fn handle_enter(app: &mut App) -> bool {
         return true;
     }
     if !app.input.is_empty() {
+        if route_prompt_to_new_session_local(app) {
+            return true;
+        }
         match send_action(app, false) {
             SendAction::Submit => app.submit_input(),
             SendAction::Queue => queue_message(app),
@@ -1168,6 +1225,11 @@ impl App {
         }
 
         if handle_pre_control_shortcuts(self, code, modifiers) {
+            return Ok(());
+        }
+
+        if is_next_prompt_new_session_hotkey(code, modifiers) {
+            self.toggle_next_prompt_new_session_routing();
             return Ok(());
         }
 

@@ -6,9 +6,14 @@ impl App {
     fn apply_restored_reload_input(&mut self, restored: RestoredReloadInput) {
         self.input = restored.input;
         self.cursor_pos = restored.cursor;
+        self.pending_images = restored.pending_images;
+        self.submit_input_on_startup = restored.submit_on_restore
+            && (!self.input.is_empty() || !self.pending_images.is_empty());
         self.hidden_queued_system_messages = restored.hidden_queued_system_messages;
         if let Some(status_notice) = restored.startup_status_notice {
             self.set_status_notice(status_notice);
+        } else if self.submit_input_on_startup {
+            self.set_status_notice("Startup prompt queued");
         }
         if let Some((title, message)) = restored.startup_display_message {
             self.push_display_message(DisplayMessage::system(message).with_title(title));
@@ -218,6 +223,8 @@ impl App {
             restart_requested: None,
             pasted_contents: Vec::new(),
             pending_images: Vec::new(),
+            route_next_prompt_to_new_session: false,
+            submit_input_on_startup: false,
             copy_badge_ui: CopyBadgeUiState::default(),
             copy_selection_mode: false,
             copy_selection_anchor: None,
@@ -326,6 +333,7 @@ impl App {
             autoreview_after_current_turn: false,
             autojudge_after_current_turn: false,
             pending_split_startup_message: None,
+            pending_split_prompt: None,
             pending_split_model_override: None,
             pending_split_provider_key_override: None,
             pending_split_label: None,
@@ -496,6 +504,8 @@ impl App {
             restart_requested: None,
             pasted_contents: Vec::new(),
             pending_images: Vec::new(),
+            route_next_prompt_to_new_session: false,
+            submit_input_on_startup: false,
             copy_badge_ui: CopyBadgeUiState::default(),
             copy_selection_mode: false,
             copy_selection_anchor: None,
@@ -604,6 +614,7 @@ impl App {
             autoreview_after_current_turn: false,
             autojudge_after_current_turn: false,
             pending_split_startup_message: None,
+            pending_split_prompt: None,
             pending_split_model_override: None,
             pending_split_provider_key_override: None,
             pending_split_label: None,

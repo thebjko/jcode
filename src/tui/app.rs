@@ -78,6 +78,12 @@ struct PendingRemoteMessage {
 }
 
 #[derive(Debug, Clone)]
+struct PendingSplitPrompt {
+    content: String,
+    images: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone)]
 struct PendingProviderFailover {
     prompt: crate::provider::ProviderFailoverPrompt,
     deadline: Instant,
@@ -441,6 +447,10 @@ pub struct App {
     pasted_contents: Vec<String>,
     // Pending pasted images (media_type, base64_data) attached to next message
     pending_images: Vec<(String, String)>,
+    // One-shot flag: the next submitted prompt is routed to a new headed session.
+    route_next_prompt_to_new_session: bool,
+    // Restore-time flag: auto-submit restored input after startup.
+    submit_input_on_startup: bool,
     // Inline UI state for copy badges ([Alt] [⇧] [S])
     copy_badge_ui: CopyBadgeUiState,
     // Modal in-app selection/copy state for the chat viewport.
@@ -629,6 +639,8 @@ pub struct App {
     autojudge_after_current_turn: bool,
     // Startup message to preload into the next spawned split window.
     pending_split_startup_message: Option<String>,
+    // Startup user prompt to auto-submit in the next spawned split window.
+    pending_split_prompt: Option<PendingSplitPrompt>,
     // Optional model override to apply before opening the next spawned split window.
     pending_split_model_override: Option<String>,
     // Optional provider key override to persist into the next spawned split window.

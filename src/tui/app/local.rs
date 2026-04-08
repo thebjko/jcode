@@ -41,6 +41,10 @@ pub(super) async fn process_turn_with_input(
 }
 
 pub(super) fn handle_tick(app: &mut App) {
+    if app.submit_input_on_startup && !app.is_processing {
+        app.submit_input_on_startup = false;
+        app.submit_input();
+    }
     if let Some(chunk) = app.stream_buffer.flush() {
         app.streaming_text.push_str(&chunk);
     }

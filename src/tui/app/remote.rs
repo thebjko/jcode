@@ -752,6 +752,21 @@ pub(super) async fn process_remote_followups(app: &mut App, remote: &mut RemoteC
         return;
     }
 
+    if app.submit_input_on_startup && !app.is_processing {
+        app.submit_input_on_startup = false;
+        if !app.input.is_empty() || !app.pending_images.is_empty() {
+            let prepared = input::take_prepared_input(app);
+            if let Err(error) = submit_prepared_remote_input(app, remote, prepared).await {
+                app.push_display_message(DisplayMessage::error(format!(
+                    "Failed to submit startup prompt: {}",
+                    error
+                )));
+                app.set_status_notice("Startup prompt failed");
+            }
+            return;
+        }
+    }
+
     if app.pending_background_client_reload.is_some() && !app.is_processing {
         app.maybe_finish_background_client_reload();
         return;
@@ -786,6 +801,7 @@ pub(super) async fn process_remote_followups(app: &mut App, remote: &mut RemoteC
         if let Err(error) = remote.split().await {
             finish_remote_split_launch(app);
             let had_startup = app.pending_split_startup_message.take().is_some();
+            let had_prompt = app.pending_split_prompt.take().is_some();
             let label = app.pending_split_label.take();
             app.pending_split_model_override = None;
             app.pending_split_provider_key_override = None;
@@ -795,7 +811,7 @@ pub(super) async fn process_remote_followups(app: &mut App, remote: &mut RemoteC
                 flow_label.to_lowercase(),
                 error
             )));
-            if had_startup {
+            if had_startup || had_prompt {
                 app.set_status_notice(format!("{} launch failed", flow_label));
             }
         }
@@ -1061,6 +1077,81 @@ pub(super) async fn begin_remote_send(
     app.autojudge_after_current_turn = !is_system;
     remote.reset_call_output_tokens_seen();
     Ok(msg_id)
+}
+
+fn restore_prepared_remote_input(app: &mut App, prepared: input::PreparedInput) {
+    app.input = prepared.raw_input;
+    app.cursor_pos = app.input.len();
+    app.pending_images = prepared.images;
+}
+
+async fn submit_prepared_remote_input(
+    app: &mut App,
+    remote: &mut RemoteConnection,
+    prepared: input::PreparedInput,
+) -> Result<()> {
+    if let Some(command) = input::extract_input_shell_command(&prepared.expanded) {
+        submit_remote_input_shell(app, remote, prepared.raw_input, command.to_string()).await?;
+        return Ok(());
+    }
+
+    app.push_display_message(DisplayMessage {
+        role: "user".to_string(),
+        content: prepared.raw_input,
+        tool_calls: vec![],
+        duration_secs: None,
+        title: None,
+        tool_data: None,
+    });
+    let _ = app
+        .begin_remote_send(remote, prepared.expanded, prepared.images, false)
+        .await;
+    Ok(())
+}
+
+async fn route_prepared_input_to_new_remote_session(
+    app: &mut App,
+    remote: &mut RemoteConnection,
+    prepared: input::PreparedInput,
+) -> Result<()> {
+    app.route_next_prompt_to_new_session = false;
+    app.pending_split_startup_message = None;
+    app.pending_split_prompt = Some(super::PendingSplitPrompt {
+        content: prepared.expanded,
+        images: prepared.images,
+    });
+    app.pending_split_model_override = None;
+    app.pending_split_provider_key_override = None;
+    app.pending_split_label = Some("Prompt".to_string());
+    app.pending_split_started_at = Some(Instant::now());
+
+    if app.is_processing {
+        app.pending_split_request = true;
+        app.set_status_notice("Prompt queued for new session");
+        return Ok(());
+    }
+
+    app.pending_split_request = false;
+    begin_remote_split_launch(app, "Prompt");
+    if let Err(error) = remote.split().await {
+        finish_remote_split_launch(app);
+        let pending = app
+            .pending_split_prompt
+            .take()
+            .map(|prompt| input::PreparedInput {
+                raw_input: prepared.raw_input,
+                expanded: prompt.content,
+                images: prompt.images,
+            });
+        app.pending_split_model_override = None;
+        app.pending_split_provider_key_override = None;
+        app.pending_split_label = None;
+        if let Some(prepared) = pending {
+            restore_prepared_remote_input(app, prepared);
+        }
+        return Err(error);
+    }
+    Ok(())
 }
 
 fn begin_remote_split_launch(app: &mut App, label: &str) {
@@ -2219,6 +2310,7 @@ pub(super) fn handle_server_event(
                 finish_remote_split_launch(app);
                 app.pending_split_request = false;
                 app.pending_split_startup_message = None;
+                app.pending_split_prompt = None;
                 app.pending_split_model_override = None;
                 app.pending_split_provider_key_override = None;
                 app.pending_split_label = None;
@@ -2232,6 +2324,7 @@ pub(super) fn handle_server_event(
             finish_remote_split_launch(app);
             app.pending_split_request = false;
             let startup_message = app.pending_split_startup_message.take();
+            let startup_prompt = app.pending_split_prompt.take();
             let model_override = app.pending_split_model_override.take();
             let provider_key_override = app.pending_split_provider_key_override.take();
             let split_label = app.pending_split_label.take();
@@ -2242,6 +2335,12 @@ pub(super) fn handle_server_event(
                     model_override,
                     provider_key_override,
                     split_label.clone().map(|label| label.to_ascii_lowercase()),
+                );
+            } else if let Some(startup_prompt) = startup_prompt {
+                App::save_startup_submission_for_session(
+                    &new_session_id,
+                    startup_prompt.content,
+                    startup_prompt.images,
                 );
             }
             let exe = super::launch_client_executable();
@@ -2646,6 +2745,11 @@ async fn handle_remote_key_internal(
         return Ok(());
     }
 
+    if input::is_next_prompt_new_session_hotkey(code, modifiers) {
+        app.toggle_next_prompt_new_session_routing();
+        return Ok(());
+    }
+
     if app.dictation_key_matches(code, modifiers) {
         app.handle_dictation_trigger();
         return Ok(());
@@ -2939,20 +3043,13 @@ async fn handle_remote_key_internal(
         if !app.input.is_empty() {
             let prepared = input::take_prepared_input(app);
 
+            if app.route_next_prompt_to_new_session {
+                route_prepared_input_to_new_remote_session(app, remote, prepared).await?;
+                return Ok(());
+            }
+
             match app.send_action(true) {
-                SendAction::Submit => {
-                    app.push_display_message(DisplayMessage {
-                        role: "user".to_string(),
-                        content: prepared.raw_input,
-                        tool_calls: vec![],
-                        duration_secs: None,
-                        title: None,
-                        tool_data: None,
-                    });
-                    let _ = app
-                        .begin_remote_send(remote, prepared.expanded, prepared.images, false)
-                        .await;
-                }
+                SendAction::Submit => submit_prepared_remote_input(app, remote, prepared).await?,
                 SendAction::Queue => {
                     app.queued_messages.push(prepared.expanded);
                 }
@@ -3484,6 +3581,7 @@ async fn handle_remote_key_internal(
                         if let Err(error) = remote.split().await {
                             finish_remote_split_launch(app);
                             app.pending_split_startup_message = None;
+                            app.pending_split_prompt = None;
                             app.pending_split_model_override = None;
                             app.pending_split_provider_key_override = None;
                             app.pending_split_label = None;
@@ -3539,6 +3637,7 @@ async fn handle_remote_key_internal(
                         if let Err(error) = remote.split().await {
                             finish_remote_split_launch(app);
                             app.pending_split_startup_message = None;
+                            app.pending_split_prompt = None;
                             app.pending_split_model_override = None;
                             app.pending_split_provider_key_override = None;
                             app.pending_split_label = None;
@@ -3576,6 +3675,7 @@ async fn handle_remote_key_internal(
                         if let Err(error) = remote.split().await {
                             finish_remote_split_launch(app);
                             app.pending_split_startup_message = None;
+                            app.pending_split_prompt = None;
                             app.pending_split_model_override = None;
                             app.pending_split_provider_key_override = None;
                             app.pending_split_label = None;
@@ -3613,6 +3713,7 @@ async fn handle_remote_key_internal(
                         if let Err(error) = remote.split().await {
                             finish_remote_split_launch(app);
                             app.pending_split_startup_message = None;
+                            app.pending_split_prompt = None;
                             app.pending_split_model_override = None;
                             app.pending_split_provider_key_override = None;
                             app.pending_split_label = None;
@@ -4383,25 +4484,14 @@ async fn handle_remote_key_internal(
                     return Ok(());
                 }
 
-                if let Some(command) = input::extract_input_shell_command(&prepared.expanded) {
-                    submit_remote_input_shell(app, remote, prepared.raw_input, command.to_string())
-                        .await?;
+                if app.route_next_prompt_to_new_session {
+                    route_prepared_input_to_new_remote_session(app, remote, prepared).await?;
                     return Ok(());
                 }
 
                 match app.send_action(false) {
                     SendAction::Submit => {
-                        app.push_display_message(DisplayMessage {
-                            role: "user".to_string(),
-                            content: prepared.raw_input,
-                            tool_calls: vec![],
-                            duration_secs: None,
-                            title: None,
-                            tool_data: None,
-                        });
-                        let _ = app
-                            .begin_remote_send(remote, prepared.expanded, prepared.images, false)
-                            .await;
+                        submit_prepared_remote_input(app, remote, prepared).await?
                     }
                     SendAction::Queue => {
                         app.queued_messages.push(prepared.expanded);
