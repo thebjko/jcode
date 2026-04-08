@@ -46,7 +46,13 @@ pub(super) enum PendingLogin {
         env_file: String,
         key_name: String,
         default_model: Option<String>,
+        endpoint: Option<String>,
+        api_key_optional: bool,
         openai_compatible_profile: Option<crate::provider_catalog::OpenAiCompatibleProfile>,
+    },
+    /// Waiting for the user to paste a custom OpenAI-compatible API base.
+    OpenAiCompatibleApiBase {
+        profile: crate::provider_catalog::OpenAiCompatibleProfile,
     },
     /// Waiting for user to paste a Cursor API key.
     CursorApiKey,
@@ -336,6 +342,8 @@ impl App {
             env_file: crate::subscription_catalog::JCODE_ENV_FILE.to_string(),
             key_name: crate::subscription_catalog::JCODE_API_KEY_ENV.to_string(),
             default_model: Some(crate::subscription_catalog::default_model().id.to_string()),
+            endpoint: None,
+            api_key_optional: false,
             openai_compatible_profile: None,
         });
     }
@@ -2316,6 +2324,8 @@ impl App {
             "OPENROUTER_API_KEY",
             None,
             None,
+            false,
+            None,
         );
     }
 
@@ -2347,6 +2357,27 @@ impl App {
         &mut self,
         profile: crate::provider_catalog::OpenAiCompatibleProfile,
     ) {
+        if profile.id == crate::provider_catalog::OPENAI_COMPAT_PROFILE.id {
+            let resolved = crate::provider_catalog::resolve_openai_compatible_profile(profile);
+            self.push_display_message(DisplayMessage::system(format!(
+                "**{} Endpoint**\n\n\
+                 Setup docs: {}\n\
+                 Current API base: `{}`\n\n\
+                 **Paste the API base below**. Press Enter to keep the current value.",
+                resolved.display_name, resolved.setup_url, resolved.api_base
+            )));
+            self.set_status_notice("Login: API base...");
+            self.pending_login = Some(PendingLogin::OpenAiCompatibleApiBase { profile });
+            return;
+        }
+
+        self.start_openai_compatible_key_login(profile);
+    }
+
+    fn start_openai_compatible_key_login(
+        &mut self,
+        profile: crate::provider_catalog::OpenAiCompatibleProfile,
+    ) {
         let resolved = crate::provider_catalog::resolve_openai_compatible_profile(profile);
         self.start_api_key_login(
             &resolved.display_name,
@@ -2354,6 +2385,8 @@ impl App {
             &resolved.env_file,
             &resolved.api_key_env,
             resolved.default_model.as_deref(),
+            Some(&resolved.api_base),
+            !resolved.requires_api_key,
             Some(profile),
         );
     }
@@ -2365,26 +2398,53 @@ impl App {
         env_file: &str,
         key_name: &str,
         default_model: Option<&str>,
+        endpoint: Option<&str>,
+        api_key_optional: bool,
         openai_compatible_profile: Option<crate::provider_catalog::OpenAiCompatibleProfile>,
     ) {
         let model_hint = default_model
             .map(|m| format!("Suggested default model: `{}`\n\n", m))
             .unwrap_or_default();
+        let endpoint_hint = endpoint
+            .map(|endpoint| format!("Endpoint: `{}`\n", endpoint))
+            .unwrap_or_default();
+        let prompt = if api_key_optional {
+            "**Paste your API key below** if your endpoint requires one. Press Enter to skip."
+        } else {
+            "**Paste your API key below** (it will be saved securely)."
+        };
         self.push_display_message(DisplayMessage::system(format!(
-            "**{} API Key**\n\n\
+            "**{} {}**\n\n\
              Setup docs: {}\n\
              Stored variable: `{}`\n\
+             {}\
              {}\n\
-             **Paste your API key below** (it will be saved securely).",
-            provider, docs_url, key_name, model_hint
+             {}",
+            provider,
+            if api_key_optional {
+                "Local Endpoint"
+            } else {
+                "API Key"
+            },
+            docs_url,
+            key_name,
+            endpoint_hint,
+            model_hint,
+            prompt,
         )));
-        self.set_status_notice("Login: paste key...");
+        self.set_status_notice(if api_key_optional {
+            "Login: optional key..."
+        } else {
+            "Login: paste key..."
+        });
         self.pending_login = Some(PendingLogin::ApiKeyProfile {
             provider: provider.to_string(),
             docs_url: docs_url.to_string(),
             env_file: env_file.to_string(),
             key_name: key_name.to_string(),
             default_model: default_model.map(|m| m.to_string()),
+            endpoint: endpoint.map(|value| value.to_string()),
+            api_key_optional,
             openai_compatible_profile,
         });
     }
@@ -2978,9 +3038,27 @@ impl App {
                 env_file,
                 key_name,
                 default_model,
+                endpoint,
+                api_key_optional,
                 openai_compatible_profile,
             } => {
                 let key = input.trim().to_string();
+                if key.is_empty() && !api_key_optional {
+                    self.push_display_message(DisplayMessage::error(
+                        "API key cannot be empty.".to_string(),
+                    ));
+                    self.pending_login = Some(PendingLogin::ApiKeyProfile {
+                        provider,
+                        docs_url,
+                        env_file,
+                        key_name,
+                        default_model,
+                        endpoint,
+                        api_key_optional,
+                        openai_compatible_profile,
+                    });
+                    return;
+                }
                 if key_name == "OPENROUTER_API_KEY" && !key.starts_with("sk-or-") {
                     self.push_display_message(DisplayMessage::system(
                         "OpenRouter keys typically start with `sk-or-`. Saving anyway..."
@@ -2988,8 +3066,41 @@ impl App {
                     ));
                 }
 
+                let resolved_openai_compatible = openai_compatible_profile
+                    .map(crate::provider_catalog::resolve_openai_compatible_profile);
+
                 let save_result: anyhow::Result<()> =
-                    if key_name == crate::subscription_catalog::JCODE_API_KEY_ENV {
+                    if let Some(resolved) = resolved_openai_compatible.as_ref() {
+                        (|| {
+                            if resolved.requires_api_key {
+                                crate::provider_catalog::save_env_value_to_env_file(
+                                    crate::provider_catalog::OPENAI_COMPAT_LOCAL_ENABLED_ENV,
+                                    &resolved.env_file,
+                                    None,
+                                )?;
+                                crate::provider_catalog::save_env_value_to_env_file(
+                                    &resolved.api_key_env,
+                                    &resolved.env_file,
+                                    Some(key.trim()),
+                                )
+                            } else {
+                                crate::provider_catalog::save_env_value_to_env_file(
+                                    crate::provider_catalog::OPENAI_COMPAT_LOCAL_ENABLED_ENV,
+                                    &resolved.env_file,
+                                    Some("1"),
+                                )?;
+                                crate::provider_catalog::save_env_value_to_env_file(
+                                    &resolved.api_key_env,
+                                    &resolved.env_file,
+                                    if key.trim().is_empty() {
+                                        None
+                                    } else {
+                                        Some(key.trim())
+                                    },
+                                )
+                            }
+                        })()
+                    } else if key_name == crate::subscription_catalog::JCODE_API_KEY_ENV {
                         (|| {
                             let mut content = format!("{}={}\n", key_name, key);
                             if let Some(base) = crate::subscription_catalog::configured_api_base() {
@@ -3022,12 +3133,20 @@ impl App {
                                 profile,
                             ));
                             crate::cli::provider_init::lock_model_provider("openrouter");
-                            if let Some(default_model) = default_model.as_deref() {
+                            if let Some(default_model) = resolved_openai_compatible
+                                .as_ref()
+                                .and_then(|resolved| resolved.default_model.as_deref())
+                                .or(default_model.as_deref())
+                            {
                                 crate::env::set_var("JCODE_OPENROUTER_MODEL", default_model);
                             }
                         }
 
-                        let model_hint = default_model
+                        let effective_default_model = resolved_openai_compatible
+                            .as_ref()
+                            .and_then(|resolved| resolved.default_model.as_deref())
+                            .or(default_model.as_deref());
+                        let model_hint = effective_default_model
                             .map(|m| format!("\nSuggested default model: `{}`", m))
                             .unwrap_or_default();
                         let guidance = if key_name == crate::subscription_catalog::JCODE_API_KEY_ENV
@@ -3036,6 +3155,19 @@ impl App {
                                 "Use `--provider jcode` or `/login jcode` to access curated models via your router.\nDocs: {}",
                                 docs_url
                             )
+                        } else if let Some(resolved) = resolved_openai_compatible.as_ref() {
+                            if resolved.requires_api_key {
+                                format!(
+                                    "Restart with `--provider {}` to use this backend in a new session.",
+                                    provider.to_lowercase().replace(' ', "-")
+                                )
+                            } else {
+                                format!(
+                                    "Local endpoint configured at `{}`. Restart with `--provider {}` to use this backend in a new session.",
+                                    endpoint.as_deref().unwrap_or(resolved.api_base.as_str()),
+                                    provider.to_lowercase().replace(' ', "-")
+                                )
+                            }
                         } else if key_name == "OPENROUTER_API_KEY" {
                             "You can now use `/model` to switch to OpenRouter models.".to_string()
                         } else {
@@ -3044,14 +3176,27 @@ impl App {
                                 provider.to_lowercase().replace(' ', "-")
                             )
                         };
+                        let saved_label = if let Some(resolved) =
+                            resolved_openai_compatible.as_ref()
+                        {
+                            if resolved.requires_api_key {
+                                format!("{} API key saved", provider)
+                            } else if key.trim().is_empty() {
+                                format!("{} local endpoint saved", provider)
+                            } else {
+                                format!("{} local endpoint and optional API key saved", provider)
+                            }
+                        } else {
+                            format!("{} API key saved", provider)
+                        };
                         Bus::global().publish(BusEvent::LoginCompleted(LoginCompleted {
                             provider: provider.clone(),
                             success: true,
                             message: format!(
-                                "**{} API key saved.**\n\n\
+                                "**{}.**\n\n\
                                  Stored at `~/.config/jcode/{}`.\n\
                                  {}{}",
-                                provider, env_file, guidance, model_hint
+                                saved_label, env_file, guidance, model_hint
                             ),
                         }));
                     }
@@ -3060,8 +3205,49 @@ impl App {
                             "Failed to save {} key: {}",
                             provider, e
                         )));
+                        self.pending_login = Some(PendingLogin::ApiKeyProfile {
+                            provider,
+                            docs_url,
+                            env_file,
+                            key_name,
+                            default_model,
+                            endpoint,
+                            api_key_optional,
+                            openai_compatible_profile,
+                        });
                     }
                 }
+            }
+            PendingLogin::OpenAiCompatibleApiBase { profile } => {
+                let api_base = input.trim();
+                if !api_base.is_empty() {
+                    let normalized = match crate::provider_catalog::normalize_api_base(api_base) {
+                        Some(value) => value,
+                        None => {
+                            self.push_display_message(DisplayMessage::error(
+                                "OpenAI-compatible API base must be https://... or http://localhost."
+                                    .to_string(),
+                            ));
+                            self.pending_login =
+                                Some(PendingLogin::OpenAiCompatibleApiBase { profile });
+                            return;
+                        }
+                    };
+                    if let Err(err) = crate::provider_catalog::save_env_value_to_env_file(
+                        "JCODE_OPENAI_COMPAT_API_BASE",
+                        crate::provider_catalog::OPENAI_COMPAT_PROFILE.env_file,
+                        Some(&normalized),
+                    ) {
+                        self.push_display_message(DisplayMessage::error(format!(
+                            "Failed to save OpenAI-compatible API base: {}",
+                            err
+                        )));
+                        self.pending_login =
+                            Some(PendingLogin::OpenAiCompatibleApiBase { profile });
+                        return;
+                    }
+                }
+                self.start_openai_compatible_key_login(profile);
             }
             PendingLogin::CursorApiKey => {
                 let key = input.trim().to_string();
