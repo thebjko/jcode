@@ -3457,6 +3457,60 @@ impl App {
     }
 }
 
+fn save_tui_openai_compatible_api_base(
+    api_base: &str,
+) -> anyhow::Result<crate::provider_catalog::ResolvedOpenAiCompatibleProfile> {
+    let trimmed = api_base.trim();
+    if !trimmed.is_empty() {
+        let normalized = crate::provider_catalog::normalize_api_base(trimmed).ok_or_else(|| {
+            anyhow::anyhow!("OpenAI-compatible API base must be https://... or http://localhost.")
+        })?;
+        crate::provider_catalog::save_env_value_to_env_file(
+            "JCODE_OPENAI_COMPAT_API_BASE",
+            crate::provider_catalog::OPENAI_COMPAT_PROFILE.env_file,
+            Some(&normalized),
+        )?;
+    }
+    Ok(crate::provider_catalog::resolve_openai_compatible_profile(
+        crate::provider_catalog::OPENAI_COMPAT_PROFILE,
+    ))
+}
+
+fn save_tui_openai_compatible_key(
+    profile: crate::provider_catalog::OpenAiCompatibleProfile,
+    key: &str,
+) -> anyhow::Result<crate::provider_catalog::ResolvedOpenAiCompatibleProfile> {
+    let resolved = crate::provider_catalog::resolve_openai_compatible_profile(profile);
+    if resolved.requires_api_key {
+        crate::provider_catalog::save_env_value_to_env_file(
+            crate::provider_catalog::OPENAI_COMPAT_LOCAL_ENABLED_ENV,
+            &resolved.env_file,
+            None,
+        )?;
+        crate::provider_catalog::save_env_value_to_env_file(
+            &resolved.api_key_env,
+            &resolved.env_file,
+            Some(key.trim()),
+        )?;
+    } else {
+        crate::provider_catalog::save_env_value_to_env_file(
+            crate::provider_catalog::OPENAI_COMPAT_LOCAL_ENABLED_ENV,
+            &resolved.env_file,
+            Some("1"),
+        )?;
+        crate::provider_catalog::save_env_value_to_env_file(
+            &resolved.api_key_env,
+            &resolved.env_file,
+            if key.trim().is_empty() {
+                None
+            } else {
+                Some(key.trim())
+            },
+        )?;
+    }
+    Ok(resolved)
+}
+
 fn looks_like_oauth_callback_input(input: &str) -> bool {
     let input = input.trim();
     input.starts_with("http://")
@@ -3472,7 +3526,10 @@ fn antigravity_input_requires_state_validation(input: &str, expected_state: Opti
 
 #[cfg(test)]
 mod tests {
-    use super::antigravity_input_requires_state_validation;
+    use super::{
+        antigravity_input_requires_state_validation, save_tui_openai_compatible_api_base,
+        save_tui_openai_compatible_key,
+    };
 
     #[test]
     fn antigravity_auto_callback_code_skips_manual_callback_parser() {
@@ -3488,6 +3545,35 @@ mod tests {
             "http://127.0.0.1:51121/oauth-callback?code=abc&state=expected_state",
             Some("expected_state")
         ));
+    }
+
+    #[test]
+    fn tui_openai_compatible_api_base_accepts_localhost_override() {
+        let _env_guard = crate::storage::lock_test_env();
+        let resolved = save_tui_openai_compatible_api_base("http://localhost:11434/v1")
+            .expect("save api base");
+        assert_eq!(resolved.api_base, "http://localhost:11434/v1");
+        assert!(!resolved.requires_api_key);
+    }
+
+    #[test]
+    fn tui_openai_compatible_local_key_save_allows_empty_key() {
+        let _env_guard = crate::storage::lock_test_env();
+        let resolved = save_tui_openai_compatible_key(crate::provider_catalog::OLLAMA_PROFILE, "")
+            .expect("save local key");
+        assert_eq!(resolved.api_base, "http://localhost:11434/v1");
+        assert!(
+            crate::provider_catalog::openai_compatible_profile_is_configured(
+                crate::provider_catalog::OLLAMA_PROFILE
+            )
+        );
+        assert!(
+            crate::provider_catalog::load_api_key_from_env_or_config(
+                &resolved.api_key_env,
+                &resolved.env_file,
+            )
+            .is_none()
+        );
     }
 }
 
