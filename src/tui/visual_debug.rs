@@ -235,6 +235,17 @@ struct FrameBuffer {
     next_frame_id: u64,
 }
 
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct VisualDebugMemoryProfile {
+    pub enabled: bool,
+    pub overlay_enabled: bool,
+    pub frames_in_buffer: usize,
+    pub max_frames: usize,
+    pub total_frames_captured: u64,
+    pub anomalous_frames_in_buffer: usize,
+    pub frame_json_estimate_bytes: usize,
+}
+
 impl FrameBuffer {
     fn new() -> Self {
         Self {
@@ -382,6 +393,35 @@ pub fn latest_frame_json_normalized() -> Option<String> {
     let frame = latest_frame()?;
     let normalized = normalize_frame(&frame);
     serde_json::to_string_pretty(&normalized).ok()
+}
+
+pub fn debug_memory_profile() -> VisualDebugMemoryProfile {
+    let Ok(buffer) = get_frame_buffer().lock() else {
+        return VisualDebugMemoryProfile {
+            enabled: is_enabled(),
+            overlay_enabled: overlay_enabled(),
+            max_frames: MAX_FRAMES,
+            ..VisualDebugMemoryProfile::default()
+        };
+    };
+
+    VisualDebugMemoryProfile {
+        enabled: is_enabled(),
+        overlay_enabled: overlay_enabled(),
+        frames_in_buffer: buffer.frames.len(),
+        max_frames: MAX_FRAMES,
+        total_frames_captured: buffer.next_frame_id,
+        anomalous_frames_in_buffer: buffer
+            .frames
+            .iter()
+            .filter(|f| !f.anomalies.is_empty())
+            .count(),
+        frame_json_estimate_bytes: buffer
+            .frames
+            .iter()
+            .map(crate::process_memory::estimate_json_bytes)
+            .sum(),
+    }
 }
 
 /// Normalize a frame capture for stable comparisons.

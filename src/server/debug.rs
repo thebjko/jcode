@@ -20,6 +20,7 @@ use crate::protocol::{Request, ServerEvent, TranscriptMode, decode_request, enco
 use crate::provider::Provider;
 use crate::transport::Stream;
 use anyhow::Result;
+use jcode_agent_runtime::InterruptSignal;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -183,7 +184,11 @@ pub(super) async fn handle_debug_client(
     swarm_plans: Arc<RwLock<HashMap<String, VersionedPlan>>>,
     swarm_coordinators: Arc<RwLock<HashMap<String, String>>>,
     file_touches: Arc<RwLock<HashMap<PathBuf, Vec<FileAccess>>>>,
+    files_touched_by_session: Arc<RwLock<HashMap<String, HashSet<PathBuf>>>>,
     channel_subscriptions: Arc<RwLock<HashMap<String, HashMap<String, HashSet<String>>>>>,
+    channel_subscriptions_by_session: Arc<
+        RwLock<HashMap<String, HashMap<String, HashSet<String>>>>,
+    >,
     client_debug_state: Arc<RwLock<ClientDebugState>>,
     client_debug_response_tx: broadcast::Sender<(u64, String)>,
     debug_jobs: Arc<RwLock<HashMap<String, DebugJob>>>,
@@ -194,6 +199,7 @@ pub(super) async fn handle_debug_client(
     server_start_time: std::time::Instant,
     ambient_runner: Option<AmbientRunnerHandle>,
     mcp_pool: Option<Arc<crate::mcp::SharedMcpPool>>,
+    shutdown_signals: Arc<RwLock<HashMap<String, InterruptSignal>>>,
     soft_interrupt_queues: super::SessionInterruptQueues,
 ) -> Result<()> {
     let (reader, mut writer) = stream.into_split();
@@ -372,6 +378,18 @@ pub(super) async fn handle_debug_client(
                             &client_debug_state,
                             &server_identity,
                             server_start_time,
+                            &swarms_by_id,
+                            &shared_context,
+                            &swarm_plans,
+                            &swarm_coordinators,
+                            &file_touches,
+                            &files_touched_by_session,
+                            &channel_subscriptions,
+                            &channel_subscriptions_by_session,
+                            &debug_jobs,
+                            &event_history,
+                            &shutdown_signals,
+                            &soft_interrupt_queues,
                         )
                         .await?
                         {

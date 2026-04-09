@@ -249,7 +249,9 @@ impl ServerRuntime {
             Arc::clone(&self.swarm_plans),
             Arc::clone(&self.swarm_coordinators),
             Arc::clone(&self.file_touches),
+            Arc::clone(&self.files_touched_by_session),
             Arc::clone(&self.channel_subscriptions),
+            Arc::clone(&self.channel_subscriptions_by_session),
             Arc::clone(&self.client_debug_state),
             self.client_debug_response_tx.clone(),
             Arc::clone(&self.debug_jobs),
@@ -260,6 +262,7 @@ impl ServerRuntime {
             server_start_time,
             self.ambient_runner.clone(),
             mcp_pool,
+            Arc::clone(&self.shutdown_signals),
             Arc::clone(&self.soft_interrupt_queues),
         )
         .await

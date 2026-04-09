@@ -589,7 +589,7 @@ pub fn debug_cache() -> Vec<MermaidCacheEntry> {
 }
 
 pub fn debug_memory_profile() -> MermaidMemoryProfile {
-    let process_mem = process_memory_snapshot();
+    let process_mem = crate::process_memory::snapshot_with_source("client:mermaid:memory");
     let mut out = MermaidMemoryProfile {
         process_rss_bytes: process_mem.rss_bytes,
         process_peak_rss_bytes: process_mem.peak_rss_bytes,

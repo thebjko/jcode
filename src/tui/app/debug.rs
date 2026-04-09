@@ -65,6 +65,37 @@ pub(super) struct DebugRunReport {
     assertions: Vec<DebugAssertResult>,
 }
 
+fn estimate_display_message_bytes(message: &DisplayMessage) -> usize {
+    message.role.len()
+        + message.content.len()
+        + message
+            .tool_calls
+            .iter()
+            .map(|call| call.len())
+            .sum::<usize>()
+        + message.title.as_ref().map(|title| title.len()).unwrap_or(0)
+        + message
+            .tool_data
+            .as_ref()
+            .map(crate::process_memory::estimate_json_bytes)
+            .unwrap_or(0)
+}
+
+fn estimate_string_vec_bytes(values: &[String]) -> usize {
+    values.iter().map(|value| value.len()).sum()
+}
+
+fn estimate_pair_vec_bytes(values: &[(String, usize)]) -> usize {
+    values.iter().map(|(name, _)| name.len()).sum()
+}
+
+fn estimate_pending_images_bytes(values: &[(String, String)]) -> usize {
+    values
+        .iter()
+        .map(|(media_type, data)| media_type.len() + data.len())
+        .sum()
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct ScrollTestConfig {
     width: Option<u16>,
@@ -277,6 +308,104 @@ impl ScrollTestState {
 }
 
 impl App {
+    fn debug_memory_profile(&self) -> serde_json::Value {
+        let process = crate::process_memory::snapshot_with_source("client:memory");
+        let markdown = crate::tui::markdown::debug_memory_profile();
+        let mermaid = crate::tui::mermaid::debug_memory_profile();
+        let visual_debug = crate::tui::visual_debug::debug_memory_profile();
+        let mcp = self
+            .mcp_manager
+            .try_read()
+            .map(|manager| manager.debug_memory_profile())
+            .ok();
+
+        let provider_messages_json_bytes: usize = self
+            .messages
+            .iter()
+            .map(crate::process_memory::estimate_json_bytes)
+            .sum();
+        let display_messages_bytes: usize = self
+            .display_messages
+            .iter()
+            .map(estimate_display_message_bytes)
+            .sum();
+        let streaming_tool_calls_json_bytes: usize = self
+            .streaming_tool_calls
+            .iter()
+            .map(crate::process_memory::estimate_json_bytes)
+            .sum();
+        let remote_model_options_json_bytes: usize = self
+            .remote_model_options
+            .iter()
+            .map(crate::process_memory::estimate_json_bytes)
+            .sum();
+        let remote_total_tokens_json_bytes = self
+            .remote_total_tokens
+            .as_ref()
+            .map(crate::process_memory::estimate_json_bytes)
+            .unwrap_or(0);
+
+        serde_json::json!({
+            "process": process,
+            "session": self.session.debug_memory_profile(),
+            "markdown": markdown,
+            "mermaid": mermaid,
+            "visual_debug": visual_debug,
+            "ui": {
+                "provider_messages": {
+                    "count": self.messages.len(),
+                    "json_bytes": provider_messages_json_bytes,
+                },
+                "display_messages": {
+                    "count": self.display_messages.len(),
+                    "estimate_bytes": display_messages_bytes,
+                },
+                "input": {
+                    "text_bytes": self.input.len(),
+                    "cursor_pos": self.cursor_pos,
+                },
+                "streaming": {
+                    "streaming_text_bytes": self.streaming_text.len(),
+                    "thinking_buffer_bytes": self.thinking_buffer.len(),
+                    "stream_buffer": self.stream_buffer.debug_memory_profile(),
+                    "streaming_tool_calls_count": self.streaming_tool_calls.len(),
+                    "streaming_tool_calls_json_bytes": streaming_tool_calls_json_bytes,
+                },
+                "queued_messages": {
+                    "visible_count": self.queued_messages.len(),
+                    "visible_text_bytes": estimate_string_vec_bytes(&self.queued_messages),
+                    "hidden_count": self.hidden_queued_system_messages.len(),
+                    "hidden_text_bytes": estimate_string_vec_bytes(&self.hidden_queued_system_messages),
+                    "current_turn_system_reminder_bytes": self.current_turn_system_reminder.as_ref().map(|value| value.len()).unwrap_or(0),
+                },
+                "clipboard_and_input_media": {
+                    "pasted_contents_count": self.pasted_contents.len(),
+                    "pasted_contents_bytes": estimate_string_vec_bytes(&self.pasted_contents),
+                    "pending_images_count": self.pending_images.len(),
+                    "pending_images_bytes": estimate_pending_images_bytes(&self.pending_images),
+                },
+                "remote_state": {
+                    "available_entries_count": self.remote_available_entries.len(),
+                    "available_entries_bytes": estimate_string_vec_bytes(&self.remote_available_entries),
+                    "model_options_count": self.remote_model_options.len(),
+                    "model_options_json_bytes": remote_model_options_json_bytes,
+                    "skills_count": self.remote_skills.len(),
+                    "skills_bytes": estimate_string_vec_bytes(&self.remote_skills),
+                    "mcp_servers_count": self.remote_mcp_servers.len(),
+                    "mcp_servers_bytes": estimate_string_vec_bytes(&self.remote_mcp_servers),
+                    "mcp_server_names_count": self.mcp_server_names.len(),
+                    "mcp_server_names_bytes": estimate_pair_vec_bytes(&self.mcp_server_names),
+                    "remote_total_tokens_json_bytes": remote_total_tokens_json_bytes,
+                },
+                "skills": {
+                    "available_count": self.skills.list().len(),
+                },
+                "mcp": mcp,
+            },
+            "history": crate::process_memory::history(64),
+        })
+    }
+
     pub(super) fn build_scroll_test_content(
         diagrams: usize,
         padding: usize,
@@ -1417,12 +1546,11 @@ impl App {
             let profile = crate::tui::mermaid::debug_memory_profile();
             serde_json::to_string_pretty(&profile).unwrap_or_else(|_| "{}".to_string())
         } else if cmd == "memory" {
-            let payload = serde_json::json!({
-                "process": crate::process_memory::snapshot(),
-                "markdown": crate::tui::markdown::debug_memory_profile(),
-                "mermaid": crate::tui::mermaid::debug_memory_profile(),
-            });
-            serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string())
+            serde_json::to_string_pretty(&self.debug_memory_profile())
+                .unwrap_or_else(|_| "{}".to_string())
+        } else if cmd == "memory-history" {
+            let payload = crate::process_memory::history(128);
+            serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "[]".to_string())
         } else if cmd == "mermaid:memory-bench" {
             let result = crate::tui::mermaid::debug_memory_benchmark(40);
             serde_json::to_string_pretty(&result).unwrap_or_else(|_| "{}".to_string())
@@ -1677,6 +1805,7 @@ impl App {
                  - markdown:stats - dump markdown debug stats\n\
                  - markdown:memory - dump markdown cache memory estimate\n\
                  - memory - dump aggregate client memory profile\n\
+                 - memory-history - dump recent process memory samples\n\
                  - overlay:on/off/status - toggle overlay boxes\n\
                  - enable/disable/status - control visual debug capture\n\
                  - wait - check if processing\n\

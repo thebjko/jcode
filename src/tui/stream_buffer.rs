@@ -2,6 +2,7 @@
 
 #![allow(dead_code)]
 
+use serde::Serialize;
 use std::time::{Duration, Instant};
 
 /// Buffer that accumulates streaming text and flushes at semantic boundaries
@@ -9,6 +10,12 @@ pub struct StreamBuffer {
     buffer: String,
     last_flush: Instant,
     timeout: Duration,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StreamBufferMemoryProfile {
+    pub buffered_text_bytes: usize,
+    pub timeout_ms: u64,
 }
 
 impl Default for StreamBuffer {
@@ -65,6 +72,13 @@ impl StreamBuffer {
     pub fn clear(&mut self) {
         self.buffer.clear();
         self.last_flush = Instant::now();
+    }
+
+    pub fn debug_memory_profile(&self) -> StreamBufferMemoryProfile {
+        StreamBufferMemoryProfile {
+            buffered_text_bytes: self.buffer.len(),
+            timeout_ms: self.timeout.as_millis() as u64,
+        }
     }
 
     /// Find a boundary in the buffer (newline-based), returns position after boundary

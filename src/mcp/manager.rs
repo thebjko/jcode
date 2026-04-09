@@ -10,9 +10,22 @@ use super::client::{McpClient, McpHandle};
 use super::pool::SharedMcpPool;
 use super::protocol::{McpConfig, McpServerConfig, McpToolDef, ToolCallResult};
 use anyhow::{Context, Result};
+use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct McpManagerMemoryProfile {
+    pub shared_pool_enabled: bool,
+    pub configured_servers: usize,
+    pub connected_servers: usize,
+    pub pooled_handles: usize,
+    pub owned_clients: usize,
+    pub available_tools: usize,
+    pub configured_json_bytes: usize,
+    pub tool_schema_estimate_bytes: usize,
+}
 
 /// Manages MCP server connections for a session.
 ///
@@ -290,6 +303,51 @@ impl McpManager {
         &self.config
     }
 
+    pub fn debug_memory_profile(&self) -> McpManagerMemoryProfile {
+        let pooled_handles = self
+            .pool_handles
+            .try_read()
+            .map(|handles| handles.len())
+            .unwrap_or(0);
+        let owned_clients = self
+            .owned_clients
+            .try_read()
+            .map(|clients| clients.len())
+            .unwrap_or(0);
+
+        let mut available_tools = 0usize;
+        let mut tool_schema_estimate_bytes = 0usize;
+
+        if let Ok(handles) = self.pool_handles.try_read() {
+            for handle in handles.values() {
+                for tool in handle.tools() {
+                    available_tools += 1;
+                    tool_schema_estimate_bytes += estimate_tool_bytes(&tool);
+                }
+            }
+        }
+
+        if let Ok(clients) = self.owned_clients.try_read() {
+            for client in clients.values() {
+                for tool in client.tools() {
+                    available_tools += 1;
+                    tool_schema_estimate_bytes += estimate_tool_bytes(&tool);
+                }
+            }
+        }
+
+        McpManagerMemoryProfile {
+            shared_pool_enabled: self.pool.is_some(),
+            configured_servers: self.config.servers.len(),
+            connected_servers: pooled_handles + owned_clients,
+            pooled_handles,
+            owned_clients,
+            available_tools,
+            configured_json_bytes: crate::process_memory::estimate_json_bytes(&self.config),
+            tool_schema_estimate_bytes,
+        }
+    }
+
     /// Check if any servers are connected
     pub async fn has_connections(&self) -> bool {
         !self.pool_handles.read().await.is_empty() || !self.owned_clients.read().await.is_empty()
@@ -300,4 +358,14 @@ impl Default for McpManager {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn estimate_tool_bytes(tool: &McpToolDef) -> usize {
+    tool.name.len()
+        + tool
+            .description
+            .as_ref()
+            .map(|value| value.len())
+            .unwrap_or(0)
+        + crate::process_memory::estimate_json_bytes(&tool.input_schema)
 }

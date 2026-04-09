@@ -164,11 +164,17 @@ pub(super) fn execute_client_debug_command(command: &str) -> String {
 
     if trimmed == "memory" {
         let payload = serde_json::json!({
-            "process": crate::process_memory::snapshot(),
+            "process": crate::process_memory::snapshot_with_source("client:memory"),
             "markdown": markdown::debug_memory_profile(),
             "mermaid": mermaid::debug_memory_profile(),
+            "visual_debug": visual_debug::debug_memory_profile(),
         });
         return serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string());
+    }
+
+    if trimmed == "memory-history" {
+        let payload = crate::process_memory::history(128);
+        return serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "[]".to_string());
     }
 
     if trimmed == "mermaid:memory-bench" {
@@ -281,6 +287,7 @@ pub(super) fn execute_client_debug_command(command: &str) -> String {
   markdown:stats           - Get markdown render stats
   markdown:memory          - Markdown highlight cache memory estimate
   memory                   - Aggregate client memory profile
+  memory-history           - Recent process memory samples
   overlay:on/off/status    - Toggle overlay boxes
   enable                   - Enable visual debug capture
   disable                  - Disable visual debug capture

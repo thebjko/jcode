@@ -38,6 +38,8 @@ SERVER COMMANDS (server: prefix or no prefix):
   jobs:purge               - Remove completed/failed jobs
   jobs:session:<id>        - List jobs for a session
   background:tasks         - List background tasks
+  server:memory            - Get global server memory breakdown
+  server:memory-history    - Recent server process memory samples
   sessions                 - List all sessions (with full metadata)
   clients                  - List connected TUI clients
   clients:map              - Map connected clients to sessions
@@ -117,6 +119,7 @@ CLIENT COMMANDS (client: prefix):
   client:markdown:stats    - Get markdown render stats
   client:markdown:memory   - Markdown highlight cache memory estimate
   client:memory            - Aggregate client memory profile
+  client:memory-history    - Recent client process memory samples
   client:overlay:on/off    - Toggle overlay boxes
   client:input             - Get current input buffer
   client:set_input:<text>  - Set input buffer

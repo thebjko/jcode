@@ -1356,7 +1356,7 @@ pub fn debug_stats() -> MarkdownDebugStats {
 }
 
 pub fn debug_memory_profile() -> MarkdownMemoryProfile {
-    let process = crate::process_memory::snapshot();
+    let process = crate::process_memory::snapshot_with_source("client:markdown:memory");
     let mut profile = MarkdownMemoryProfile {
         process_rss_bytes: process.rss_bytes,
         process_peak_rss_bytes: process.peak_rss_bytes,

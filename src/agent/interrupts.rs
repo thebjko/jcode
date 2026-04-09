@@ -238,7 +238,7 @@ impl Agent {
     }
 
     pub fn debug_memory_profile(&self) -> serde_json::Value {
-        let process = crate::process_memory::snapshot();
+        let process = crate::process_memory::snapshot_with_source("agent:memory");
         let soft_interrupt_text_bytes: usize = self
             .soft_interrupt_queue
             .lock()
