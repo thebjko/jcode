@@ -161,6 +161,16 @@ fn paste_from_clipboard_with<GetText, GetImage>(
     GetText: FnOnce() -> Option<String>,
     GetImage: FnOnce() -> Option<(String, String)>,
 {
+    let dictation_cfg = crate::config::config().dictation.clone();
+    if should_toggle_inflight_dictation_before_clipboard_lookup(
+        app.dictation_in_flight,
+        dictation_cfg.command.as_str(),
+        app.dictation_key.binding.is_some(),
+    ) {
+        app.handle_dictation_trigger();
+        return;
+    }
+
     if let Some(text) = get_text() {
         handle_paste(app, text);
         return;
@@ -176,6 +186,49 @@ fn paste_from_clipboard_with<GetText, GetImage>(
     }
 
     app.set_status_notice("No text or image in clipboard");
+}
+
+fn should_toggle_inflight_dictation_before_clipboard_lookup(
+    dictation_in_flight: bool,
+    command: &str,
+    has_explicit_dictation_key: bool,
+) -> bool {
+    dictation_in_flight
+        && super::dictation::should_fallback_from_empty_clipboard(
+            command,
+            has_explicit_dictation_key,
+        )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_toggle_inflight_dictation_before_clipboard_lookup;
+
+    #[test]
+    fn inflight_dictation_takes_precedence_for_empty_clipboard_fallback() {
+        assert!(should_toggle_inflight_dictation_before_clipboard_lookup(
+            true,
+            "~/.local/bin/live-transcribe",
+            false,
+        ));
+    }
+
+    #[test]
+    fn inflight_dictation_does_not_take_precedence_without_fallback_config() {
+        assert!(!should_toggle_inflight_dictation_before_clipboard_lookup(
+            true, "", false,
+        ));
+        assert!(!should_toggle_inflight_dictation_before_clipboard_lookup(
+            true,
+            "~/.local/bin/live-transcribe",
+            true,
+        ));
+        assert!(!should_toggle_inflight_dictation_before_clipboard_lookup(
+            false,
+            "~/.local/bin/live-transcribe",
+            false,
+        ));
+    }
 }
 
 pub(super) fn cut_input_line_to_clipboard(app: &mut App) -> bool {

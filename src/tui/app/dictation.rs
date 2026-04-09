@@ -401,6 +401,7 @@ fn is_status_only_line(line: &str) -> bool {
     line == "=================================================="
         || line.starts_with("Loading WebRTC VAD")
         || line.contains("Live transcription started")
+        || line.starts_with('🎤')
         || line.starts_with('📝')
         || line.starts_with("Saving to:")
         || line.starts_with('🌐')
@@ -471,7 +472,10 @@ fn shell_command(command: &str) -> Command {
     }
 }
 
-fn should_fallback_from_empty_clipboard(command: &str, has_explicit_dictation_key: bool) -> bool {
+pub(super) fn should_fallback_from_empty_clipboard(
+    command: &str,
+    has_explicit_dictation_key: bool,
+) -> bool {
     !has_explicit_dictation_key && !command.trim().is_empty()
 }
 
