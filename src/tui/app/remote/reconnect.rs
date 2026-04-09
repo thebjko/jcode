@@ -169,11 +169,12 @@ fn set_disconnect_status_message(app: &mut App, state: &mut RemoteRunState, cont
 }
 
 fn disconnected_redraw_interval(initial_connect: bool) -> tokio::time::Interval {
-    let mut interval = tokio::time::interval(Duration::from_millis(if initial_connect {
-        1000
+    let period = if initial_connect {
+        crate::tui::REDRAW_REMOTE_STARTUP
     } else {
-        250
-    }));
+        Duration::from_millis(1000)
+    };
+    let mut interval = tokio::time::interval(period);
     interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
     interval
 }

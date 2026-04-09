@@ -762,12 +762,17 @@ pub struct PickerOption {
 
 pub(crate) const REDRAW_IDLE: Duration = Duration::from_millis(250);
 pub(crate) const REDRAW_DEEP_IDLE: Duration = Duration::from_millis(1000);
+pub(crate) const REDRAW_REMOTE_STARTUP: Duration = Duration::from_millis(1000);
 const REDRAW_DEEP_IDLE_AFTER: Duration = Duration::from_secs(30);
 pub(crate) const STARTUP_ANIMATION_WINDOW: Duration = Duration::from_millis(3000);
 
 const STARTUP_ANIMATION_MIN_FPS: u32 = 20;
 
 pub(crate) fn startup_animation_active(state: &dyn TuiState) -> bool {
+    if state.remote_startup_phase_active() {
+        return false;
+    }
+
     let tier = crate::perf::profile().tier;
     let cfg = &crate::config::config().display;
     crate::config::config().display.startup_animation
@@ -785,6 +790,10 @@ pub(crate) fn startup_animation_active(state: &dyn TuiState) -> bool {
 }
 
 pub(crate) fn idle_donut_active(state: &dyn TuiState) -> bool {
+    if state.remote_startup_phase_active() {
+        return false;
+    }
+
     let tier = crate::perf::profile().tier;
     crate::config::config().display.idle_animation
         && tier.idle_animation_enabled()
@@ -814,7 +823,6 @@ pub(crate) fn redraw_interval(state: &dyn TuiState) -> Duration {
     if state.is_processing()
         || !state.streaming_text().is_empty()
         || state.status_notice().is_some()
-        || state.remote_startup_phase_active()
         || state.has_pending_mouse_scroll_animation()
         || state.has_notification()
         || state.rate_limit_remaining().is_some()
@@ -823,6 +831,10 @@ pub(crate) fn redraw_interval(state: &dyn TuiState) -> Duration {
             crate::perf::PerformanceTier::Minimal => REDRAW_IDLE,
             _ => fast_interval,
         };
+    }
+
+    if state.remote_startup_phase_active() {
+        return REDRAW_REMOTE_STARTUP;
     }
 
     let deep_idle = state

@@ -3595,7 +3595,7 @@ mod tests {
     }
 
     #[test]
-    fn test_redraw_interval_stays_fast_during_remote_startup_phase() {
+    fn test_redraw_interval_uses_low_frequency_during_remote_startup_phase() {
         let idle = TestState {
             anim_elapsed: 10.0,
             display_messages: vec![DisplayMessage::system("seed".to_string())],
@@ -3612,7 +3612,7 @@ mod tests {
         let startup_interval = crate::tui::redraw_interval(&startup);
 
         assert_eq!(idle_interval, crate::tui::REDRAW_DEEP_IDLE);
-        assert!(startup_interval < idle_interval);
+        assert_eq!(startup_interval, crate::tui::REDRAW_REMOTE_STARTUP);
     }
 
     fn record_test_chat_snapshot(text: &str) {
