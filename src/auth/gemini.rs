@@ -5,7 +5,7 @@ use std::io::{self, IsTerminal, Write};
 const GOOGLE_AUTHORIZE_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const GOOGLE_USERINFO_URL: &str = "https://www.googleapis.com/oauth2/v2/userinfo";
-const GEMINI_MANUAL_REDIRECT_URI: &str = "https://codeassist.google.com/authcode";
+pub const GEMINI_MANUAL_REDIRECT_URI: &str = "https://codeassist.google.com/authcode";
 pub const GEMINI_CLI_AUTH_SOURCE_ID: &str = "gemini_cli_oauth_creds";
 // OAuth credentials from Google's official Gemini CLI (@google/gemini-cli).
 // These are for a "Desktop app" OAuth type where the client secret is safe to embed.
