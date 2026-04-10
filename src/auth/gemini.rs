@@ -283,11 +283,11 @@ pub async fn refresh_tokens(tokens: &GeminiTokens) -> Result<GeminiTokens> {
     result
 }
 
-pub async fn login() -> Result<GeminiTokens> {
+pub async fn login(no_browser: bool) -> Result<GeminiTokens> {
     let (verifier, challenge) = super::oauth::generate_pkce_public();
     let state = super::oauth::generate_state_public();
 
-    if !browser_suppressed()
+    if !crate::auth::browser_suppressed(no_browser)
         && let Ok(listener) = super::oauth::bind_callback_listener(0)
     {
         let port = listener.local_addr()?.port();
@@ -311,7 +311,7 @@ pub async fn login() -> Result<GeminiTokens> {
                 redirect_uri
             );
             eprintln!(
-                "If the page says sign-in succeeded but jcode does not continue within a few seconds, press Ctrl+C and retry with NO_BROWSER=true to use the manual code flow."
+                "If the page says sign-in succeeded but jcode does not continue within a few seconds, press Ctrl+C and retry with `--no-browser` to use the manual code flow."
             );
             match tokio::time::timeout(
                 std::time::Duration::from_secs(300),
@@ -344,10 +344,15 @@ pub async fn login() -> Result<GeminiTokens> {
         }
     }
 
-    manual_login(&verifier, &challenge, &state).await
+    manual_login(&verifier, &challenge, &state, no_browser).await
 }
 
-async fn manual_login(verifier: &str, challenge: &str, state: &str) -> Result<GeminiTokens> {
+async fn manual_login(
+    verifier: &str,
+    challenge: &str,
+    state: &str,
+    no_browser: bool,
+) -> Result<GeminiTokens> {
     if !io::stdin().is_terminal() {
         anyhow::bail!(
             "Gemini login needs an interactive terminal for manual code entry. Re-run in an interactive terminal."
@@ -364,7 +369,7 @@ async fn manual_login(verifier: &str, challenge: &str, state: &str) -> Result<Ge
     ) {
         eprintln!("{qr}\n");
     }
-    if !browser_suppressed() {
+    if !crate::auth::browser_suppressed(no_browser) {
         let _ = open::that(&auth_url);
     }
     eprintln!("After approving access, Google will show an authorization code. Paste it below.\n");
@@ -515,20 +520,6 @@ pub fn build_manual_auth_url(redirect_uri: &str, challenge: &str, state: &str) -
         challenge = urlencoding::encode(challenge),
         state = urlencoding::encode(state),
     ))
-}
-
-fn browser_suppressed() -> bool {
-    env_truthy("NO_BROWSER") || env_truthy("JCODE_NO_BROWSER")
-}
-
-fn env_truthy(key: &str) -> bool {
-    std::env::var(key)
-        .ok()
-        .map(|value| {
-            let trimmed = value.trim();
-            !trimmed.is_empty() && trimmed != "0" && !trimmed.eq_ignore_ascii_case("false")
-        })
-        .unwrap_or(false)
 }
 
 fn resolve_gemini_cli_command_with<F>(env_spec: Option<&str>, command_exists: F) -> GeminiCliCommand

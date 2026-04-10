@@ -229,13 +229,13 @@ pub async fn refresh_tokens(tokens: &AntigravityTokens) -> Result<AntigravityTok
     result
 }
 
-pub async fn login() -> Result<AntigravityTokens> {
+pub async fn login(no_browser: bool) -> Result<AntigravityTokens> {
     let (verifier, challenge) = crate::auth::oauth::generate_pkce_public();
     let state = crate::auth::oauth::generate_state_public();
     let redirect_uri = redirect_uri(DEFAULT_PORT);
     let auth_url = build_auth_url(&redirect_uri, &challenge, &state)?;
 
-    if !browser_suppressed()
+    if !crate::auth::browser_suppressed(no_browser)
         && let Ok(listener) = crate::auth::oauth::bind_callback_listener(DEFAULT_PORT)
     {
         eprintln!("\nOpening browser for Antigravity login...\n");
@@ -255,7 +255,7 @@ pub async fn login() -> Result<AntigravityTokens> {
                 redirect_uri
             );
             eprintln!(
-                "If the browser lands on a loopback error page instead of returning to jcode, copy the full URL from the address bar and re-run with NO_BROWSER=true to paste it manually."
+                "If the browser lands on a loopback error page instead of returning to jcode, copy the full URL from the address bar and re-run with `--no-browser` to paste it manually."
             );
             match tokio::time::timeout(
                 std::time::Duration::from_secs(300),
@@ -284,7 +284,7 @@ pub async fn login() -> Result<AntigravityTokens> {
         }
     }
 
-    manual_login(&verifier, &state, &redirect_uri, &auth_url).await
+    manual_login(&verifier, &state, &redirect_uri, &auth_url, no_browser).await
 }
 
 async fn manual_login(
@@ -292,6 +292,7 @@ async fn manual_login(
     expected_state: &str,
     redirect_uri: &str,
     auth_url: &str,
+    no_browser: bool,
 ) -> Result<AntigravityTokens> {
     if !io::stdin().is_terminal() {
         anyhow::bail!(
@@ -308,7 +309,7 @@ async fn manual_login(
     ) {
         eprintln!("{qr}\n");
     }
-    if !browser_suppressed() {
+    if !crate::auth::browser_suppressed(no_browser) {
         let _ = open::that(auth_url);
     }
     eprintln!(
@@ -551,20 +552,6 @@ fn extract_project_id(value: Option<serde_json::Value>) -> Option<String> {
             .map(str::to_string),
         _ => None,
     }
-}
-
-fn browser_suppressed() -> bool {
-    env_truthy("NO_BROWSER") || env_truthy("JCODE_NO_BROWSER")
-}
-
-fn env_truthy(key: &str) -> bool {
-    std::env::var(key)
-        .ok()
-        .map(|value| {
-            let trimmed = value.trim();
-            !trimmed.is_empty() && trimmed != "0" && !trimmed.eq_ignore_ascii_case("false")
-        })
-        .unwrap_or(false)
 }
 
 #[cfg(test)]

@@ -131,7 +131,7 @@ pub fn has_tokens() -> bool {
     tokens_path().map(|path| path.exists()).unwrap_or(false)
 }
 
-pub async fn login(tier: GmailAccessTier) -> Result<GoogleTokens> {
+pub async fn login(tier: GmailAccessTier, no_browser: bool) -> Result<GoogleTokens> {
     let creds = load_credentials()?;
     let (verifier, challenge) = super::oauth::generate_pkce_public();
     let state = super::oauth::generate_state_public();
@@ -164,7 +164,11 @@ pub async fn login(tier: GmailAccessTier) -> Result<GoogleTokens> {
         eprintln!("{qr}\n");
     }
 
-    let browser_opened = open::that(&auth_url).is_ok();
+    let browser_opened = if crate::auth::browser_suppressed(no_browser) {
+        false
+    } else {
+        open::that(&auth_url).is_ok()
+    };
 
     let code = if browser_opened {
         eprintln!(

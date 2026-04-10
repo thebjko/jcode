@@ -330,7 +330,7 @@ pub async fn wait_for_callback_async_on_listener(
 }
 
 /// Perform OAuth login for Claude
-pub async fn login_claude() -> Result<OAuthTokens> {
+pub async fn login_claude(no_browser: bool) -> Result<OAuthTokens> {
     let (verifier, challenge) = generate_pkce();
     if let Ok(code) = std::env::var("JCODE_CLAUDE_AUTH_CODE") {
         let trimmed = code.trim();
@@ -365,7 +365,11 @@ pub async fn login_claude() -> Result<OAuthTokens> {
             eprintln!("{qr}\n");
         }
         eprintln!("Opening browser for Claude login...\n");
-        let browser_opened = open::that(&auth_url).is_ok();
+        let browser_opened = if crate::auth::browser_suppressed(no_browser) {
+            false
+        } else {
+            open::that(&auth_url).is_ok()
+        };
         if browser_opened {
             eprintln!(
                 "Waiting up to 120s for automatic callback on {}",
@@ -426,7 +430,9 @@ pub async fn login_claude() -> Result<OAuthTokens> {
         eprintln!("{qr}\n");
     }
     eprintln!("Opening browser for Claude login...\n");
-    let _ = open::that(&auth_url);
+    if !crate::auth::browser_suppressed(no_browser) {
+        let _ = open::that(&auth_url);
+    }
     eprintln!("After logging in, copy and paste the callback URL or code here:\n");
     eprint!("> ");
     std::io::stdout().flush()?;
@@ -698,7 +704,7 @@ pub async fn exchange_openai_callback_input(
 }
 
 /// Perform OAuth login for OpenAI/Codex
-pub async fn login_openai() -> Result<OAuthTokens> {
+pub async fn login_openai(no_browser: bool) -> Result<OAuthTokens> {
     let (verifier, challenge) = generate_pkce();
     let state = generate_state();
 
@@ -717,7 +723,11 @@ pub async fn login_openai() -> Result<OAuthTokens> {
     }
 
     let callback_listener = bind_callback_listener(port).ok();
-    let browser_opened = open::that(&auth_url).is_ok();
+    let browser_opened = if crate::auth::browser_suppressed(no_browser) {
+        false
+    } else {
+        open::that(&auth_url).is_ok()
+    };
 
     if browser_opened {
         if let Some(listener) = callback_listener {
