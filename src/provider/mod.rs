@@ -34,6 +34,10 @@ pub use jcode_provider_core::{
     RouteCostSource, shared_http_client,
 };
 
+fn should_eager_detect_copilot_tier() -> bool {
+    std::env::var("JCODE_NON_INTERACTIVE").is_err()
+}
+
 pub(crate) fn anthropic_oauth_route_availability(model: &str) -> (bool, String) {
     if model.ends_with("[1m]") && !crate::usage::has_extra_usage() {
         (false, "requires extra usage".to_string())
@@ -485,6 +489,7 @@ impl MultiProvider {
     }
 
     fn new_with_auth_status(auth_status: auth::AuthStatus) -> Self {
+        let provider_init_start = std::time::Instant::now();
         let has_claude_creds = auth::claude::load_credentials().is_ok();
         let has_openai_creds = auth::codex::load_credentials().is_ok();
         let has_copilot_api = auth_status.copilot_has_api_token;
@@ -530,14 +535,25 @@ impl MultiProvider {
         };
 
         let copilot_api = if has_copilot_api {
+            let copilot_init_start = std::time::Instant::now();
             match copilot::CopilotApiProvider::new() {
                 Ok(p) => {
-                    crate::logging::info("Copilot API provider initialized (direct API)");
+                    crate::logging::info(&format!(
+                        "Copilot API provider initialized (direct API) in {}ms",
+                        copilot_init_start.elapsed().as_millis()
+                    ));
                     let provider = Arc::new(p);
-                    let p_clone = provider.clone();
-                    tokio::spawn(async move {
-                        p_clone.detect_tier_and_set_default().await;
-                    });
+                    if should_eager_detect_copilot_tier() {
+                        let p_clone = provider.clone();
+                        tokio::spawn(async move {
+                            p_clone.detect_tier_and_set_default().await;
+                        });
+                    } else {
+                        crate::logging::info(
+                            "Deferring Copilot tier detection during non-interactive startup",
+                        );
+                        provider.complete_init_without_tier_detection();
+                    }
                     Some(provider)
                 }
                 Err(e) => {
@@ -673,6 +689,17 @@ impl MultiProvider {
 
         result.spawn_openai_catalog_refresh_if_needed();
         result.auto_select_active_multi_account();
+        crate::logging::info(&format!(
+            "[TIMING] provider_init: claude={}, anthropic={}, openai={}, copilot={}, gemini={}, cursor={}, openrouter={}, total={}ms",
+            result.claude.read().unwrap().is_some(),
+            result.anthropic.read().unwrap().is_some(),
+            result.openai.read().unwrap().is_some(),
+            result.copilot_api.read().unwrap().is_some(),
+            result.gemini.read().unwrap().is_some(),
+            result.cursor.read().unwrap().is_some(),
+            result.openrouter.read().unwrap().is_some(),
+            provider_init_start.elapsed().as_millis()
+        ));
         result
     }
 
@@ -1440,6 +1467,10 @@ impl MultiProvider {
         Self::new_with_auth_status(auth::AuthStatus::check_fast())
     }
 
+    pub fn from_auth_status(auth_status: auth::AuthStatus) -> Self {
+        Self::new_with_auth_status(auth_status)
+    }
+
     /// Create with explicit initial provider preference
     pub fn with_preference(prefer_openai: bool) -> Self {
         let provider = Self::new();
@@ -2139,6 +2170,8 @@ impl Provider for MultiProvider {
             let copilot_guard = self.copilot_api.read().unwrap();
             if let Some(ref copilot) = *copilot_guard {
                 let copilot_models = copilot.available_models_display();
+                let detail = copilot.model_catalog_detail();
+                let copilot_models_empty = copilot_models.is_empty();
                 for model in copilot_models {
                     let cheapness = cheapness_for_route(&model, "Copilot", "copilot");
                     routes.push(ModelRoute {
@@ -2146,8 +2179,18 @@ impl Provider for MultiProvider {
                         provider: "Copilot".to_string(),
                         api_method: "copilot".to_string(),
                         available: true,
-                        detail: String::new(),
+                        detail: detail.clone(),
                         cheapness,
+                    });
+                }
+                if copilot_models_empty && copilot::CopilotApiProvider::has_credentials() {
+                    routes.push(ModelRoute {
+                        model: "copilot models".to_string(),
+                        provider: "Copilot".to_string(),
+                        api_method: "copilot".to_string(),
+                        available: false,
+                        detail,
+                        cheapness: cheapness_for_route("claude-sonnet-4-6", "Copilot", "copilot"),
                     });
                 }
             } else if copilot::CopilotApiProvider::has_credentials() {

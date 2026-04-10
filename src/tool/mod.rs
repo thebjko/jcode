@@ -227,6 +227,19 @@ impl Registry {
         tools.insert(name.into(), Arc::new(tool) as Arc<dyn Tool>);
     }
 
+    fn insert_tool_timed<T>(
+        tools: &mut HashMap<String, Arc<dyn Tool>>,
+        timings: &mut Vec<(String, u128)>,
+        name: &str,
+        make_tool: impl FnOnce() -> T,
+    ) where
+        T: Tool + 'static,
+    {
+        let start = std::time::Instant::now();
+        Self::insert_tool(tools, name, make_tool());
+        timings.push((name.to_string(), start.elapsed().as_millis()));
+    }
+
     /// Create a lightweight empty registry (no tools, no skill loading).
     /// Used by remote-mode clients that don't execute tools locally.
     pub fn empty() -> Self {
@@ -243,39 +256,112 @@ impl Registry {
         use std::sync::OnceLock;
         static BASE: OnceLock<HashMap<String, Arc<dyn Tool>>> = OnceLock::new();
         let base = BASE.get_or_init(|| {
+            let init_start = std::time::Instant::now();
+            let mut timings = Vec::new();
             let mut m = HashMap::new();
-            Self::insert_tool(&mut m, "read", read::ReadTool::new());
-            Self::insert_tool(&mut m, "write", write::WriteTool::new());
-            Self::insert_tool(&mut m, "agentgrep", agentgrep::AgentGrepTool::new());
-            Self::insert_tool(&mut m, "side_panel", side_panel::SidePanelTool::new());
-            Self::insert_tool(&mut m, "edit", edit::EditTool::new());
-            Self::insert_tool(&mut m, "multiedit", multiedit::MultiEditTool::new());
-            Self::insert_tool(&mut m, "patch", patch::PatchTool::new());
-            Self::insert_tool(&mut m, "apply_patch", apply_patch::ApplyPatchTool::new());
-            Self::insert_tool(&mut m, "glob", glob::GlobTool::new());
-            Self::insert_tool(&mut m, "grep", grep::GrepTool::new());
-            Self::insert_tool(&mut m, "ls", ls::LsTool::new());
-            Self::insert_tool(&mut m, "bash", bash::BashTool::new());
-            Self::insert_tool(&mut m, "open", open::OpenTool::new());
-            Self::insert_tool(&mut m, "webfetch", webfetch::WebFetchTool::new());
-            Self::insert_tool(&mut m, "websearch", websearch::WebSearchTool::new());
-            Self::insert_tool(&mut m, "codesearch", codesearch::CodeSearchTool::new());
-            Self::insert_tool(&mut m, "invalid", invalid::InvalidTool::new());
-            Self::insert_tool(&mut m, "lsp", lsp::LspTool::new());
-            Self::insert_tool(&mut m, "todowrite", todo::TodoWriteTool::new());
-            Self::insert_tool(&mut m, "todoread", todo::TodoReadTool::new());
-            Self::insert_tool(&mut m, "bg", bg::BgTool::new());
-            Self::insert_tool(&mut m, "communicate", communicate::CommunicateTool::new());
-            Self::insert_tool(
+            Self::insert_tool_timed(&mut m, &mut timings, "read", read::ReadTool::new);
+            Self::insert_tool_timed(&mut m, &mut timings, "write", write::WriteTool::new);
+            Self::insert_tool_timed(
                 &mut m,
-                "session_search",
-                session_search::SessionSearchTool::new(),
+                &mut timings,
+                "agentgrep",
+                agentgrep::AgentGrepTool::new,
             );
-            Self::insert_tool(&mut m, "memory", memory::MemoryTool::new());
-            Self::insert_tool(&mut m, "goal", goal::GoalTool::new());
-            Self::insert_tool(&mut m, "gmail", gmail::GmailTool::new());
-            Self::insert_tool(&mut m, "schedule", ambient::ScheduleTool::new());
-            Self::insert_tool(&mut m, "selfdev", selfdev::SelfDevTool::new());
+            Self::insert_tool_timed(
+                &mut m,
+                &mut timings,
+                "side_panel",
+                side_panel::SidePanelTool::new,
+            );
+            Self::insert_tool_timed(&mut m, &mut timings, "edit", edit::EditTool::new);
+            Self::insert_tool_timed(
+                &mut m,
+                &mut timings,
+                "multiedit",
+                multiedit::MultiEditTool::new,
+            );
+            Self::insert_tool_timed(&mut m, &mut timings, "patch", patch::PatchTool::new);
+            Self::insert_tool_timed(
+                &mut m,
+                &mut timings,
+                "apply_patch",
+                apply_patch::ApplyPatchTool::new,
+            );
+            Self::insert_tool_timed(&mut m, &mut timings, "glob", glob::GlobTool::new);
+            Self::insert_tool_timed(&mut m, &mut timings, "grep", grep::GrepTool::new);
+            Self::insert_tool_timed(&mut m, &mut timings, "ls", ls::LsTool::new);
+            Self::insert_tool_timed(&mut m, &mut timings, "bash", bash::BashTool::new);
+            Self::insert_tool_timed(&mut m, &mut timings, "open", open::OpenTool::new);
+            Self::insert_tool_timed(
+                &mut m,
+                &mut timings,
+                "webfetch",
+                webfetch::WebFetchTool::new,
+            );
+            Self::insert_tool_timed(
+                &mut m,
+                &mut timings,
+                "websearch",
+                websearch::WebSearchTool::new,
+            );
+            Self::insert_tool_timed(
+                &mut m,
+                &mut timings,
+                "codesearch",
+                codesearch::CodeSearchTool::new,
+            );
+            Self::insert_tool_timed(&mut m, &mut timings, "invalid", invalid::InvalidTool::new);
+            Self::insert_tool_timed(&mut m, &mut timings, "lsp", lsp::LspTool::new);
+            Self::insert_tool_timed(
+                &mut m,
+                &mut timings,
+                "todowrite",
+                todo::TodoWriteTool::new,
+            );
+            Self::insert_tool_timed(
+                &mut m,
+                &mut timings,
+                "todoread",
+                todo::TodoReadTool::new,
+            );
+            Self::insert_tool_timed(&mut m, &mut timings, "bg", bg::BgTool::new);
+            Self::insert_tool_timed(
+                &mut m,
+                &mut timings,
+                "communicate",
+                communicate::CommunicateTool::new,
+            );
+            Self::insert_tool_timed(
+                &mut m,
+                &mut timings,
+                "session_search",
+                session_search::SessionSearchTool::new,
+            );
+            Self::insert_tool_timed(&mut m, &mut timings, "memory", memory::MemoryTool::new);
+            Self::insert_tool_timed(&mut m, &mut timings, "goal", goal::GoalTool::new);
+            Self::insert_tool_timed(&mut m, &mut timings, "gmail", gmail::GmailTool::new);
+            Self::insert_tool_timed(
+                &mut m,
+                &mut timings,
+                "schedule",
+                ambient::ScheduleTool::new,
+            );
+            Self::insert_tool_timed(
+                &mut m,
+                &mut timings,
+                "selfdev",
+                selfdev::SelfDevTool::new,
+            );
+            let nonzero: Vec<String> = timings
+                .iter()
+                .filter(|(_, ms)| *ms > 0)
+                .map(|(name, ms)| format!("{name}={ms}ms"))
+                .collect();
+            crate::logging::info(&format!(
+                "[TIMING] registry_base_tools_init: total={}ms, nonzero=[{}]",
+                init_start.elapsed().as_millis(),
+                nonzero.join(", ")
+            ));
             m
         });
         // Clone the Arc entries (cheap refcount bumps, not deep copies)
@@ -290,17 +376,27 @@ impl Registry {
     }
 
     pub async fn new(provider: Arc<dyn Provider>) -> Self {
+        let start = std::time::Instant::now();
+        let skills_start = std::time::Instant::now();
         let skills = Self::shared_skills_registry();
+        let skills_ms = skills_start.elapsed().as_millis();
+        let compaction_start = std::time::Instant::now();
         let compaction = Arc::new(RwLock::new(CompactionManager::new()));
+        let compaction_ms = compaction_start.elapsed().as_millis();
+        let registry_struct_start = std::time::Instant::now();
         let registry = Self {
             tools: Arc::new(RwLock::new(HashMap::new())),
             skills: skills.clone(),
             compaction: compaction.clone(),
         };
+        let registry_struct_ms = registry_struct_start.elapsed().as_millis();
 
+        let base_start = std::time::Instant::now();
         let mut tools_map = Self::base_tools(&skills);
+        let base_ms = base_start.elapsed().as_millis();
 
         // Per-session tools that need provider/registry references
+        let session_tools_start = std::time::Instant::now();
         Self::insert_tool(
             &mut tools_map,
             "subagent",
@@ -316,8 +412,21 @@ impl Registry {
             "conversation_search",
             conversation_search::ConversationSearchTool::new(compaction),
         );
+        let session_tools_ms = session_tools_start.elapsed().as_millis();
 
+        let write_start = std::time::Instant::now();
         *registry.tools.write().await = tools_map;
+        let write_ms = write_start.elapsed().as_millis();
+        crate::logging::info(&format!(
+            "[TIMING] registry_new: skills={}ms, compaction={}ms, registry_struct={}ms, base_tools={}ms, session_tools={}ms, write={}ms, total={}ms",
+            skills_ms,
+            compaction_ms,
+            registry_struct_ms,
+            base_ms,
+            session_tools_ms,
+            write_ms,
+            start.elapsed().as_millis()
+        ));
         registry
     }
 

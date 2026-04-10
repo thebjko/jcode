@@ -1370,6 +1370,24 @@ impl Config {
             .any(|value| value.trim().eq_ignore_ascii_case(&entry))
     }
 
+    /// Startup-sensitive variant that uses the process-cached config snapshot.
+    ///
+    /// This avoids reloading config.toml repeatedly during cold-start probes.
+    pub fn external_auth_source_allowed_for_path_cached(
+        source_id: &str,
+        path: &std::path::Path,
+    ) -> bool {
+        let Ok(entry) = Self::trusted_external_auth_path_entry(source_id, path) else {
+            return false;
+        };
+
+        config()
+            .auth
+            .trusted_external_source_paths
+            .iter()
+            .any(|value| value.trim().eq_ignore_ascii_case(&entry))
+    }
+
     pub fn allow_external_auth_source(source_id: &str) -> anyhow::Result<()> {
         let source_id = Self::normalize_external_auth_source_id(source_id);
         if source_id.is_empty() {

@@ -12,10 +12,7 @@ pub struct GmailClient {
 impl GmailClient {
     pub fn new() -> Self {
         Self {
-            http: reqwest::Client::builder()
-                .user_agent("jcode/1.0")
-                .build()
-                .unwrap_or_default(),
+            http: crate::provider::shared_http_client(),
         }
     }
 

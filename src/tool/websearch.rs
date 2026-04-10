@@ -12,10 +12,7 @@ pub struct WebSearchTool {
 impl WebSearchTool {
     pub fn new() -> Self {
         Self {
-            client: reqwest::Client::builder()
-                .user_agent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36")
-                .build()
-                .unwrap_or_default(),
+            client: crate::provider::shared_http_client(),
         }
     }
 }
@@ -72,7 +69,15 @@ impl Tool for WebSearchTool {
             urlencoding::encode(&params.query)
         );
 
-        let response = self.client.get(&url).send().await?;
+        let response = self
+            .client
+            .get(&url)
+            .header(
+                reqwest::header::USER_AGENT,
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+            )
+            .send()
+            .await?;
 
         if !response.status().is_success() {
             return Err(anyhow::anyhow!(

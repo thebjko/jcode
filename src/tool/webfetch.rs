@@ -16,10 +16,7 @@ pub struct WebFetchTool {
 impl WebFetchTool {
     pub fn new() -> Self {
         Self {
-            client: reqwest::Client::builder()
-                .user_agent("Mozilla/5.0 (compatible; JCode/1.0)")
-                .build()
-                .unwrap_or_default(),
+            client: crate::provider::shared_http_client(),
         }
     }
 }
@@ -80,6 +77,7 @@ impl Tool for WebFetchTool {
         let response = self
             .client
             .get(&params.url)
+            .header(reqwest::header::USER_AGENT, "Mozilla/5.0 (compatible; JCode/1.0)")
             .timeout(Duration::from_secs(timeout))
             .send()
             .await?;

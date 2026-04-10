@@ -682,7 +682,7 @@ impl AuthStatus {
         }
 
         // Check external/CLI auth providers (presence of installed CLI tooling)
-        status.copilot = if copilot::has_copilot_credentials() {
+        status.copilot = if copilot::has_copilot_credentials_fast() {
             status.copilot_has_api_token = true;
             AuthState::Available
         } else {
@@ -747,12 +747,17 @@ impl AuthStatus {
     }
 
     fn check_uncached_fast() -> Self {
+        let total_start = Instant::now();
         let mut status = Self::default();
+        let mut timings = Vec::new();
 
+        let step_start = Instant::now();
         if crate::subscription_catalog::has_credentials() {
             status.jcode = AuthState::Available;
         }
+        timings.push(("jcode", step_start.elapsed().as_millis()));
 
+        let step_start = Instant::now();
         let mut anthropic = ProviderAuth::default();
         if let Ok(creds) = claude::load_credentials() {
             let now_ms = chrono::Utc::now().timestamp_millis();
@@ -768,7 +773,9 @@ impl AuthStatus {
             anthropic.state = AuthState::Available;
         }
         status.anthropic = anthropic;
+        timings.push(("anthropic", step_start.elapsed().as_millis()));
 
+        let step_start = Instant::now();
         let openrouter_like_keys = openrouter_like_api_key_sources();
         let openrouter_available = openrouter_like_keys
             .iter()
@@ -776,13 +783,17 @@ impl AuthStatus {
         if openrouter_available {
             status.openrouter = AuthState::Available;
         }
+        timings.push(("openrouter", step_start.elapsed().as_millis()));
 
+        let step_start = Instant::now();
         status.azure_has_api_key = crate::auth::azure::has_api_key();
         status.azure_uses_entra = crate::auth::azure::uses_entra_id();
         if crate::auth::azure::has_configuration() {
             status.azure = AuthState::Available;
         }
+        timings.push(("azure", step_start.elapsed().as_millis()));
 
+        let step_start = Instant::now();
         if let Ok(creds) = codex::load_credentials() {
             if !creds.refresh_token.is_empty() {
                 status.openai_has_oauth = true;
@@ -809,14 +820,18 @@ impl AuthStatus {
             status.openai_has_api_key = true;
             status.openai = AuthState::Available;
         }
+        timings.push(("openai", step_start.elapsed().as_millis()));
 
+        let step_start = Instant::now();
         status.copilot = if copilot::has_copilot_credentials() {
             status.copilot_has_api_token = true;
             AuthState::Available
         } else {
             AuthState::NotConfigured
         };
+        timings.push(("copilot", step_start.elapsed().as_millis()));
 
+        let step_start = Instant::now();
         status.antigravity = match antigravity::load_tokens() {
             Ok(tokens) => {
                 if tokens.is_expired() {
@@ -827,7 +842,9 @@ impl AuthStatus {
             }
             Err(_) => AuthState::NotConfigured,
         };
+        timings.push(("antigravity", step_start.elapsed().as_millis()));
 
+        let step_start = Instant::now();
         status.gemini = match gemini::load_tokens() {
             Ok(tokens) => {
                 if tokens.is_expired() {
@@ -838,7 +855,9 @@ impl AuthStatus {
             }
             Err(_) => AuthState::NotConfigured,
         };
+        timings.push(("gemini", step_start.elapsed().as_millis()));
 
+        let step_start = Instant::now();
         let cursor_has_cli = cursor::has_cursor_agent_cli();
         let cursor_has_api_key = cursor::has_cursor_api_key();
         let cursor_has_file_or_env_auth = cursor::load_access_token_from_env_or_file().is_ok();
@@ -850,7 +869,9 @@ impl AuthStatus {
         } else {
             AuthState::NotConfigured
         };
+        timings.push(("cursor", step_start.elapsed().as_millis()));
 
+        let step_start = Instant::now();
         match google::load_tokens() {
             Ok(tokens) => {
                 if tokens.is_expired() {
@@ -864,6 +885,19 @@ impl AuthStatus {
                 status.google = AuthState::NotConfigured;
             }
         }
+
+        timings.push(("google", step_start.elapsed().as_millis()));
+
+        let nonzero: Vec<String> = timings
+            .iter()
+            .filter(|(_, ms)| *ms > 0)
+            .map(|(name, ms)| format!("{name}={ms}ms"))
+            .collect();
+        crate::logging::info(&format!(
+            "[TIMING] auth_check_fast: total={}ms, nonzero=[{}]",
+            total_start.elapsed().as_millis(),
+            nonzero.join(", ")
+        ));
 
         status
     }

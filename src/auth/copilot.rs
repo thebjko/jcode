@@ -179,6 +179,73 @@ pub fn has_copilot_credentials() -> bool {
     load_github_token().is_ok()
 }
 
+/// Fast local Copilot credential probe for startup-sensitive paths.
+///
+/// This intentionally avoids the `gh auth token` fallback because spawning the
+/// GitHub CLI is too expensive for the fast auth snapshot.
+pub fn has_copilot_credentials_fast() -> bool {
+    use crate::auth::external::{ExternalAuthSource, source_has_copilot_oauth};
+
+    for env_key in ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"] {
+        if let Ok(token) = std::env::var(env_key)
+            && !token.trim().is_empty()
+        {
+            return true;
+        }
+    }
+
+    let config_path = ExternalCopilotAuthSource::ConfigJson.path();
+    if config_path.exists()
+        && crate::config::Config::external_auth_source_allowed_for_path_cached(
+            COPILOT_CONFIG_JSON_SOURCE_ID,
+            &config_path,
+        )
+        && load_token_from_config_json(&config_path).is_ok()
+    {
+        return true;
+    }
+
+    let hosts_path = ExternalCopilotAuthSource::HostsJson.path();
+    if hosts_path.exists()
+        && crate::config::Config::external_auth_source_allowed_for_path_cached(
+            COPILOT_HOSTS_AUTH_SOURCE_ID,
+            &hosts_path,
+        )
+        && load_token_from_json(&hosts_path).is_ok()
+    {
+        return true;
+    }
+
+    let apps_path = ExternalCopilotAuthSource::AppsJson.path();
+    if apps_path.exists()
+        && crate::config::Config::external_auth_source_allowed_for_path_cached(
+            COPILOT_APPS_AUTH_SOURCE_ID,
+            &apps_path,
+        )
+        && load_token_from_json(&apps_path).is_ok()
+    {
+        return true;
+    }
+
+    for source in [ExternalAuthSource::OpenCode, ExternalAuthSource::Pi] {
+        let Ok(path) = source.path() else {
+            continue;
+        };
+        if !path.exists() {
+            continue;
+        }
+        if crate::config::Config::external_auth_source_allowed_for_path_cached(
+            source.source_id(),
+            &path,
+        ) && source_has_copilot_oauth(source)
+        {
+            return true;
+        }
+    }
+
+    false
+}
+
 pub fn preferred_external_auth_source() -> Option<ExternalCopilotAuthSource> {
     [
         ExternalCopilotAuthSource::ConfigJson,

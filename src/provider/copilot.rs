@@ -6,6 +6,8 @@ use crate::message::{
 };
 use anyhow::Result;
 use async_trait::async_trait;
+use chrono::Utc;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
@@ -42,6 +44,19 @@ pub(crate) fn is_known_display_model(model: &str) -> bool {
     FALLBACK_MODELS.contains(&model)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CatalogSource {
+    None,
+    Cached,
+    Live,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PersistedCatalog {
+    models: Vec<String>,
+    fetched_at_rfc3339: String,
+}
+
 /// Copilot API provider - uses GitHub Copilot's OpenAI-compatible API.
 /// Authenticates via GitHub OAuth token, exchanges for Copilot bearer token,
 /// and sends requests to api.githubcopilot.com.
@@ -63,33 +78,94 @@ pub struct CopilotApiProvider {
     github_token: String,
     bearer_token: Arc<tokio::sync::RwLock<Option<copilot_auth::CopilotApiToken>>>,
     fetched_models: Arc<RwLock<Vec<String>>>,
+    catalog_source: Arc<RwLock<CatalogSource>>,
     session_id: String,
     machine_id: String,
     init_ready: Arc<tokio::sync::Notify>,
     init_done: Arc<std::sync::atomic::AtomicBool>,
     premium_mode: Arc<std::sync::atomic::AtomicU8>,
     user_turn_count: Arc<std::sync::atomic::AtomicU64>,
+    created_at: std::time::Instant,
 }
 
 impl CopilotApiProvider {
+    fn persisted_catalog_path() -> Result<std::path::PathBuf> {
+        Ok(crate::storage::app_config_dir()?.join("copilot_models_cache.json"))
+    }
+
+    fn load_persisted_catalog() -> Option<PersistedCatalog> {
+        let path = Self::persisted_catalog_path().ok()?;
+        crate::storage::read_json(&path)
+            .ok()
+            .filter(|catalog: &PersistedCatalog| !catalog.models.is_empty())
+    }
+
+    fn persist_catalog(models: &[String]) {
+        if models.is_empty() {
+            return;
+        }
+        let Ok(path) = Self::persisted_catalog_path() else {
+            return;
+        };
+        let payload = PersistedCatalog {
+            models: models.to_vec(),
+            fetched_at_rfc3339: Utc::now().to_rfc3339(),
+        };
+        if let Err(error) = crate::storage::write_json(&path, &payload) {
+            crate::logging::warn(&format!(
+                "Failed to persist Copilot model catalog {}: {}",
+                path.display(),
+                error
+            ));
+        }
+    }
+
+    fn seed_cached_catalog(&self) {
+        if let Some(catalog) = Self::load_persisted_catalog() {
+            if let Ok(mut models) = self.fetched_models.try_write() {
+                *models = catalog.models;
+            }
+            if let Ok(mut source) = self.catalog_source.try_write() {
+                *source = CatalogSource::Cached;
+            }
+        }
+    }
+
+    pub(crate) fn model_catalog_detail(&self) -> String {
+        match self
+            .catalog_source
+            .try_read()
+            .map(|g| *g)
+            .unwrap_or(CatalogSource::None)
+        {
+            CatalogSource::Live => String::new(),
+            CatalogSource::Cached => "cached live catalog".to_string(),
+            CatalogSource::None => "catalog still loading".to_string(),
+        }
+    }
+
     pub fn new() -> Result<Self> {
         let github_token = copilot_auth::load_github_token()?;
         let model =
             std::env::var("JCODE_COPILOT_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
 
-        Ok(Self {
+        let provider = Self {
             client: crate::provider::shared_http_client(),
             model: Arc::new(RwLock::new(model)),
             github_token,
             bearer_token: Arc::new(tokio::sync::RwLock::new(None)),
             fetched_models: Arc::new(RwLock::new(Vec::new())),
+            catalog_source: Arc::new(RwLock::new(CatalogSource::None)),
             session_id: Uuid::new_v4().to_string(),
             machine_id: Self::get_or_create_machine_id(),
             init_ready: Arc::new(tokio::sync::Notify::new()),
             init_done: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             premium_mode: Arc::new(std::sync::atomic::AtomicU8::new(Self::env_premium_mode())),
             user_turn_count: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-        })
+            created_at: std::time::Instant::now(),
+        };
+        provider.seed_cached_catalog();
+        Ok(provider)
     }
 
     pub fn has_credentials() -> bool {
@@ -108,19 +184,30 @@ impl CopilotApiProvider {
         let model =
             std::env::var("JCODE_COPILOT_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
 
-        Self {
+        let provider = Self {
             client: crate::provider::shared_http_client(),
             model: Arc::new(RwLock::new(model)),
             github_token,
             bearer_token: Arc::new(tokio::sync::RwLock::new(None)),
             fetched_models: Arc::new(RwLock::new(Vec::new())),
+            catalog_source: Arc::new(RwLock::new(CatalogSource::None)),
             session_id: Uuid::new_v4().to_string(),
             machine_id: Self::get_or_create_machine_id(),
             init_ready: Arc::new(tokio::sync::Notify::new()),
             init_done: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             premium_mode: Arc::new(std::sync::atomic::AtomicU8::new(Self::env_premium_mode())),
             user_turn_count: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-        }
+            created_at: std::time::Instant::now(),
+        };
+        provider.seed_cached_catalog();
+        provider
+    }
+
+    fn startup_prefetch_grace_ms() -> u64 {
+        std::env::var("JCODE_COPILOT_PREFETCH_STARTUP_GRACE_MS")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(2000)
     }
 
     fn get_or_create_machine_id() -> String {
@@ -212,6 +299,7 @@ impl CopilotApiProvider {
     /// Call this after construction. Fetches a bearer token and queries /models.
     /// If JCODE_COPILOT_MODEL is set, this is a no-op (user override).
     pub async fn detect_tier_and_set_default(&self) {
+        let detect_start = std::time::Instant::now();
         if std::env::var("JCODE_COPILOT_MODEL").is_ok() {
             crate::logging::info(
                 "Copilot model overridden via JCODE_COPILOT_MODEL, skipping tier detection",
@@ -220,11 +308,13 @@ impl CopilotApiProvider {
             return;
         }
 
+        let bearer_start = std::time::Instant::now();
         let bearer = match self.get_bearer_token().await {
             Ok(t) => t,
             Err(e) => {
                 crate::logging::info(&format!(
-                    "Copilot tier detection: failed to get bearer token: {}",
+                    "Copilot tier detection: failed to get bearer token after {}ms: {}",
+                    bearer_start.elapsed().as_millis(),
                     e
                 ));
                 self.mark_init_done();
@@ -232,6 +322,7 @@ impl CopilotApiProvider {
             }
         };
 
+        let fetch_start = std::time::Instant::now();
         match copilot_auth::fetch_available_models(&self.client, &bearer).await {
             Ok(models) => {
                 let picker_models: Vec<String> = models
@@ -242,7 +333,10 @@ impl CopilotApiProvider {
                 let all_ids: Vec<String> = models.iter().map(|m| m.id.clone()).collect();
                 let default = copilot_auth::choose_default_model(&models);
                 crate::logging::info(&format!(
-                    "Copilot tier detection: {} total, {} picker-enabled, default -> {}. Picker: [{}]. All: [{}]",
+                    "Copilot tier detection: bearer={}ms, fetch_models={}ms, total={}ms, {} total, {} picker-enabled, default -> {}. Picker: [{}]. All: [{}]",
+                    bearer_start.elapsed().as_millis(),
+                    fetch_start.elapsed().as_millis(),
+                    detect_start.elapsed().as_millis(),
                     all_ids.len(),
                     picker_models.len(),
                     default,
@@ -260,10 +354,23 @@ impl CopilotApiProvider {
                 if let Ok(mut fm) = self.fetched_models.try_write() {
                     *fm = display_models;
                 }
+                if let Ok(mut source) = self.catalog_source.try_write() {
+                    *source = CatalogSource::Live;
+                }
+                Self::persist_catalog(
+                    &self
+                        .fetched_models
+                        .try_read()
+                        .map(|models| models.clone())
+                        .unwrap_or_default(),
+                );
             }
             Err(e) => {
                 crate::logging::info(&format!(
-                    "Copilot tier detection: failed to fetch models: {}",
+                    "Copilot tier detection: bearer={}ms, fetch_models={}ms, total={}ms, failed to fetch models: {}",
+                    bearer_start.elapsed().as_millis(),
+                    fetch_start.elapsed().as_millis(),
+                    detect_start.elapsed().as_millis(),
                     e
                 ));
             }
@@ -276,6 +383,10 @@ impl CopilotApiProvider {
             .store(true, std::sync::atomic::Ordering::Release);
         self.init_ready.notify_waiters();
         crate::bus::Bus::global().publish(crate::bus::BusEvent::ModelsUpdated);
+    }
+
+    pub(crate) fn complete_init_without_tier_detection(&self) {
+        self.mark_init_done();
     }
 
     async fn wait_for_init(&self) {
@@ -917,12 +1028,14 @@ impl Provider for CopilotApiProvider {
             github_token: self.github_token.clone(),
             bearer_token: self.bearer_token.clone(),
             fetched_models: self.fetched_models.clone(),
+            catalog_source: self.catalog_source.clone(),
             session_id: self.session_id.clone(),
             machine_id: self.machine_id.clone(),
             init_ready: self.init_ready.clone(),
             init_done: self.init_done.clone(),
             premium_mode: self.premium_mode.clone(),
             user_turn_count: self.user_turn_count.clone(),
+            created_at: self.created_at,
         };
 
         tokio::spawn(async move {
@@ -975,11 +1088,24 @@ impl Provider for CopilotApiProvider {
                 return models.clone();
             }
         }
-        FALLBACK_MODELS.iter().map(|m| (*m).to_string()).collect()
+        Vec::new()
     }
 
     fn available_models_for_switching(&self) -> Vec<String> {
         self.available_models_display()
+    }
+
+    async fn prefetch_models(&self) -> Result<()> {
+        let grace_ms = Self::startup_prefetch_grace_ms();
+        if self.created_at.elapsed().as_millis() < u128::from(grace_ms) {
+            crate::logging::info(&format!(
+                "Skipping Copilot model prefetch during startup grace window ({}ms)",
+                grace_ms
+            ));
+            return Ok(());
+        }
+        self.detect_tier_and_set_default().await;
+        Ok(())
     }
 
     fn supports_compaction(&self) -> bool {
@@ -1006,12 +1132,14 @@ impl Provider for CopilotApiProvider {
             github_token: self.github_token.clone(),
             bearer_token: self.bearer_token.clone(),
             fetched_models: self.fetched_models.clone(),
+            catalog_source: self.catalog_source.clone(),
             session_id: self.session_id.clone(),
             machine_id: self.machine_id.clone(),
             init_ready: self.init_ready.clone(),
             init_done: self.init_done.clone(),
             premium_mode: self.premium_mode.clone(),
             user_turn_count: self.user_turn_count.clone(),
+            created_at: self.created_at,
         })
     }
 }
@@ -1027,12 +1155,14 @@ mod tests {
             github_token: "test-token".to_string(),
             bearer_token: Arc::new(tokio::sync::RwLock::new(None)),
             fetched_models: Arc::new(RwLock::new(fetched)),
+            catalog_source: Arc::new(RwLock::new(CatalogSource::Live)),
             session_id: "test-session".to_string(),
             machine_id: "test-machine".to_string(),
             init_ready: Arc::new(tokio::sync::Notify::new()),
             init_done: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             premium_mode: Arc::new(std::sync::atomic::AtomicU8::new(0)),
             user_turn_count: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            created_at: std::time::Instant::now(),
         }
     }
 

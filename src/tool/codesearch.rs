@@ -19,10 +19,7 @@ pub struct CodeSearchTool {
 impl CodeSearchTool {
     pub fn new() -> Self {
         Self {
-            client: reqwest::Client::builder()
-                .timeout(Duration::from_secs(30))
-                .build()
-                .unwrap_or_default(),
+            client: crate::provider::shared_http_client(),
         }
     }
 }
@@ -102,6 +99,7 @@ impl Tool for CodeSearchTool {
         let response = self
             .client
             .post(BASE_URL)
+            .timeout(Duration::from_secs(30))
             .header("accept", "application/json, text/event-stream")
             .header("content-type", "application/json")
             .json(&body)
