@@ -20,7 +20,7 @@ use mermaid_rs_renderer::{
     config::{LayoutConfig, RenderConfig},
     layout::compute_layout,
     parser::parse_mermaid,
-    render::{render_svg, write_output_png},
+    render::render_svg,
     theme::Theme,
 };
 use ratatui::prelude::*;
@@ -83,6 +83,14 @@ static DEFERRED_RENDER_TX: OnceLock<mpsc::Sender<DeferredRenderTask>> = OnceLock
 /// prevents duplicate expensive work when a background streaming render and a
 /// foreground final render race for the same diagram.
 static RENDER_WORK_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+/// Reuse a loaded system font database across Mermaid PNG renders.
+/// Loading fonts dominates part of the cold PNG stage if done per render.
+static SVG_FONT_DB: LazyLock<Arc<usvg::fontdb::Database>> = LazyLock::new(|| {
+    let mut db = usvg::fontdb::Database::new();
+    db.load_system_fonts();
+    Arc::new(db)
+});
 
 /// Maximum number of StatefulProtocol entries to keep in IMAGE_STATE.
 /// Each entry holds the full decoded+encoded image data and can consume
@@ -2103,6 +2111,82 @@ fn retarget_svg_for_png(svg: &str, target_width: f64, target_height: f64) -> Str
     updated
 }
 
+fn primary_font_family(fonts: &str) -> String {
+    fonts
+        .split(',')
+        .map(|s| s.trim().trim_matches('"'))
+        .find(|s| !s.is_empty())
+        .unwrap_or("Inter")
+        .to_string()
+}
+
+fn parse_hex_color_for_png(input: &str) -> Option<resvg::tiny_skia::Color> {
+    let color = input.trim();
+    let hex = color.strip_prefix('#')?;
+    let (r, g, b, a) = match hex.len() {
+        3 => {
+            let r = u8::from_str_radix(&hex[0..1].repeat(2), 16).ok()?;
+            let g = u8::from_str_radix(&hex[1..2].repeat(2), 16).ok()?;
+            let b = u8::from_str_radix(&hex[2..3].repeat(2), 16).ok()?;
+            (r, g, b, 255)
+        }
+        4 => {
+            let r = u8::from_str_radix(&hex[0..1].repeat(2), 16).ok()?;
+            let g = u8::from_str_radix(&hex[1..2].repeat(2), 16).ok()?;
+            let b = u8::from_str_radix(&hex[2..3].repeat(2), 16).ok()?;
+            let a = u8::from_str_radix(&hex[3..4].repeat(2), 16).ok()?;
+            (r, g, b, a)
+        }
+        6 => {
+            let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+            let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+            let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+            (r, g, b, 255)
+        }
+        8 => {
+            let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+            let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+            let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+            let a = u8::from_str_radix(&hex[6..8], 16).ok()?;
+            (r, g, b, a)
+        }
+        _ => return None,
+    };
+    resvg::tiny_skia::Color::from_rgba8(r, g, b, a).into()
+}
+
+fn write_output_png_cached_fonts(
+    svg: &str,
+    output: &Path,
+    render_cfg: &RenderConfig,
+    theme: &Theme,
+) -> anyhow::Result<()> {
+    let opt = usvg::Options {
+        font_family: primary_font_family(&theme.font_family),
+        default_size: usvg::Size::from_wh(render_cfg.width, render_cfg.height)
+            .unwrap_or(usvg::Size::from_wh(800.0, 600.0).unwrap()),
+        fontdb: SVG_FONT_DB.clone(),
+        ..Default::default()
+    };
+
+    let tree = usvg::Tree::from_str(svg, &opt)?;
+    let size = tree.size().to_int_size();
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(size.width(), size.height())
+        .ok_or_else(|| anyhow::anyhow!("Failed to allocate pixmap"))?;
+    if let Some(color) = parse_hex_color_for_png(&theme.background) {
+        pixmap.fill(color);
+    }
+
+    let mut pixmap_mut = pixmap.as_mut();
+    resvg::render(
+        &tree,
+        resvg::tiny_skia::Transform::default(),
+        &mut pixmap_mut,
+    );
+    pixmap.save_png(output)?;
+    Ok(())
+}
+
 /// Render a mermaid code block to PNG (cached)
 /// Now accepts optional terminal_width for adaptive sizing
 pub fn render_mermaid(content: &str) -> RenderResult {
@@ -2450,7 +2534,7 @@ fn render_mermaid_sized_internal(
         }
 
         let png_start = Instant::now();
-        write_output_png(&svg, &png_path_clone, &render_config, &theme)
+        write_output_png_cached_fonts(&svg, &png_path_clone, &render_config, &theme)
             .map_err(|e| format!("Render error: {}", e))?;
         let png_ms = png_start.elapsed().as_secs_f32() * 1000.0;
 
