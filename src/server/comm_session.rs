@@ -126,6 +126,7 @@ async fn register_visible_spawned_member(
             SwarmMember {
                 session_id: session_id.to_string(),
                 event_tx,
+                event_txs: HashMap::new(),
                 working_dir: working_dir.map(PathBuf::from),
                 swarm_id: Some(swarm_id.to_string()),
                 swarm_enabled: true,
@@ -693,6 +694,7 @@ mod tests {
             SwarmMember {
                 session_id: session_id.to_string(),
                 event_tx,
+                event_txs: HashMap::new(),
                 working_dir: None,
                 swarm_id: swarm_id.map(|id| id.to_string()),
                 swarm_enabled: true,

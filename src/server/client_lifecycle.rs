@@ -186,7 +186,7 @@ pub(super) async fn handle_client(
     )
     .await;
 
-    let agent = Arc::new(Mutex::new(new_agent));
+    let mut agent = Arc::new(Mutex::new(new_agent));
     {
         let mut sessions_guard = sessions.write().await;
         sessions_guard.insert(client_session_id.clone(), Arc::clone(&agent));
@@ -613,7 +613,7 @@ pub(super) async fn handle_client(
                 if let Some(target_session_id) = target_session_id {
                     if crate::session::session_exists(&target_session_id) {
                         let pre_resume_session_id = client_session_id.clone();
-                        if handle_resume_session(
+                        agent = handle_resume_session(
                             id,
                             target_session_id.clone(),
                             client_instance_id.as_deref(),
@@ -649,10 +649,7 @@ pub(super) async fn handle_client(
                             &swarm_event_tx,
                         )
                         .await
-                        .is_err()
-                        {
-                            break;
-                        }
+                        ?;
                         (soft_interrupt_queue, background_tool_signal, cancel_signal) =
                             refresh_runtime_handles(&agent).await;
                         if client_session_id == target_session_id {
@@ -663,6 +660,7 @@ pub(super) async fn handle_client(
                                 false,
                                 &mut client_selfdev,
                                 &client_session_id,
+                                &client_connection_id,
                                 &friendly_name,
                                 &agent,
                                 &registry,
@@ -704,6 +702,7 @@ pub(super) async fn handle_client(
                             true,
                             &mut client_selfdev,
                             &client_session_id,
+                            &client_connection_id,
                             &friendly_name,
                             &agent,
                             &registry,
@@ -730,6 +729,7 @@ pub(super) async fn handle_client(
                         true,
                         &mut client_selfdev,
                         &client_session_id,
+                        &client_connection_id,
                         &friendly_name,
                         &agent,
                         &registry,
@@ -810,7 +810,7 @@ pub(super) async fn handle_client(
                         info.client_instance_id = client_instance_id.clone();
                     }
                 }
-                if handle_resume_session(
+                agent = handle_resume_session(
                     id,
                     session_id,
                     client_instance_id.as_deref(),
@@ -845,11 +845,7 @@ pub(super) async fn handle_client(
                     &event_counter,
                     &swarm_event_tx,
                 )
-                .await
-                .is_err()
-                {
-                    break;
-                }
+                .await?;
                 (soft_interrupt_queue, background_tool_signal, cancel_signal) =
                     refresh_runtime_handles(&agent).await;
                 let snapshot = {

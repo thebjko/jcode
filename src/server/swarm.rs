@@ -1,4 +1,4 @@
-use super::state::MAX_EVENT_HISTORY;
+use super::state::{MAX_EVENT_HISTORY, fanout_session_event};
 use super::{FileAccess, SwarmEvent, SwarmEventType, SwarmMember, VersionedPlan};
 use crate::agent::Agent;
 use crate::plan::PlanItem;
@@ -95,13 +95,10 @@ async fn broadcast_swarm_status_now(
         })
         .collect();
 
-    let event = ServerEvent::SwarmStatus {
-        members: members_list,
-    };
+    drop(members_guard);
+    let event = ServerEvent::SwarmStatus { members: members_list };
     for sid in session_ids {
-        if let Some(member) = members_guard.get(&sid) {
-            let _ = member.event_tx.send(event.clone());
-        }
+        let _ = fanout_session_event(swarm_members, &sid, event.clone()).await;
     }
 }
 
@@ -633,9 +630,9 @@ pub(super) async fn update_member_status(
                             && m.role == "coordinator"
                             && m.session_id != session_id
                     })
-                    .map(|m| (m.session_id.clone(), m.event_tx.clone()))
+                    .map(|m| m.session_id.clone())
             };
-            if let Some((_coord_id, coord_tx)) = coordinator_id {
+            if let Some(coord_id) = coordinator_id {
                 let name = agent_name
                     .as_deref()
                     .unwrap_or(&session_id[..8.min(session_id.len())]);
@@ -643,7 +640,10 @@ pub(super) async fn update_member_status(
                     "Agent {} completed their work. Use assign_task to give them new work, or stop to remove them.",
                     name
                 );
-                let _ = coord_tx.send(ServerEvent::Notification {
+                let _ = fanout_session_event(
+                    swarm_members,
+                    &coord_id,
+                    ServerEvent::Notification {
                     from_session: session_id.to_string(),
                     from_name: agent_name.clone(),
                     notification_type: NotificationType::Message {
@@ -651,7 +651,9 @@ pub(super) async fn update_member_status(
                         channel: None,
                     },
                     message: msg,
-                });
+                },
+                )
+                .await;
             }
         }
     }
@@ -880,6 +882,7 @@ mod tests {
             SwarmMember {
                 session_id: session_id.to_string(),
                 event_tx,
+                event_txs: HashMap::new(),
                 working_dir: None,
                 swarm_id: Some("swarm-1".to_string()),
                 swarm_enabled: true,

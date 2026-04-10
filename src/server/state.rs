@@ -50,8 +50,13 @@ pub(super) fn latest_peer_touches(
 #[derive(Clone, Debug)]
 pub struct SwarmMember {
     pub session_id: String,
-    /// Channel to send events to this session
+    /// Primary channel to send events to this session.
+    ///
+    /// This remains for backward-compatible single-sender call sites and for
+    /// headless sessions that do not maintain a live attachment map.
     pub event_tx: mpsc::UnboundedSender<ServerEvent>,
+    /// Live client attachments for this session keyed by connection id.
+    pub event_txs: HashMap<String, mpsc::UnboundedSender<ServerEvent>>,
     /// Working directory (used to derive swarm id)
     pub working_dir: Option<PathBuf>,
     /// Swarm identifier (shared across worktrees)
@@ -161,6 +166,78 @@ pub struct SwarmEvent {
 pub(super) const MAX_EVENT_HISTORY: usize = 5000;
 
 pub(super) type SessionInterruptQueues = Arc<RwLock<HashMap<String, SoftInterruptQueue>>>;
+
+pub(super) async fn register_session_event_sender(
+    swarm_members: &Arc<RwLock<HashMap<String, SwarmMember>>>,
+    session_id: &str,
+    connection_id: &str,
+    event_tx: mpsc::UnboundedSender<ServerEvent>,
+) {
+    let mut members = swarm_members.write().await;
+    if let Some(member) = members.get_mut(session_id) {
+        member.event_tx = event_tx.clone();
+        member.event_txs.insert(connection_id.to_string(), event_tx);
+    }
+}
+
+pub(super) async fn unregister_session_event_sender(
+    swarm_members: &Arc<RwLock<HashMap<String, SwarmMember>>>,
+    session_id: &str,
+    connection_id: &str,
+) {
+    let mut members = swarm_members.write().await;
+    if let Some(member) = members.get_mut(session_id) {
+        member.event_txs.remove(connection_id);
+        if let Some((_, tx)) = member.event_txs.iter().next() {
+            member.event_tx = tx.clone();
+        }
+    }
+}
+
+pub(super) async fn fanout_session_event(
+    swarm_members: &Arc<RwLock<HashMap<String, SwarmMember>>>,
+    session_id: &str,
+    event: ServerEvent,
+) -> usize {
+    let targets = {
+        let mut members = swarm_members.write().await;
+        let Some(member) = members.get_mut(session_id) else {
+            return 0;
+        };
+
+        member.event_txs.retain(|_, tx| !tx.is_closed());
+
+        if member.event_txs.is_empty() {
+            vec![member.event_tx.clone()]
+        } else {
+            if let Some((_, tx)) = member.event_txs.iter().next() {
+                member.event_tx = tx.clone();
+            }
+            member.event_txs.values().cloned().collect::<Vec<_>>()
+        }
+    };
+
+    let mut delivered = 0;
+    for tx in targets {
+        if tx.send(event.clone()).is_ok() {
+            delivered += 1;
+        }
+    }
+    delivered
+}
+
+pub(super) fn session_event_fanout_sender(
+    session_id: String,
+    swarm_members: Arc<RwLock<HashMap<String, SwarmMember>>>,
+) -> mpsc::UnboundedSender<ServerEvent> {
+    let (tx, mut rx) = mpsc::unbounded_channel::<ServerEvent>();
+    tokio::spawn(async move {
+        while let Some(event) = rx.recv().await {
+            let _ = fanout_session_event(&swarm_members, &session_id, event).await;
+        }
+    });
+    tx
+}
 
 pub(super) fn enqueue_soft_interrupt(
     queue: &SoftInterruptQueue,

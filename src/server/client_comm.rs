@@ -1,7 +1,8 @@
 use super::client_lifecycle::process_message_streaming_mpsc;
 use super::{
     ClientConnectionInfo, SessionInterruptQueues, SharedContext, SwarmEvent, SwarmEventType,
-    SwarmMember, queue_soft_interrupt_for_session, record_swarm_event,
+    SwarmMember, fanout_session_event, queue_soft_interrupt_for_session,
+    record_swarm_event, session_event_fanout_sender,
     subscribe_session_to_channel, truncate_detail, unsubscribe_session_from_channel,
 };
 use crate::agent::Agent;
@@ -95,15 +96,16 @@ async fn run_message_in_live_session_if_idle(
         return false;
     };
 
-    let event_tx = {
+    let has_live_attachments = {
         let members = swarm_members.read().await;
         members
             .get(session_id)
-            .map(|member| member.event_tx.clone())
+            .map(|member| !member.event_txs.is_empty() || !member.event_tx.is_closed())
+            .unwrap_or(false)
     };
-    let Some(event_tx) = event_tx else {
+    if !has_live_attachments {
         return false;
-    };
+    }
 
     let is_idle = match agent.try_lock() {
         Ok(guard) => {
@@ -119,6 +121,7 @@ async fn run_message_in_live_session_if_idle(
 
     let session_id = session_id.to_string();
     let message = message.to_string();
+    let event_tx = session_event_fanout_sender(session_id.clone(), Arc::clone(swarm_members));
     tokio::spawn(async move {
         if let Err(err) =
             process_message_streaming_mpsc(agent, &message, vec![], reminder, event_tx).await
@@ -213,11 +216,12 @@ pub(super) async fn handle_comm_share(
                 .unwrap_or_default()
         };
 
-        let members = swarm_members.read().await;
         for sid in &swarm_session_ids {
             if sid != &req_session_id {
-                if let Some(member) = members.get(sid) {
-                    let _ = member.event_tx.send(ServerEvent::Notification {
+                let _ = fanout_session_event(
+                    swarm_members,
+                    sid,
+                    ServerEvent::Notification {
                         from_session: req_session_id.clone(),
                         from_name: friendly_name.clone(),
                         notification_type: NotificationType::SharedContext {
@@ -233,8 +237,9 @@ pub(super) async fn handle_comm_share(
                         } else {
                             format!("Shared context: {} = {}", key, value)
                         },
-                    });
-                }
+                    },
+                )
+                .await;
             }
         }
 
@@ -658,7 +663,7 @@ pub(super) async fn handle_comm_message(
             if !swarm_session_ids.contains(session_id) {
                 continue;
             }
-            if let Some(member) = members.get(session_id) {
+            if members.get(session_id).is_some() {
                 let from_label = friendly_name
                     .clone()
                     .unwrap_or_else(|| from_session[..8.min(from_session.len())].to_string());
@@ -669,15 +674,20 @@ pub(super) async fn handle_comm_message(
                 };
                 let delivery_mode = resolve_comm_delivery_mode(scope, delivery, wake);
                 let notification_msg = format!("{} from {}: {}", scope_label, from_label, message);
-                let _ = member.event_tx.send(ServerEvent::Notification {
-                    from_session: from_session.clone(),
-                    from_name: friendly_name.clone(),
-                    notification_type: NotificationType::Message {
-                        scope: Some(scope.to_string()),
-                        channel: channel.clone(),
+                let _ = fanout_session_event(
+                    swarm_members,
+                    session_id,
+                    ServerEvent::Notification {
+                        from_session: from_session.clone(),
+                        from_name: friendly_name.clone(),
+                        notification_type: NotificationType::Message {
+                            scope: Some(scope.to_string()),
+                            channel: channel.clone(),
+                        },
+                        message: notification_msg.clone(),
                     },
-                    message: notification_msg.clone(),
-                });
+                )
+                .await;
 
                 let sender_name = friendly_name
                     .clone()
@@ -837,6 +847,7 @@ mod tests {
                 SwarmMember {
                     session_id: sender_id.clone(),
                     event_tx: sender_event_tx,
+                    event_txs: HashMap::new(),
                     working_dir: None,
                     swarm_id: Some(swarm_id.clone()),
                     swarm_enabled: true,
@@ -854,6 +865,7 @@ mod tests {
                 SwarmMember {
                     session_id: target_id.clone(),
                     event_tx: target_event_tx,
+                    event_txs: HashMap::new(),
                     working_dir: None,
                     swarm_id: Some(swarm_id.clone()),
                     swarm_enabled: true,
@@ -981,6 +993,7 @@ mod tests {
                 SwarmMember {
                     session_id: sender_id.clone(),
                     event_tx: sender_event_tx,
+                    event_txs: HashMap::new(),
                     working_dir: None,
                     swarm_id: Some(swarm_id.clone()),
                     swarm_enabled: true,
@@ -998,6 +1011,7 @@ mod tests {
                 SwarmMember {
                     session_id: target_id.clone(),
                     event_tx: target_event_tx,
+                    event_txs: HashMap::new(),
                     working_dir: None,
                     swarm_id: Some(swarm_id.clone()),
                     swarm_enabled: true,
@@ -1110,6 +1124,7 @@ mod tests {
                 SwarmMember {
                     session_id: requester_id.clone(),
                     event_tx: requester_event_tx,
+                    event_txs: HashMap::new(),
                     working_dir: None,
                     swarm_id: Some(swarm_id.clone()),
                     swarm_enabled: true,
@@ -1127,6 +1142,7 @@ mod tests {
                 SwarmMember {
                     session_id: peer_id.clone(),
                     event_tx: peer_event_tx,
+                    event_txs: HashMap::new(),
                     working_dir: None,
                     swarm_id: Some(swarm_id.clone()),
                     swarm_enabled: true,
@@ -1195,6 +1211,7 @@ mod tests {
                 SwarmMember {
                     session_id: sender_id.clone(),
                     event_tx: sender_event_tx,
+                    event_txs: HashMap::new(),
                     working_dir: None,
                     swarm_id: Some(swarm_id.clone()),
                     swarm_enabled: true,
@@ -1212,6 +1229,7 @@ mod tests {
                 SwarmMember {
                     session_id: target_id.clone(),
                     event_tx: target_event_tx,
+                    event_txs: HashMap::new(),
                     working_dir: None,
                     swarm_id: Some(swarm_id.clone()),
                     swarm_enabled: true,
@@ -1313,6 +1331,7 @@ mod tests {
                 SwarmMember {
                     session_id: sender_id.clone(),
                     event_tx: sender_event_tx,
+                    event_txs: HashMap::new(),
                     working_dir: None,
                     swarm_id: Some(swarm_id.clone()),
                     swarm_enabled: true,
@@ -1330,6 +1349,7 @@ mod tests {
                 SwarmMember {
                     session_id: target_one_id.clone(),
                     event_tx: target_one_event_tx,
+                    event_txs: HashMap::new(),
                     working_dir: None,
                     swarm_id: Some(swarm_id.clone()),
                     swarm_enabled: true,
@@ -1347,6 +1367,7 @@ mod tests {
                 SwarmMember {
                     session_id: target_two_id.clone(),
                     event_tx: target_two_event_tx,
+                    event_txs: HashMap::new(),
                     working_dir: None,
                     swarm_id: Some(swarm_id.clone()),
                     swarm_enabled: true,

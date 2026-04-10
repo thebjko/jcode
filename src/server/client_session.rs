@@ -1,10 +1,11 @@
 use super::client_state::{HistoryPayloadMode, send_history, spawn_model_prefetch_update};
 use super::{
     ClientConnectionInfo, ClientDebugState, FileAccess, SessionInterruptQueues, SwarmEvent,
-    SwarmMember, VersionedPlan, broadcast_swarm_status, register_session_interrupt_queue,
-    remove_plan_participant, remove_session_channel_subscriptions, remove_session_file_touches,
+    SwarmMember, VersionedPlan, broadcast_swarm_status, register_session_event_sender,
+    register_session_interrupt_queue, remove_plan_participant,
+    remove_session_channel_subscriptions, remove_session_file_touches, remove_session_from_swarm,
     remove_session_interrupt_queue, rename_plan_participant, rename_session_interrupt_queue,
-    swarm_id_for_dir, update_member_status,
+    swarm_id_for_dir, unregister_session_event_sender, update_member_status,
 };
 use crate::agent::Agent;
 use crate::message::ContentBlock;
@@ -193,6 +194,7 @@ pub(super) async fn handle_clear_session(
 #[allow(clippy::too_many_arguments)]
 async fn ensure_client_swarm_member(
     client_session_id: &str,
+    client_connection_id: &str,
     friendly_name: &Option<String>,
     client_event_tx: &mpsc::UnboundedSender<ServerEvent>,
     agent: &Arc<Mutex<Agent>>,
@@ -227,6 +229,9 @@ async fn ensure_client_swarm_member(
         let mut members = swarm_members.write().await;
         if let Some(member) = members.get_mut(client_session_id) {
             member.event_tx = client_event_tx.clone();
+            member
+                .event_txs
+                .insert(client_connection_id.to_string(), client_event_tx.clone());
             member.swarm_enabled = swarm_enabled;
             member.is_headless = false;
             if member_name.is_some() {
@@ -239,6 +244,10 @@ async fn ensure_client_swarm_member(
                 SwarmMember {
                     session_id: client_session_id.to_string(),
                     event_tx: client_event_tx.clone(),
+                    event_txs: HashMap::from([(
+                        client_connection_id.to_string(),
+                        client_event_tx.clone(),
+                    )]),
                     working_dir: working_dir.clone(),
                     swarm_id: derived_swarm_id.clone(),
                     swarm_enabled,
@@ -289,6 +298,7 @@ pub(super) async fn handle_subscribe(
     register_mcp_tools: bool,
     client_selfdev: &mut bool,
     client_session_id: &str,
+    client_connection_id: &str,
     friendly_name: &Option<String>,
     agent: &Arc<Mutex<Agent>>,
     registry: &Registry,
@@ -310,6 +320,7 @@ pub(super) async fn handle_subscribe(
     let subscribe_start = Instant::now();
     ensure_client_swarm_member(
         client_session_id,
+        client_connection_id,
         friendly_name,
         client_event_tx,
         agent,
@@ -510,6 +521,85 @@ pub(super) async fn handle_reload(
 }
 
 #[allow(clippy::too_many_arguments)]
+async fn cleanup_detached_source_session_if_unused(
+    old_session_id: &str,
+    client_connection_id: &str,
+    source_agent: &Arc<Mutex<Agent>>,
+    sessions: &Arc<RwLock<HashMap<String, Arc<Mutex<Agent>>>>>,
+    shutdown_signals: &Arc<RwLock<HashMap<String, InterruptSignal>>>,
+    soft_interrupt_queues: &SessionInterruptQueues,
+    client_connections: &Arc<RwLock<HashMap<String, ClientConnectionInfo>>>,
+    swarm_members: &Arc<RwLock<HashMap<String, SwarmMember>>>,
+    swarms_by_id: &Arc<RwLock<HashMap<String, HashSet<String>>>>,
+    file_touches: &Arc<RwLock<HashMap<PathBuf, Vec<FileAccess>>>>,
+    files_touched_by_session: &Arc<RwLock<HashMap<String, HashSet<PathBuf>>>>,
+    channel_subscriptions: &Arc<RwLock<HashMap<String, HashMap<String, HashSet<String>>>>>,
+    channel_subscriptions_by_session: &Arc<
+        RwLock<HashMap<String, HashMap<String, HashSet<String>>>>,
+    >,
+    swarm_plans: &Arc<RwLock<HashMap<String, VersionedPlan>>>,
+    swarm_coordinators: &Arc<RwLock<HashMap<String, String>>>,
+) {
+    unregister_session_event_sender(swarm_members, old_session_id, client_connection_id).await;
+
+    let other_live_clients = {
+        let connections = client_connections.read().await;
+        connections
+            .values()
+            .any(|info| info.client_id != client_connection_id && info.session_id == old_session_id)
+    };
+
+    if other_live_clients {
+        return;
+    }
+
+    {
+        let mut sessions_guard = sessions.write().await;
+        if sessions_guard
+            .get(old_session_id)
+            .map(|existing| Arc::ptr_eq(existing, source_agent))
+            .unwrap_or(false)
+        {
+            sessions_guard.remove(old_session_id);
+        }
+    }
+
+    {
+        let mut agent_guard = source_agent.lock().await;
+        agent_guard.mark_closed();
+    }
+
+    {
+        let mut signals = shutdown_signals.write().await;
+        signals.remove(old_session_id);
+    }
+    remove_session_interrupt_queue(soft_interrupt_queues, old_session_id).await;
+    remove_session_channel_subscriptions(
+        old_session_id,
+        channel_subscriptions,
+        channel_subscriptions_by_session,
+    )
+    .await;
+    remove_session_file_touches(old_session_id, file_touches, files_touched_by_session).await;
+
+    let removed_swarm_id = {
+        let mut members = swarm_members.write().await;
+        members.remove(old_session_id).and_then(|member| member.swarm_id)
+    };
+    if let Some(swarm_id) = removed_swarm_id {
+        remove_session_from_swarm(
+            old_session_id,
+            &swarm_id,
+            swarm_members,
+            swarms_by_id,
+            swarm_coordinators,
+            swarm_plans,
+        )
+        .await;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn handle_resume_session(
     id: u64,
     session_id: String,
@@ -546,8 +636,94 @@ pub(super) async fn handle_resume_session(
     event_history: &Arc<RwLock<std::collections::VecDeque<SwarmEvent>>>,
     event_counter: &Arc<std::sync::atomic::AtomicU64>,
     swarm_event_tx: &broadcast::Sender<SwarmEvent>,
-) -> Result<()> {
+) -> Result<Arc<Mutex<Agent>>> {
     let incoming_client_instance_id = client_instance_id.map(str::to_string);
+    let live_target_agent = {
+        let sessions_guard = sessions.read().await;
+        sessions_guard.get(&session_id).cloned()
+    };
+
+    if let Some(live_target_agent) = live_target_agent.as_ref().filter(|existing| !Arc::ptr_eq(existing, agent)) {
+        let old_session_id = client_session_id.clone();
+
+        cleanup_detached_source_session_if_unused(
+            &old_session_id,
+            client_connection_id,
+            agent,
+            sessions,
+            shutdown_signals,
+            soft_interrupt_queues,
+            client_connections,
+            swarm_members,
+            swarms_by_id,
+            file_touches,
+            files_touched_by_session,
+            channel_subscriptions,
+            channel_subscriptions_by_session,
+            swarm_plans,
+            swarm_coordinators,
+        )
+        .await;
+
+        {
+            let mut connections = client_connections.write().await;
+            if let Some(info) = connections.get_mut(client_connection_id) {
+                info.session_id = session_id.clone();
+                info.client_instance_id = incoming_client_instance_id.clone();
+                info.last_seen = Instant::now();
+            }
+        }
+
+        register_session_event_sender(
+            swarm_members,
+            &session_id,
+            client_connection_id,
+            client_event_tx.clone(),
+        )
+        .await;
+
+        let is_canary = {
+            let agent_guard = live_target_agent.lock().await;
+            agent_guard.is_canary()
+        };
+        if is_canary {
+            *client_selfdev = true;
+            registry.register_selfdev_tools().await;
+        }
+
+        registry
+            .register_mcp_tools(
+                Some(client_event_tx.clone()),
+                Some(Arc::clone(mcp_pool)),
+                Some(session_id.clone()),
+            )
+            .await;
+
+        *client_session_id = session_id.clone();
+
+        send_history(
+            id,
+            &session_id,
+            live_target_agent,
+            sessions,
+            client_count,
+            writer,
+            server_name,
+            server_icon,
+            None,
+            if client_has_local_history {
+                HistoryPayloadMode::MetadataOnly
+            } else {
+                HistoryPayloadMode::Full
+            },
+            true,
+        )
+        .await?;
+        let _ = client_event_tx.send(ServerEvent::Done { id });
+        spawn_model_prefetch_update(Arc::clone(provider), Arc::clone(live_target_agent));
+        return Ok(Arc::clone(live_target_agent));
+    }
+
     let conflicting_live_client = {
         let connections = client_connections.read().await;
         connections
@@ -635,12 +811,12 @@ pub(super) async fn handle_resume_session(
             let _ = client_event_tx.send(ServerEvent::Error {
                 id,
                 message: format!(
-                    "Session '{}' already has a connected TUI client. jcode does not currently support multiple interactive attachments to the same live session. Close the other window or wait for it to disconnect, then retry.",
+                    "Session '{}' is already live but could not be shared safely with this connection.",
                     session_id
                 ),
                 retry_after_secs: Some(1),
             });
-            return Ok(());
+            return Ok(Arc::clone(agent));
         }
     }
 
@@ -798,6 +974,13 @@ pub(super) async fn handle_resume_session(
             .await?;
             let _ = client_event_tx.send(ServerEvent::Done { id });
             spawn_model_prefetch_update(Arc::clone(provider), Arc::clone(agent));
+            register_session_event_sender(
+                swarm_members,
+                &session_id,
+                client_connection_id,
+                client_event_tx.clone(),
+            )
+            .await;
         }
         Err(error) => {
             let _ = client_event_tx.send(ServerEvent::Error {
@@ -811,7 +994,7 @@ pub(super) async fn handle_resume_session(
         }
     }
 
-    Ok(())
+    Ok(Arc::clone(agent))
 }
 
 #[cfg(test)]
@@ -893,6 +1076,28 @@ mod tests {
         session.model = Some("mock".to_string());
         session.replace_messages(messages);
         Agent::new_with_session(provider, registry, session, None)
+    }
+
+    async fn collect_events_until_done(
+        client_event_rx: &mut mpsc::UnboundedReceiver<ServerEvent>,
+        done_id: u64,
+    ) -> Vec<ServerEvent> {
+        let mut events = Vec::new();
+        for _ in 0..16 {
+            let event = tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                client_event_rx.recv(),
+            )
+            .await
+            .expect("timed out waiting for server event")
+            .expect("expected server event");
+            let is_done = matches!(event, ServerEvent::Done { id } if id == done_id);
+            events.push(event);
+            if is_done {
+                break;
+            }
+        }
+        events
     }
 
     #[test]
@@ -1211,7 +1416,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn handle_resume_session_rejects_duplicate_live_tui_attach() {
+    async fn handle_resume_session_allows_multiple_live_tui_attach() {
         let _guard = crate::storage::lock_test_env();
         let runtime = tempfile::TempDir::new().expect("create runtime dir");
         let prev_runtime = std::env::var_os("JCODE_RUNTIME_DIR");
@@ -1334,28 +1539,37 @@ mod tests {
             &swarm_event_tx,
         )
         .await
-        .expect("resume should return gracefully with server error event");
+        .expect("resume attach should succeed");
 
-        let event = client_event_rx.recv().await.expect("expected server event");
-        match event {
-            ServerEvent::Error {
-                id,
-                message,
-                retry_after_secs,
-            } => {
-                assert_eq!(id, 42);
-                assert!(message.contains("already has a connected TUI client"));
-                assert_eq!(retry_after_secs, Some(1));
-            }
-            other => panic!("expected duplicate-attach error, got {other:?}"),
-        }
+        let events = collect_events_until_done(&mut client_event_rx, 42).await;
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, ServerEvent::Done { id } if *id == 42)),
+            "expected Done event for live attach, got {events:?}"
+        );
+        assert!(
+            !events.iter().any(|event| matches!(event, ServerEvent::Error { .. })),
+            "attach should not emit error events: {events:?}"
+        );
 
-        assert_eq!(client_session_id, temp_session_id);
+        assert_eq!(client_session_id, target_session_id);
         let sessions_guard = sessions.read().await;
         let mapped_agent = sessions_guard
             .get(target_session_id)
             .expect("existing live session should remain mapped");
         assert!(Arc::ptr_eq(mapped_agent, &existing_agent));
+        assert!(!sessions_guard.contains_key(temp_session_id));
+        drop(sessions_guard);
+
+        let connections = client_connections.read().await;
+        assert!(connections.contains_key("conn_existing"));
+        assert_eq!(
+            connections
+                .get("conn_new")
+                .map(|info| info.session_id.as_str()),
+            Some(target_session_id)
+        );
 
         if let Some(prev_runtime) = prev_runtime {
             crate::env::set_var("JCODE_RUNTIME_DIR", prev_runtime);
@@ -1532,7 +1746,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn handle_resume_session_rejects_takeover_without_local_history() {
+    async fn handle_resume_session_allows_attach_without_local_history() {
         let _guard = crate::storage::lock_test_env();
         let runtime = tempfile::TempDir::new().expect("create runtime dir");
         let prev_runtime = std::env::var_os("JCODE_RUNTIME_DIR");
@@ -1666,23 +1880,21 @@ mod tests {
             &swarm_event_tx,
         )
         .await
-        .expect("takeover without local history should return server error");
+        .expect("attach without local history should succeed");
 
-        let event = client_event_rx.recv().await.expect("expected server event");
-        match event {
-            ServerEvent::Error {
-                id,
-                message,
-                retry_after_secs,
-            } => {
-                assert_eq!(id, 44);
-                assert!(message.contains("already has a connected TUI client"));
-                assert_eq!(retry_after_secs, Some(1));
-            }
-            other => panic!("expected duplicate-attach error, got {other:?}"),
-        }
+        let events = collect_events_until_done(&mut client_event_rx, 44).await;
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, ServerEvent::Done { id } if *id == 44)),
+            "expected Done event for live attach, got {events:?}"
+        );
+        assert!(
+            !events.iter().any(|event| matches!(event, ServerEvent::Error { .. })),
+            "attach should not emit error events: {events:?}"
+        );
 
-        assert_eq!(client_session_id, temp_session_id);
+        assert_eq!(client_session_id, target_session_id);
         assert!(
             disconnect_rx.try_recv().is_err(),
             "existing live client must not be kicked"
@@ -1693,8 +1905,17 @@ mod tests {
             connections
                 .get("conn_new")
                 .map(|info| info.session_id.as_str()),
-            Some(temp_session_id)
+            Some(target_session_id)
         );
+        drop(connections);
+        let sessions_guard = sessions.read().await;
+        assert!(Arc::ptr_eq(
+            sessions_guard
+                .get(target_session_id)
+                .expect("existing live session should remain mapped"),
+            &existing_agent
+        ));
+        assert!(!sessions_guard.contains_key(temp_session_id));
 
         if let Some(prev_runtime) = prev_runtime {
             crate::env::set_var("JCODE_RUNTIME_DIR", prev_runtime);
@@ -1704,7 +1925,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn handle_resume_session_rejects_local_history_takeover_from_different_client_instance() {
+    async fn handle_resume_session_allows_attach_from_different_client_instance() {
         let _guard = crate::storage::lock_test_env();
         let runtime = tempfile::TempDir::new().expect("create runtime dir");
         let prev_runtime = std::env::var_os("JCODE_RUNTIME_DIR");
@@ -1838,23 +2059,21 @@ mod tests {
             &swarm_event_tx,
         )
         .await
-        .expect("different-instance local-history takeover should be rejected");
+        .expect("different-instance attach should succeed");
 
-        let event = client_event_rx.recv().await.expect("expected server event");
-        match event {
-            ServerEvent::Error {
-                id,
-                message,
-                retry_after_secs,
-            } => {
-                assert_eq!(id, 45);
-                assert!(message.contains("already has a connected TUI client"));
-                assert_eq!(retry_after_secs, Some(1));
-            }
-            other => panic!("expected duplicate-attach error, got {other:?}"),
-        }
+        let events = collect_events_until_done(&mut client_event_rx, 45).await;
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, ServerEvent::Done { id } if *id == 45)),
+            "expected Done event for live attach, got {events:?}"
+        );
+        assert!(
+            !events.iter().any(|event| matches!(event, ServerEvent::Error { .. })),
+            "attach should not emit error events: {events:?}"
+        );
 
-        assert_eq!(client_session_id, temp_session_id);
+        assert_eq!(client_session_id, target_session_id);
         assert!(
             disconnect_rx.try_recv().is_err(),
             "existing live client must not be kicked"
@@ -1865,8 +2084,17 @@ mod tests {
             connections
                 .get("conn_new")
                 .map(|info| (info.session_id.as_str(), info.client_instance_id.as_deref())),
-            Some((temp_session_id, Some("client_instance_new")))
+            Some((target_session_id, Some("client_instance_new")))
         );
+        drop(connections);
+        let sessions_guard = sessions.read().await;
+        assert!(Arc::ptr_eq(
+            sessions_guard
+                .get(target_session_id)
+                .expect("existing live session should remain mapped"),
+            &existing_agent
+        ));
+        assert!(!sessions_guard.contains_key(temp_session_id));
 
         if let Some(prev_runtime) = prev_runtime {
             crate::env::set_var("JCODE_RUNTIME_DIR", prev_runtime);
@@ -2011,30 +2239,43 @@ mod tests {
             &swarm_event_tx,
         )
         .await
-        .expect("same-instance takeover resume should succeed");
+        .expect("same-instance attach should succeed");
 
-        while let Ok(event) = client_event_rx.try_recv() {
-            assert!(
-                !matches!(event, ServerEvent::Error { .. }),
-                "same-instance takeover should not queue an error event: {event:?}"
-            );
-        }
+        let events = collect_events_until_done(&mut client_event_rx, 45).await;
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, ServerEvent::Done { id } if *id == 45)),
+            "expected Done event for live attach, got {events:?}"
+        );
+        assert!(
+            !events.iter().any(|event| matches!(event, ServerEvent::Error { .. })),
+            "same-instance attach should not queue an error event: {events:?}"
+        );
         assert_eq!(client_session_id, target_session_id);
 
-        let disconnect_signal = disconnect_rx.recv().await;
         assert!(
-            disconnect_signal.is_some(),
-            "old client should be told to disconnect"
+            disconnect_rx.try_recv().is_err(),
+            "existing live client should remain connected"
         );
 
         let connections = client_connections.read().await;
-        assert!(!connections.contains_key("conn_existing"));
+        assert!(connections.contains_key("conn_existing"));
         assert_eq!(
             connections
                 .get("conn_new")
                 .map(|info| (info.session_id.as_str(), info.client_instance_id.as_deref())),
             Some((target_session_id, Some(shared_instance_id)))
         );
+        drop(connections);
+        let sessions_guard = sessions.read().await;
+        assert!(Arc::ptr_eq(
+            sessions_guard
+                .get(target_session_id)
+                .expect("existing live session should remain mapped"),
+            &existing_agent
+        ));
+        assert!(!sessions_guard.contains_key(temp_session_id));
 
         if let Some(prev_runtime) = prev_runtime {
             crate::env::set_var("JCODE_RUNTIME_DIR", prev_runtime);

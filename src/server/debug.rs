@@ -12,7 +12,7 @@ use super::debug_swarm_write::maybe_handle_swarm_write_command;
 use super::debug_testers::execute_tester_command;
 use super::{
     FileAccess, ServerIdentity, SharedContext, SwarmEvent, SwarmMember, VersionedPlan,
-    debug_control_allowed,
+    debug_control_allowed, fanout_session_event,
 };
 use crate::agent::Agent;
 use crate::ambient_runner::AmbientRunnerHandle;
@@ -154,15 +154,17 @@ async fn inject_transcript(
     )
     .await?;
 
-    let delivered = {
-        let members = swarm_members.read().await;
-        members
-            .get(&session_id)
-            .ok_or_else(|| anyhow::anyhow!("Session '{}' is not live", session_id))?
-            .event_tx
-            .send(ServerEvent::Transcript { text, mode })
-            .is_ok()
-    };
+    let has_member = { swarm_members.read().await.contains_key(&session_id) };
+    if !has_member {
+        anyhow::bail!("Session '{}' is not live", session_id);
+    }
+    let delivered = fanout_session_event(
+        swarm_members,
+        &session_id,
+        ServerEvent::Transcript { text, mode },
+    )
+    .await
+        > 0;
 
     if !delivered {
         anyhow::bail!("Failed to deliver transcript to session '{}'", session_id);

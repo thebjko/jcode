@@ -769,6 +769,7 @@ mod tests {
         SwarmMember {
             session_id: session_id.to_string(),
             event_tx,
+            event_txs: HashMap::new(),
             working_dir: None,
             swarm_id: Some(swarm_id.to_string()),
             swarm_enabled: true,

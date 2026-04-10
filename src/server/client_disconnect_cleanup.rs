@@ -2,7 +2,7 @@ use super::{
     ClientConnectionInfo, ClientDebugState, FileAccess, SessionInterruptQueues, SwarmEvent,
     SwarmEventType, SwarmMember, VersionedPlan, record_swarm_event,
     remove_session_channel_subscriptions, remove_session_file_touches, remove_session_from_swarm,
-    remove_session_interrupt_queue, update_member_status,
+    remove_session_interrupt_queue, unregister_session_event_sender, update_member_status,
 };
 use crate::agent::Agent;
 use anyhow::Result;
@@ -87,6 +87,7 @@ pub(super) async fn cleanup_client_connection(
         let mut connections = client_connections.write().await;
         connections.remove(client_connection_id);
     }
+    unregister_session_event_sender(swarm_members, client_session_id, client_connection_id).await;
 
     // Release stale live ownership before slower cleanup so a reconnecting TUI can
     // reclaim the same session without tripping duplicate-attach guards.
@@ -96,12 +97,9 @@ pub(super) async fn cleanup_client_connection(
         session_has_live_successor(client_connections, client_session_id).await;
     if successor_connected {
         crate::logging::info(&format!(
-            "Skipping destructive disconnect cleanup for {} because a replacement client is already connected",
+            "Skipping destructive disconnect cleanup for {} because another client is still attached",
             client_session_id
         ));
-        if let Some(handle) = processing_task.take() {
-            handle.abort();
-        }
         event_handle.abort();
         return Ok(());
     }

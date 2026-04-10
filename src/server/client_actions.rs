@@ -1,8 +1,9 @@
 use super::client_lifecycle::process_message_streaming_mpsc;
 use super::{
     ClientConnectionInfo, SessionInterruptQueues, SwarmEvent, SwarmMember, VersionedPlan,
-    broadcast_swarm_status, queue_soft_interrupt_for_session, remove_session_channel_subscriptions,
-    remove_session_from_swarm, swarm_id_for_dir, truncate_detail, update_member_status,
+    broadcast_swarm_status, fanout_session_event, queue_soft_interrupt_for_session,
+    remove_session_channel_subscriptions, remove_session_from_swarm,
+    session_event_fanout_sender, swarm_id_for_dir, truncate_detail, update_member_status,
 };
 use crate::agent::Agent;
 use crate::protocol::{FeatureToggle, NotificationType, ServerEvent};
@@ -87,15 +88,16 @@ async fn run_scheduled_task_in_live_session_if_idle(
         return false;
     };
 
-    let event_tx = {
+    let has_live_attachments = {
         let members = swarm_members.read().await;
         members
             .get(session_id)
-            .map(|member| member.event_tx.clone())
+            .map(|member| !member.event_txs.is_empty() || !member.event_tx.is_closed())
+            .unwrap_or(false)
     };
-    let Some(event_tx) = event_tx else {
+    if !has_live_attachments {
         return false;
-    };
+    }
 
     let is_idle = match agent.try_lock() {
         Ok(guard) => {
@@ -111,6 +113,7 @@ async fn run_scheduled_task_in_live_session_if_idle(
 
     let session_id = session_id.to_string();
     let message = message.to_string();
+    let event_tx = session_event_fanout_sender(session_id.clone(), Arc::clone(swarm_members));
     tokio::spawn(async move {
         if let Err(err) =
             process_message_streaming_mpsc(agent, &message, vec![], None, event_tx).await
@@ -153,10 +156,12 @@ pub(super) async fn handle_notify_session(
         false
     } else {
         let members = swarm_members.read().await;
-        if let Some(member) = members.get(&session_id) {
-            member
-                .event_tx
-                .send(ServerEvent::Notification {
+        if members.contains_key(&session_id) {
+            drop(members);
+            fanout_session_event(
+                swarm_members,
+                &session_id,
+                ServerEvent::Notification {
                     from_session: "schedule".to_string(),
                     from_name: Some("scheduled task".to_string()),
                     notification_type: NotificationType::Message {
@@ -164,8 +169,10 @@ pub(super) async fn handle_notify_session(
                         channel: None,
                     },
                     message: message.clone(),
-                })
-                .is_ok()
+                },
+            )
+            .await
+                > 0
         } else {
             false
         }
@@ -761,6 +768,7 @@ mod tests {
             crate::server::SwarmMember {
                 session_id: session_id.to_string(),
                 event_tx: member_event_tx,
+                event_txs: HashMap::new(),
                 working_dir: Some(PathBuf::from("/tmp/jcode-passive-swarm")),
                 swarm_id: None,
                 swarm_enabled: false,
@@ -874,6 +882,7 @@ mod tests {
             SwarmMember {
                 session_id: session_id.clone(),
                 event_tx: member_event_tx,
+                event_txs: HashMap::new(),
                 working_dir: None,
                 swarm_id: None,
                 swarm_enabled: false,
@@ -974,6 +983,7 @@ mod tests {
             SwarmMember {
                 session_id: session_id.clone(),
                 event_tx: member_event_tx,
+                event_txs: HashMap::new(),
                 working_dir: None,
                 swarm_id: None,
                 swarm_enabled: false,

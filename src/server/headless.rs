@@ -132,6 +132,7 @@ pub(super) async fn create_headless_session(
             SwarmMember {
                 session_id: client_session_id.clone(),
                 event_tx: event_tx.clone(),
+                event_txs: HashMap::new(),
                 working_dir: working_dir.clone(),
                 swarm_id: swarm_id.clone(),
                 swarm_enabled,

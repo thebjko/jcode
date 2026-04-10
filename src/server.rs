@@ -74,15 +74,16 @@ async fn run_background_task_message_in_live_session_if_idle(
         return false;
     };
 
-    let event_tx = {
+    let has_live_attachments = {
         let members = swarm_members.read().await;
         members
             .get(session_id)
-            .map(|member| member.event_tx.clone())
+            .map(|member| !member.event_txs.is_empty() || !member.event_tx.is_closed())
+            .unwrap_or(false)
     };
-    let Some(event_tx) = event_tx else {
+    if !has_live_attachments {
         return false;
-    };
+    }
 
     let is_idle = match agent.try_lock() {
         Ok(guard) => {
@@ -98,6 +99,7 @@ async fn run_background_task_message_in_live_session_if_idle(
 
     let session_id = session_id.to_string();
     let message = message.to_string();
+    let event_tx = session_event_fanout_sender(session_id.clone(), Arc::clone(swarm_members));
     tokio::spawn(async move {
         if let Err(err) = self::client_lifecycle::process_message_streaming_mpsc(
             agent,
@@ -129,15 +131,11 @@ async fn dispatch_background_task_completion(
 ) {
     let notification = format_background_task_notification_markdown(task);
 
-    if task.notify {
-        let event_tx = {
-            let members = swarm_members.read().await;
-            members
-                .get(&task.session_id)
-                .map(|member| member.event_tx.clone())
-        };
-        if let Some(event_tx) = event_tx {
-            let _ = event_tx.send(ServerEvent::Notification {
+    if task.notify
+        && fanout_session_event(
+            swarm_members,
+            &task.session_id,
+            ServerEvent::Notification {
                 from_session: "background_task".to_string(),
                 from_name: Some("background task".to_string()),
                 notification_type: NotificationType::Message {
@@ -145,8 +143,15 @@ async fn dispatch_background_task_completion(
                     channel: None,
                 },
                 message: notification.clone(),
-            });
-        }
+            },
+        )
+        .await
+            == 0
+    {
+        crate::logging::warn(&format!(
+            "Failed to notify attached clients for background task completion on session {}",
+            task.session_id
+        ));
     }
 
     if task.wake
@@ -181,9 +186,11 @@ pub use self::state::{
     FileAccess, SharedContext, SwarmEvent, SwarmEventType, SwarmMember, VersionedPlan,
 };
 use self::state::{
-    SessionInterruptQueues, enqueue_soft_interrupt, queue_soft_interrupt_for_session,
-    register_session_interrupt_queue, remove_session_interrupt_queue,
-    rename_session_interrupt_queue,
+    SessionInterruptQueues, enqueue_soft_interrupt, fanout_session_event,
+    queue_soft_interrupt_for_session, register_session_interrupt_queue,
+    register_session_event_sender, remove_session_interrupt_queue,
+    rename_session_interrupt_queue, session_event_fanout_sender,
+    unregister_session_event_sender,
 };
 
 pub use self::await_members_state::pending_await_members_for_session;
@@ -1095,6 +1102,7 @@ mod tests {
             SwarmMember {
                 session_id: session_id.clone(),
                 event_tx: member_event_tx,
+                event_txs: HashMap::new(),
                 working_dir: None,
                 swarm_id: None,
                 swarm_enabled: false,
@@ -1200,6 +1208,7 @@ mod tests {
             SwarmMember {
                 session_id: session_id.clone(),
                 event_tx: member_event_tx,
+                event_txs: HashMap::new(),
                 working_dir: None,
                 swarm_id: None,
                 swarm_enabled: false,
