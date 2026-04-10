@@ -30,13 +30,13 @@ use ratatui_image::{
     protocol::StatefulProtocol,
 };
 use serde::Serialize;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque, hash_map::Entry};
 use std::fs;
 use std::hash::{Hash as _, Hasher};
 use std::panic;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, LazyLock, Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock, mpsc};
 use std::time::Instant;
 
 /// Render Mermaid source images a bit denser than the immediate terminal-pixel
@@ -63,9 +63,18 @@ static CACHE_EVICTED: OnceLock<()> = OnceLock::new();
 static RENDER_CACHE: LazyLock<Mutex<MermaidCache>> =
     LazyLock::new(|| Mutex::new(MermaidCache::new()));
 
-/// Background mermaid renders currently in flight, keyed by (content hash, target width).
-static PENDING_RENDER_KEYS: LazyLock<Mutex<HashSet<(u64, u32)>>> =
-    LazyLock::new(|| Mutex::new(HashSet::new()));
+/// Monotonic epoch bumped when a deferred background render completes.
+/// UI markdown caches key off this so placeholder-only cached entries are
+/// naturally refreshed on the next redraw.
+static DEFERRED_RENDER_EPOCH: AtomicU64 = AtomicU64::new(1);
+
+/// Background mermaid renders currently queued or in flight, keyed by
+/// (content hash, target width).
+static PENDING_RENDER_REQUESTS: LazyLock<Mutex<HashMap<(u64, u32), PendingDeferredRender>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Sender for the shared deferred Mermaid render worker.
+static DEFERRED_RENDER_TX: OnceLock<mpsc::Sender<DeferredRenderTask>> = OnceLock::new();
 
 /// Serialize the actual Mermaid parse/layout/png pipeline.
 ///
@@ -374,6 +383,11 @@ pub struct MermaidDebugStats {
     pub total_requests: u64,
     pub cache_hits: u64,
     pub cache_misses: u64,
+    pub deferred_enqueued: u64,
+    pub deferred_deduped: u64,
+    pub deferred_worker_renders: u64,
+    pub deferred_worker_skips: u64,
+    pub deferred_epoch_bumps: u64,
     pub render_success: u64,
     pub render_errors: u64,
     pub last_render_ms: Option<f32>,
@@ -396,6 +410,8 @@ pub struct MermaidDebugStats {
     pub protocol: Option<String>,
     pub last_png_width: Option<u32>,
     pub last_png_height: Option<u32>,
+    pub deferred_pending: usize,
+    pub deferred_epoch: u64,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -405,6 +421,18 @@ struct MermaidDebugState {
 
 static MERMAID_DEBUG: LazyLock<Mutex<MermaidDebugState>> =
     LazyLock::new(|| Mutex::new(MermaidDebugState::default()));
+
+#[derive(Debug, Clone, Copy, Default)]
+struct PendingDeferredRender {
+    register_active: bool,
+}
+
+#[derive(Debug, Clone)]
+struct DeferredRenderTask {
+    content: String,
+    terminal_width: Option<u16>,
+    render_key: (u64, u32),
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct MermaidCacheEntry {
@@ -570,6 +598,10 @@ pub fn debug_stats() -> MermaidDebugStats {
         out.cache_entries = cache.entries.len();
         out.cache_dir = Some(cache.cache_dir.to_string_lossy().to_string());
     }
+    if let Ok(pending) = PENDING_RENDER_REQUESTS.lock() {
+        out.deferred_pending = pending.len();
+    }
+    out.deferred_epoch = deferred_render_epoch();
     out.protocol = protocol_type().map(|p| format!("{:?}", p));
     out
 }
@@ -1052,12 +1084,13 @@ pub fn clear_cache() -> Result<(), String> {
     if let Ok(mut diagrams) = ACTIVE_DIAGRAMS.lock() {
         diagrams.clear();
     }
-    if let Ok(mut pending) = PENDING_RENDER_KEYS.lock() {
+    if let Ok(mut pending) = PENDING_RENDER_REQUESTS.lock() {
         pending.clear();
     }
     if let Ok(mut errors) = RENDER_ERRORS.lock() {
         errors.clear();
     }
+    bump_deferred_render_epoch();
     clear_streaming_preview_diagram();
 
     // Remove cached files on disk
@@ -2052,12 +2085,74 @@ pub fn render_mermaid_untracked(content: &str, terminal_width: Option<u16>) -> R
     render_mermaid_sized_internal(content, terminal_width, false)
 }
 
+fn bump_deferred_render_epoch() {
+    DEFERRED_RENDER_EPOCH.fetch_add(1, Ordering::Relaxed);
+    if let Ok(mut state) = MERMAID_DEBUG.lock() {
+        state.stats.deferred_epoch_bumps += 1;
+    }
+}
+
+pub fn deferred_render_epoch() -> u64 {
+    DEFERRED_RENDER_EPOCH.load(Ordering::Relaxed)
+}
+
+fn deferred_render_sender() -> &'static mpsc::Sender<DeferredRenderTask> {
+    DEFERRED_RENDER_TX.get_or_init(|| {
+        let (tx, rx) = mpsc::channel::<DeferredRenderTask>();
+        std::thread::Builder::new()
+            .name("jcode-mermaid-deferred".to_string())
+            .spawn(move || deferred_render_worker(rx))
+            .expect("spawn mermaid deferred worker");
+        tx
+    })
+}
+
+fn deferred_render_worker(rx: mpsc::Receiver<DeferredRenderTask>) {
+    for task in rx {
+        let register_active = match PENDING_RENDER_REQUESTS.lock() {
+            Ok(pending) => pending
+                .get(&task.render_key)
+                .map(|request| request.register_active),
+            Err(poisoned) => poisoned
+                .into_inner()
+                .get(&task.render_key)
+                .map(|request| request.register_active),
+        };
+
+        let Some(register_active) = register_active else {
+            if let Ok(mut state) = MERMAID_DEBUG.lock() {
+                state.stats.deferred_worker_skips += 1;
+            }
+            continue;
+        };
+
+        if let Ok(mut state) = MERMAID_DEBUG.lock() {
+            state.stats.deferred_worker_renders += 1;
+        }
+
+        let _ = render_mermaid_sized_internal(&task.content, task.terminal_width, register_active);
+
+        if let Ok(mut pending) = PENDING_RENDER_REQUESTS.lock() {
+            pending.remove(&task.render_key);
+        }
+        bump_deferred_render_epoch();
+    }
+}
+
 /// Streaming-friendly Mermaid rendering.
 ///
 /// If the diagram is already cached, returns it immediately. Otherwise this
 /// queues the heavy render work onto a background thread and returns `None`
 /// so the caller can keep the UI responsive with a lightweight placeholder.
 pub fn render_mermaid_deferred(content: &str, terminal_width: Option<u16>) -> Option<RenderResult> {
+    render_mermaid_deferred_with_registration(content, terminal_width, false)
+}
+
+pub fn render_mermaid_deferred_with_registration(
+    content: &str,
+    terminal_width: Option<u16>,
+    register_active: bool,
+) -> Option<RenderResult> {
     let hash = hash_content(content);
     let (node_count, edge_count) = estimate_diagram_size(content);
 
@@ -2072,6 +2167,9 @@ pub fn render_mermaid_deferred(content: &str, terminal_width: Option<u16>) -> Op
     let target_width_u32 = target_width as u32;
 
     if let Some(cached) = get_cached_diagram(hash, Some(target_width_u32)) {
+        if register_active {
+            register_active_diagram(hash, cached.width, cached.height, None);
+        }
         return Some(RenderResult::Image {
             hash,
             path: cached.path,
@@ -2089,19 +2187,50 @@ pub fn render_mermaid_deferred(content: &str, terminal_width: Option<u16>) -> Op
     }
 
     let render_key = (hash, target_width_u32);
-    let should_spawn = match PENDING_RENDER_KEYS.lock() {
-        Ok(mut pending) => pending.insert(render_key),
-        Err(_) => return Some(render_mermaid_untracked(content, terminal_width)),
+    let should_enqueue = match PENDING_RENDER_REQUESTS.lock() {
+        Ok(mut pending) => match pending.entry(render_key) {
+            Entry::Occupied(mut occupied) => {
+                if register_active {
+                    occupied.get_mut().register_active = true;
+                }
+                if let Ok(mut state) = MERMAID_DEBUG.lock() {
+                    state.stats.deferred_deduped += 1;
+                }
+                false
+            }
+            Entry::Vacant(vacant) => {
+                vacant.insert(PendingDeferredRender { register_active });
+                if let Ok(mut state) = MERMAID_DEBUG.lock() {
+                    state.stats.deferred_enqueued += 1;
+                }
+                true
+            }
+        },
+        Err(_) => {
+            return Some(render_mermaid_sized_internal(
+                content,
+                terminal_width,
+                register_active,
+            ));
+        }
     };
 
-    if should_spawn {
-        let owned = content.to_string();
-        std::thread::spawn(move || {
-            let _ = render_mermaid_sized_internal(&owned, terminal_width, false);
-            if let Ok(mut pending) = PENDING_RENDER_KEYS.lock() {
+    if should_enqueue {
+        let task = DeferredRenderTask {
+            content: content.to_string(),
+            terminal_width,
+            render_key,
+        };
+        if deferred_render_sender().send(task).is_err() {
+            if let Ok(mut pending) = PENDING_RENDER_REQUESTS.lock() {
                 pending.remove(&render_key);
             }
-        });
+            return Some(render_mermaid_sized_internal(
+                content,
+                terminal_width,
+                register_active,
+            ));
+        }
     }
 
     None

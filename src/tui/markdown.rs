@@ -77,6 +77,9 @@ thread_local! {
     static CENTER_CODE_BLOCKS: Cell<bool> = const { Cell::new(true) };
     /// Optional test/debug override for markdown spacing mode.
     static MARKDOWN_SPACING_MODE_OVERRIDE: Cell<Option<MarkdownSpacingMode>> = const { Cell::new(None) };
+    /// Whether Mermaid cache misses should be rendered in the background and
+    /// replaced on a later redraw instead of blocking the current frame.
+    static DEFER_MERMAID_RENDER_CONTEXT: Cell<bool> = const { Cell::new(false) };
 }
 
 pub fn set_diagram_mode_override(mode: Option<DiagramDisplayMode>) {
@@ -142,6 +145,27 @@ fn with_streaming_render_context<T>(f: impl FnOnce() -> T) -> T {
 
 fn streaming_render_context_enabled() -> bool {
     STREAMING_RENDER_CONTEXT.with(|ctx| ctx.get())
+}
+
+pub fn with_deferred_mermaid_render_context<T>(f: impl FnOnce() -> T) -> T {
+    DEFER_MERMAID_RENDER_CONTEXT.with(|ctx| {
+        let prev = ctx.replace(true);
+        struct ResetGuard<'a> {
+            cell: &'a Cell<bool>,
+            prev: bool,
+        }
+        impl Drop for ResetGuard<'_> {
+            fn drop(&mut self) {
+                self.cell.set(self.prev);
+            }
+        }
+        let _guard = ResetGuard { cell: ctx, prev };
+        f()
+    })
+}
+
+fn deferred_mermaid_render_context_enabled() -> bool {
+    DEFER_MERMAID_RENDER_CONTEXT.with(|ctx| ctx.get())
 }
 
 pub fn set_center_code_blocks(centered: bool) {
@@ -1419,6 +1443,7 @@ pub fn render_markdown_with_width(text: &str, max_width: Option<usize>) -> Vec<L
     let mut current_spans: Vec<Span<'static>> = Vec::new();
     let side_only = diagram_side_only();
     let streaming_mode = streaming_render_context_enabled();
+    let deferred_mermaid_mode = deferred_mermaid_render_context_enabled();
     let spacing_mode = effective_markdown_spacing_mode();
 
     // Style stack for nested formatting
@@ -1799,8 +1824,12 @@ pub fn render_markdown_with_width(text: &str, max_width: Option<usize>) -> Vec<L
                         ));
                         continue;
                     }
-                    let result = if streaming_mode {
-                        mermaid::render_mermaid_deferred(&code_block_content, terminal_width)
+                    let result = if streaming_mode || deferred_mermaid_mode {
+                        mermaid::render_mermaid_deferred_with_registration(
+                            &code_block_content,
+                            terminal_width,
+                            !streaming_mode && mermaid_should_register_active(),
+                        )
                     } else if !mermaid_should_register_active() {
                         Some(mermaid::render_mermaid_untracked(
                             &code_block_content,
@@ -1840,9 +1869,11 @@ pub fn render_markdown_with_width(text: &str, max_width: Option<usize>) -> Vec<L
                             }
                         }
                         None => {
-                            lines.push(mermaid_sidebar_placeholder(
-                                "↻ rendering mermaid diagram...",
-                            ));
+                            lines.push(mermaid_sidebar_placeholder(if side_only {
+                                "↻ mermaid diagram rendering in sidebar..."
+                            } else {
+                                "↻ rendering mermaid diagram..."
+                            }));
                         }
                     }
                 } else {

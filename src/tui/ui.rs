@@ -2250,7 +2250,9 @@ fn record_profile(prepare: Duration, draw: Duration, total: Duration) {
 }
 
 pub fn draw(frame: &mut Frame, app: &dyn TuiState) {
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| draw_inner(frame, app))) {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        crate::tui::markdown::with_deferred_mermaid_render_context(|| draw_inner(frame, app))
+    })) {
         Ok(()) => {}
         Err(payload) => {
             let panic_count = DRAW_PANIC_COUNT.fetch_add(1, Ordering::Relaxed) + 1;

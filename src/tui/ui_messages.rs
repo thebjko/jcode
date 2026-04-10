@@ -12,6 +12,7 @@ struct MessageCacheKey {
     content_len: usize,
     diagram_mode: crate::config::DiagramDisplayMode,
     centered: bool,
+    mermaid_epoch: u64,
 }
 
 #[derive(Default)]
@@ -94,6 +95,7 @@ where
         content_len: msg.content.len(),
         diagram_mode: crate::config::config().display.diagram_mode,
         centered: markdown::center_code_blocks(),
+        mermaid_epoch: crate::tui::mermaid::deferred_render_epoch(),
     };
 
     let mut cache = match message_cache().lock() {

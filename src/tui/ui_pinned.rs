@@ -264,6 +264,7 @@ struct SidePanelMarkdownKey {
     inner_width: u16,
     has_protocol: bool,
     centered: bool,
+    mermaid_epoch: u64,
 }
 
 #[derive(Default)]
@@ -280,6 +281,7 @@ struct SidePanelRenderKey {
     inner_height: u16,
     has_protocol: bool,
     centered: bool,
+    mermaid_epoch: u64,
 }
 
 #[derive(Default)]
@@ -1446,6 +1448,7 @@ fn render_side_panel_markdown_cached(
         inner_height: inner.height,
         has_protocol,
         centered,
+        mermaid_epoch: crate::tui::mermaid::deferred_render_epoch(),
     };
 
     if let Some(rendered) = with_side_panel_render_cache_mut(|cache| {
@@ -1569,6 +1572,7 @@ fn render_side_panel_markdown_lines_cached(
         inner_width,
         has_protocol,
         centered,
+        mermaid_epoch: crate::tui::mermaid::deferred_render_epoch(),
     };
 
     if let Some(rendered) = with_side_panel_markdown_cache_mut(|cache| {
