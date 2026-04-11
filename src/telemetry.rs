@@ -657,12 +657,43 @@ fn telemetry_state_path(name: &str) -> Option<PathBuf> {
     storage::jcode_dir().ok().map(|d| d.join(name))
 }
 
-fn milestone_recorded_path(id: &str, step: &str) -> Option<PathBuf> {
+fn milestone_recorded_path(id: &str, key: &str) -> Option<PathBuf> {
     telemetry_state_path(&format!(
         "telemetry_milestone_{}_{}",
-        sanitize_telemetry_label(step),
+        sanitize_telemetry_label(key),
         id
     ))
+}
+
+fn onboarding_step_milestone_key(
+    step: &str,
+    auth_provider: Option<&str>,
+    auth_method: Option<&str>,
+) -> String {
+    fn normalize_part(value: &str) -> String {
+        let sanitized = sanitize_telemetry_label(value);
+        let collapsed = sanitized
+            .split_whitespace()
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join("_");
+        collapsed.to_ascii_lowercase()
+    }
+
+    let mut parts = vec![normalize_part(step)];
+    if let Some(provider) = auth_provider {
+        let provider = normalize_part(provider);
+        if !provider.is_empty() {
+            parts.push(provider);
+        }
+    }
+    if let Some(method) = auth_method {
+        let method = normalize_part(method);
+        if !method.is_empty() {
+            parts.push(method);
+        }
+    }
+    parts.join("_")
 }
 
 fn active_days_path(id: &str) -> Option<PathBuf> {
@@ -958,6 +989,51 @@ fn telemetry_envelope() -> (u32, String, bool, bool, bool) {
     )
 }
 
+fn emit_onboarding_step(
+    step: &'static str,
+    auth_provider: Option<&str>,
+    auth_method: Option<&str>,
+) {
+    if !is_enabled() {
+        return;
+    }
+    let Some(id) = get_or_create_id() else {
+        return;
+    };
+    let _ = send_onboarding_step_for_id(&id, step, auth_provider, auth_method);
+}
+
+fn send_onboarding_step_for_id(
+    id: &str,
+    step: &'static str,
+    auth_provider: Option<&str>,
+    auth_method: Option<&str>,
+) -> bool {
+    let (schema_version, build_channel, git_checkout, ci, from_cargo) = telemetry_envelope();
+    let event = OnboardingStepEvent {
+        event_id: new_event_id(),
+        id: id.to_string(),
+        session_id: current_session_id(),
+        event: "onboarding_step",
+        version: version(),
+        os: std::env::consts::OS,
+        arch: std::env::consts::ARCH,
+        step,
+        auth_provider: auth_provider.map(sanitize_telemetry_label),
+        auth_method: auth_method.map(sanitize_telemetry_label),
+        milestone_elapsed_ms: elapsed_since_install_ms(id),
+        schema_version,
+        build_channel,
+        is_git_checkout: git_checkout,
+        is_ci: ci,
+        ran_from_cargo: from_cargo,
+    };
+    if let Ok(payload) = serde_json::to_value(&event) {
+        return send_payload(payload, DeliveryMode::Background);
+    }
+    false
+}
+
 fn emit_onboarding_step_once(
     step: &'static str,
     auth_provider: Option<&str>,
@@ -969,33 +1045,17 @@ fn emit_onboarding_step_once(
     let Some(id) = get_or_create_id() else {
         return;
     };
-    if milestone_recorded(&id, step) {
+    let milestone_key = onboarding_step_milestone_key(step, auth_provider, auth_method);
+    if milestone_recorded(&id, &milestone_key) {
         return;
     }
-    let (schema_version, build_channel, git_checkout, ci, from_cargo) = telemetry_envelope();
-    let event = OnboardingStepEvent {
-        event_id: new_event_id(),
-        id: id.clone(),
-        session_id: current_session_id(),
-        event: "onboarding_step",
-        version: version(),
-        os: std::env::consts::OS,
-        arch: std::env::consts::ARCH,
-        step,
-        auth_provider: auth_provider.map(sanitize_telemetry_label),
-        auth_method: auth_method.map(sanitize_telemetry_label),
-        milestone_elapsed_ms: elapsed_since_install_ms(&id),
-        schema_version,
-        build_channel,
-        is_git_checkout: git_checkout,
-        is_ci: ci,
-        ran_from_cargo: from_cargo,
-    };
-    if let Ok(payload) = serde_json::to_value(&event)
-        && send_payload(payload, DeliveryMode::Background)
-    {
-        mark_milestone_recorded(&id, step);
+    if send_onboarding_step_for_id(&id, step, auth_provider, auth_method) {
+        mark_milestone_recorded(&id, &milestone_key);
     }
+}
+
+pub fn record_setup_step_once(step: &'static str) {
+    emit_onboarding_step_once(step, None, None);
 }
 
 pub fn record_feedback(rating: &str, reason: Option<&str>) {
@@ -1437,7 +1497,17 @@ fn send_payload(payload: serde_json::Value, mode: DeliveryMode) -> bool {
             });
             true
         }
-        DeliveryMode::Blocking(timeout) => post_payload(payload, timeout),
+        DeliveryMode::Blocking(timeout) => {
+            if tokio::runtime::Handle::try_current().is_ok() {
+                let (tx, rx) = std::sync::mpsc::sync_channel(1);
+                std::thread::spawn(move || {
+                    let _ = tx.send(post_payload(payload, timeout));
+                });
+                rx.recv_timeout(timeout).unwrap_or(false)
+            } else {
+                post_payload(payload, timeout)
+            }
+        }
     }
 }
 
@@ -1804,7 +1874,19 @@ pub fn record_provider_selected(provider: &str) {
 }
 
 pub fn record_auth_started(provider: &str, method: &str) {
-    emit_onboarding_step_once("auth_started", Some(provider), Some(method));
+    emit_onboarding_step("auth_started", Some(provider), Some(method));
+}
+
+pub fn record_auth_failed(provider: &str, method: &str) {
+    emit_onboarding_step("auth_failed", Some(provider), Some(method));
+}
+
+pub fn record_auth_cancelled(provider: &str, method: &str) {
+    emit_onboarding_step("auth_cancelled", Some(provider), Some(method));
+}
+
+pub fn record_auth_surface_blocked(provider: &str, method: &str) {
+    emit_onboarding_step("auth_surface_blocked", Some(provider), Some(method));
 }
 
 pub fn record_auth_success(provider: &str, method: &str) {
@@ -2721,6 +2803,18 @@ mod tests {
         assert_eq!(
             sanitize_telemetry_label("\u{1b}[1mclaude-opus-4-6\u{1b}[0m\n"),
             "claude-opus-4-6"
+        );
+    }
+
+    #[test]
+    fn test_onboarding_step_milestone_key_includes_provider_and_method() {
+        assert_eq!(
+            onboarding_step_milestone_key("auth_success", Some("jcode"), Some("API key")),
+            "auth_success_jcode_api_key"
+        );
+        assert_eq!(
+            onboarding_step_milestone_key("login_picker_opened", None, None),
+            "login_picker_opened"
         );
     }
 
