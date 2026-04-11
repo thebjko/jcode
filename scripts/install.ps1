@@ -11,9 +11,24 @@
       & ([scriptblock]::Create((irm https://raw.githubusercontent.com/1jehuang/jcode/master/scripts/install.ps1)))
 .PARAMETER InstallDir
     Override the installation directory (default: $env:LOCALAPPDATA\jcode\bin)
+.PARAMETER Version
+    Override the version tag to install. Required when using a local artifact path.
+.PARAMETER ArtifactExePath
+    Use a local jcode.exe artifact instead of downloading from GitHub.
+.PARAMETER ArtifactTgzPath
+    Use a local jcode .tar.gz artifact instead of downloading from GitHub.
+.PARAMETER SkipAlacrittySetup
+    Skip Alacritty install/setup helpers.
+.PARAMETER SkipHotkeySetup
+    Skip Alt+; hotkey setup helpers.
 #>
 param(
-    [string]$InstallDir
+    [string]$InstallDir,
+    [string]$Version,
+    [string]$ArtifactExePath,
+    [string]$ArtifactTgzPath,
+    [switch]$SkipAlacrittySetup,
+    [switch]$SkipHotkeySetup
 )
 
 $ErrorActionPreference = 'Stop'
@@ -43,6 +58,18 @@ $SetupHintsPath = Join-Path $JcodeHome "setup_hints.json"
 function Write-Info($msg) { Write-Host $msg -ForegroundColor Blue }
 function Write-Err($msg) { Write-Host "error: $msg" -ForegroundColor Red; exit 1 }
 function Write-Warn($msg) { Write-Host "warning: $msg" -ForegroundColor Yellow }
+
+function Resolve-OptionalPath([string]$PathValue) {
+    if (-not $PathValue) {
+        return $null
+    }
+
+    try {
+        return (Resolve-Path -LiteralPath $PathValue -ErrorAction Stop).Path
+    } catch {
+        Write-Err "Provided path does not exist: $PathValue"
+    }
+}
 
 function Stop-ProcessTree([int]$ProcessId) {
     try {
@@ -350,12 +377,25 @@ switch ($Arch) {
     default { Write-Err "Unsupported architecture: $Arch (supported: x86_64, ARM64)" }
 }
 
-Write-Info "Fetching latest release..."
-try {
-    $Release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest"
-    $Version = $Release.tag_name
-} catch {
-    Write-Err "Failed to determine latest version: $_"
+$ResolvedArtifactExePath = Resolve-OptionalPath $ArtifactExePath
+$ResolvedArtifactTgzPath = Resolve-OptionalPath $ArtifactTgzPath
+
+if ($ResolvedArtifactExePath -and $ResolvedArtifactTgzPath) {
+    Write-Err "Provide only one of -ArtifactExePath or -ArtifactTgzPath"
+}
+
+if (-not $Version) {
+    if ($ResolvedArtifactExePath -or $ResolvedArtifactTgzPath) {
+        Write-Err "-Version is required when using a local artifact path"
+    }
+
+    Write-Info "Fetching latest release..."
+    try {
+        $Release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest"
+        $Version = $Release.tag_name
+    } catch {
+        Write-Err "Failed to determine latest version: $_"
+    }
 }
 
 if (-not $Version) { Write-Err "Failed to determine latest version" }
@@ -395,17 +435,27 @@ New-Item -ItemType Directory -Path $TempDir -Force | Out-Null
 $DownloadMode = ""
 $DownloadPath = Join-Path $TempDir "jcode.download"
 
-try {
-    Write-Info "Downloading $Artifact.exe..."
-    Invoke-WebRequest -Uri $ExeUrl -OutFile $DownloadPath
+if ($ResolvedArtifactExePath) {
+    Write-Info "Using local artifact exe: $ResolvedArtifactExePath"
+    Copy-Item -Path $ResolvedArtifactExePath -Destination $DownloadPath -Force
     $DownloadMode = "bin"
-} catch {
+} elseif ($ResolvedArtifactTgzPath) {
+    Write-Info "Using local artifact archive: $ResolvedArtifactTgzPath"
+    Copy-Item -Path $ResolvedArtifactTgzPath -Destination $DownloadPath -Force
+    $DownloadMode = "tar"
+} else {
     try {
-        Write-Info "Trying archive download..."
-        Invoke-WebRequest -Uri $TgzUrl -OutFile $DownloadPath
-        $DownloadMode = "tar"
+        Write-Info "Downloading $Artifact.exe..."
+        Invoke-WebRequest -Uri $ExeUrl -OutFile $DownloadPath
+        $DownloadMode = "bin"
     } catch {
-        $DownloadMode = ""
+        try {
+            Write-Info "Trying archive download..."
+            Invoke-WebRequest -Uri $TgzUrl -OutFile $DownloadPath
+            $DownloadMode = "tar"
+        } catch {
+            $DownloadMode = ""
+        }
     }
 }
 
@@ -478,9 +528,19 @@ if ($UserPath -notlike "*$InstallDir*") {
 
 $env:Path = "$InstallDir;$env:Path"
 
-$installedAlacritty = Install-Alacritty
+$installedAlacritty = $false
 $configuredHotkey = $false
-if ($installedAlacritty) {
+
+if ($SkipAlacrittySetup) {
+    Write-Info "Skipping Alacritty setup"
+    $installedAlacritty = Test-AlacrittyInstalled
+} else {
+    $installedAlacritty = Install-Alacritty
+}
+
+if ($SkipHotkeySetup) {
+    Write-Info "Skipping Alt+; hotkey setup"
+} elseif ($installedAlacritty) {
     $configuredHotkey = Install-JcodeHotkey -JcodeExePath $LauncherPath
 }
 

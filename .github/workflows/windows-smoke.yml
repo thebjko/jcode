@@ -1,0 +1,157 @@
+name: Windows Smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Windows target to verify
+        required: true
+        default: x64
+        type: choice
+        options:
+          - x64
+          - arm64
+          - both
+
+concurrency:
+  group: windows-smoke-${{ github.ref }}-${{ github.event.inputs.target || 'x64' }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  SCCACHE_GHA_ENABLED: "true"
+
+jobs:
+  smoke-x64:
+    name: Windows Smoke (x64)
+    if: github.event.inputs.target == 'x64' || github.event.inputs.target == 'both'
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: amd64
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - uses: mozilla-actions/sccache-action@v0.0.7
+        continue-on-error: true
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-smoke-x64
+          cache-all-crates: "true"
+
+      - name: Build release binary
+        shell: pwsh
+        run: |
+          if (Get-Command sccache -ErrorAction SilentlyContinue) {
+            sccache --start-server *> $null
+            if ($LASTEXITCODE -eq 0) {
+              $env:RUSTC_WRAPPER = 'sccache'
+            }
+          }
+
+          & cargo build --release --target x86_64-pc-windows-msvc
+
+      - name: Run Windows smoke tests
+        shell: pwsh
+        run: |
+          $tests = @(
+            'binary_integration::binary_version_command',
+            'provider_behavior::test_socket_model_cycle_supported_models',
+            'provider_behavior::test_model_switch_resets_provider_session'
+          )
+
+          foreach ($testName in $tests) {
+            & cargo test --locked --target x86_64-pc-windows-msvc --test e2e $testName -- --exact --nocapture
+            if ($LASTEXITCODE -ne 0) {
+              throw "Windows smoke test failed: $testName"
+            }
+          }
+
+      - name: Verify built binary launches
+        shell: pwsh
+        run: |
+          & "target/x86_64-pc-windows-msvc/release/jcode.exe" --version
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Built Windows binary failed to run --version'
+          }
+
+      - name: Verify installer using local artifact
+        shell: pwsh
+        run: |
+          $cargoVersion = Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1
+          if (-not $cargoVersion) {
+            throw 'Could not determine Cargo.toml version'
+          }
+
+          $version = 'v' + $cargoVersion.Matches[0].Groups[1].Value
+          & ./.github/scripts/verify_windows_install.ps1 `
+            -ArtifactExePath 'target/x86_64-pc-windows-msvc/release/jcode.exe' `
+            -Version $version
+
+  smoke-arm64:
+    name: Windows Smoke (ARM64)
+    if: github.event.inputs.target == 'arm64' || github.event.inputs.target == 'both'
+    runs-on: windows-11-arm
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: amd64_arm64
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-pc-windows-msvc
+
+      - uses: mozilla-actions/sccache-action@v0.0.7
+        continue-on-error: true
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-smoke-arm64
+          cache-all-crates: "true"
+
+      - name: Build release binary
+        shell: pwsh
+        run: |
+          if (Get-Command sccache -ErrorAction SilentlyContinue) {
+            sccache --start-server *> $null
+            if ($LASTEXITCODE -eq 0) {
+              $env:RUSTC_WRAPPER = 'sccache'
+            }
+          }
+
+          & cargo build --release --target aarch64-pc-windows-msvc --no-default-features --features pdf
+
+      - name: Verify built binary launches
+        shell: pwsh
+        run: |
+          & "target/aarch64-pc-windows-msvc/release/jcode.exe" --version
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Built Windows ARM64 binary failed to run --version'
+          }
+
+      - name: Verify installer using local artifact
+        shell: pwsh
+        run: |
+          $cargoVersion = Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1
+          if (-not $cargoVersion) {
+            throw 'Could not determine Cargo.toml version'
+          }
+
+          $version = 'v' + $cargoVersion.Matches[0].Groups[1].Value
+          & ./.github/scripts/verify_windows_install.ps1 `
+            -ArtifactExePath 'target/aarch64-pc-windows-msvc/release/jcode.exe' `
+            -Version $version
