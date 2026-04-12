@@ -812,4 +812,84 @@ mod tests {
         let rendered = format_content_result(&json!({"content": "hello", "title": "x"}));
         assert_eq!(rendered, "hello");
     }
+
+    #[test]
+    fn snapshot_maps_to_annotated_get_content() {
+        let input = BrowserInput {
+            action: "snapshot".into(),
+            browser: None,
+            provider_action: None,
+            params: None,
+            url: None,
+            tab_id: Some(7),
+            frame_id: Some(3),
+            all_frames: Some(true),
+            selector: None,
+            text: None,
+            contains: None,
+            script: None,
+            key: None,
+            x: None,
+            y: None,
+            format: None,
+            wait: None,
+            new_tab: None,
+            focus: None,
+            clear: None,
+            submit: None,
+            page_world: None,
+            position: None,
+            behavior: None,
+            timeout_ms: None,
+            path: None,
+            fields: None,
+            scroll_to: None,
+        };
+
+        let (action, params, _) = bridge_request("snapshot", &input).unwrap();
+        assert_eq!(action, "getContent");
+        assert_eq!(params["format"], "annotated");
+        assert_eq!(params["tabId"], 7);
+        assert_eq!(params["frameId"], 3);
+        assert_eq!(params["allFrames"], true);
+    }
+
+    #[test]
+    fn eval_maps_script_and_page_world() {
+        let input = BrowserInput {
+            action: "eval".into(),
+            browser: None,
+            provider_action: None,
+            params: None,
+            url: None,
+            tab_id: None,
+            frame_id: None,
+            all_frames: None,
+            selector: None,
+            text: None,
+            contains: None,
+            script: Some("return document.title".into()),
+            key: None,
+            x: None,
+            y: None,
+            format: None,
+            wait: None,
+            new_tab: None,
+            focus: None,
+            clear: None,
+            submit: None,
+            page_world: Some(true),
+            position: None,
+            behavior: None,
+            timeout_ms: None,
+            path: None,
+            fields: None,
+            scroll_to: None,
+        };
+
+        let (action, params, _) = bridge_request("eval", &input).unwrap();
+        assert_eq!(action, "evaluate");
+        assert_eq!(params["script"], "return document.title");
+        assert_eq!(params["pageWorld"], true);
+    }
 }
