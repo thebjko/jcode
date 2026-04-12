@@ -418,14 +418,11 @@ impl CompactionManager {
     /// embedding model is unavailable.
     pub fn push_embedding_snapshot(&mut self, text: &str) {
         let snippet: String = text.chars().take(EMBED_MAX_CHARS_PER_MSG).collect();
-        match self.cached_semantic_embedding(&snippet) {
-            Some(emb) => {
-                self.embedding_history.push_back(emb);
-                if self.embedding_history.len() > EMBEDDING_HISTORY_WINDOW {
-                    self.embedding_history.pop_front();
-                }
+        if let Some(emb) = self.cached_semantic_embedding(&snippet) {
+            self.embedding_history.push_back(emb);
+            if self.embedding_history.len() > EMBEDDING_HISTORY_WINDOW {
+                self.embedding_history.pop_front();
             }
-            None => {}
         }
     }
 

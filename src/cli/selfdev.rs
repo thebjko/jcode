@@ -137,13 +137,13 @@ pub async fn run_self_dev(should_build: bool, resume_session: Option<String>) ->
         }
     }
 
-    if server_running {
-        if let Ok(Some(version)) = build::complete_pending_activation_for_session(&session_id) {
-            logging::info(&format!(
-                "Marked pending self-dev activation as successful for build {}",
-                version
-            ));
-        }
+    if server_running
+        && let Ok(Some(version)) = build::complete_pending_activation_for_session(&session_id)
+    {
+        logging::info(&format!(
+            "Marked pending self-dev activation as successful for build {}",
+            version
+        ));
     }
 
     if !server_running {

@@ -406,7 +406,7 @@ async fn handle_ws_connection(
         loop {
             interval.tick().await;
             let mut sink = sink_for_keepalive.lock().await;
-            if sink.send(Message::Ping(Vec::new().into())).await.is_err() {
+            if sink.send(Message::Ping(Vec::new())).await.is_err() {
                 logging::info(&format!(
                     "Gateway: stopping keepalive for {} after ping send failure",
                     keepalive_device_name
@@ -427,7 +427,7 @@ async fn handle_ws_connection(
                     let trimmed = line.trim_end().to_string();
                     if !trimmed.is_empty() {
                         let mut sink = sink_for_unix.lock().await;
-                        if sink.send(Message::Text(trimmed.into())).await.is_err() {
+                        if sink.send(Message::Text(trimmed)).await.is_err() {
                             break;
                         }
                     }
@@ -468,6 +468,10 @@ enum WsAuthSource {
     Query,
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Tungstenite handshake APIs require returning ErrorResponse directly"
+)]
 fn extract_ws_auth(
     request: &tokio_tungstenite::tungstenite::handshake::server::Request,
 ) -> std::result::Result<WsAuth, tokio_tungstenite::tungstenite::handshake::server::ErrorResponse> {
@@ -538,10 +542,10 @@ fn parse_bearer_token(header_value: &str) -> Option<&str> {
 
 fn parse_query_token(query: &str) -> Option<&str> {
     for param in query.split('&') {
-        if let Some(token) = param.strip_prefix("token=") {
-            if !token.is_empty() {
-                return Some(token);
-            }
+        if let Some(token) = param.strip_prefix("token=")
+            && !token.is_empty()
+        {
+            return Some(token);
         }
     }
     None

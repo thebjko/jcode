@@ -513,13 +513,6 @@ pub struct MermaidMemoryBenchmark {
     pub peak_working_set_estimate_bytes: u64,
 }
 
-#[derive(Debug, Clone, Default)]
-struct ProcessMemorySnapshot {
-    rss_bytes: Option<u64>,
-    peak_rss_bytes: Option<u64>,
-    virtual_bytes: Option<u64>,
-}
-
 #[derive(Debug, Clone, Serialize)]
 pub struct MermaidTimingSummary {
     pub avg_ms: f64,
@@ -931,33 +924,18 @@ fn diff_opt_u64(after: Option<u64>, before: Option<u64>) -> Option<i64> {
     }
 }
 
+#[cfg(test)]
 fn parse_proc_status_kib_line(line: &str, key: &str) -> Option<u64> {
     let rest = line.strip_prefix(key)?.trim();
     let value_kib = rest.split_whitespace().next()?.parse::<u64>().ok()?;
     Some(value_kib.saturating_mul(1024))
 }
 
+#[cfg(test)]
 fn parse_proc_status_value_bytes(status: &str, key: &str) -> Option<u64> {
     status
         .lines()
         .find_map(|line| parse_proc_status_kib_line(line, key))
-}
-
-#[cfg(target_os = "linux")]
-fn process_memory_snapshot() -> ProcessMemorySnapshot {
-    let Ok(status) = fs::read_to_string("/proc/self/status") else {
-        return ProcessMemorySnapshot::default();
-    };
-    ProcessMemorySnapshot {
-        rss_bytes: parse_proc_status_value_bytes(&status, "VmRSS:"),
-        peak_rss_bytes: parse_proc_status_value_bytes(&status, "VmHWM:"),
-        virtual_bytes: parse_proc_status_value_bytes(&status, "VmSize:"),
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-fn process_memory_snapshot() -> ProcessMemorySnapshot {
-    ProcessMemorySnapshot::default()
 }
 
 /// Register a diagram as active (call during markdown rendering)

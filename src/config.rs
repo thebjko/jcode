@@ -155,7 +155,7 @@ pub struct AuthConfig {
 }
 
 /// Agent-specific model defaults.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct AgentsConfig {
     /// Optional default model override for spawned swarm/subagent sessions.
@@ -166,18 +166,8 @@ pub struct AgentsConfig {
     pub memory_sidecar_enabled: bool,
 }
 
-impl Default for AgentsConfig {
-    fn default() -> Self {
-        Self {
-            swarm_model: None,
-            memory_model: None,
-            memory_sidecar_enabled: false,
-        }
-    }
-}
-
 /// Automatic end-of-turn code review configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct AutoReviewConfig {
     /// Enable autoreview by default for new/resumed sessions (default: false)
@@ -186,32 +176,14 @@ pub struct AutoReviewConfig {
     pub model: Option<String>,
 }
 
-impl Default for AutoReviewConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            model: None,
-        }
-    }
-}
-
 /// Automatic end-of-turn execution judging configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct AutoJudgeConfig {
     /// Enable autojudge by default for new/resumed sessions (default: false)
     pub enabled: bool,
     /// Optional model override for autojudge sessions.
     pub model: Option<String>,
-}
-
-impl Default for AutoJudgeConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            model: None,
-        }
-    }
 }
 
 /// Keybinding configuration
@@ -785,6 +757,10 @@ impl Config {
     }
 
     /// Apply environment variable overrides
+    #[expect(
+        clippy::collapsible_if,
+        reason = "Environment override parsing is intentionally explicit and grouped by config area"
+    )]
     fn apply_env_overrides(&mut self) {
         // Keybindings
         if let Ok(v) = std::env::var("JCODE_SCROLL_UP_KEY") {
@@ -846,21 +822,21 @@ impl Config {
         if let Ok(v) = std::env::var("JCODE_DICTATION_COMMAND") {
             self.dictation.command = v;
         }
-        if let Ok(v) = std::env::var("JCODE_DICTATION_MODE") {
-            if let Ok(mode) = toml::from_str::<crate::protocol::TranscriptMode>(&format!(
+        if let Ok(v) = std::env::var("JCODE_DICTATION_MODE")
+            && let Ok(mode) = toml::from_str::<crate::protocol::TranscriptMode>(&format!(
                 "\"{}\"",
                 v.trim().to_ascii_lowercase()
-            )) {
-                self.dictation.mode = mode;
-            }
+            ))
+        {
+            self.dictation.mode = mode;
         }
         if let Ok(v) = std::env::var("JCODE_DICTATION_KEY") {
             self.dictation.key = v;
         }
-        if let Ok(v) = std::env::var("JCODE_DICTATION_TIMEOUT_SECS") {
-            if let Ok(parsed) = v.trim().parse::<u64>() {
-                self.dictation.timeout_secs = parsed;
-            }
+        if let Ok(v) = std::env::var("JCODE_DICTATION_TIMEOUT_SECS")
+            && let Ok(parsed) = v.trim().parse::<u64>()
+        {
+            self.dictation.timeout_secs = parsed;
         }
 
         // Display
@@ -872,19 +848,19 @@ impl Config {
                 "file" => self.display.diff_mode = DiffDisplayMode::File,
                 _ => {}
             }
-        } else if let Ok(v) = std::env::var("JCODE_SHOW_DIFFS") {
-            if let Some(parsed) = parse_env_bool(&v) {
-                self.display.diff_mode = if parsed {
-                    DiffDisplayMode::Inline
-                } else {
-                    DiffDisplayMode::Off
-                };
-            }
+        } else if let Ok(v) = std::env::var("JCODE_SHOW_DIFFS")
+            && let Some(parsed) = parse_env_bool(&v)
+        {
+            self.display.diff_mode = if parsed {
+                DiffDisplayMode::Inline
+            } else {
+                DiffDisplayMode::Off
+            };
         }
-        if let Ok(v) = std::env::var("JCODE_PIN_IMAGES") {
-            if let Some(parsed) = parse_env_bool(&v) {
-                self.display.pin_images = parsed;
-            }
+        if let Ok(v) = std::env::var("JCODE_PIN_IMAGES")
+            && let Some(parsed) = parse_env_bool(&v)
+        {
+            self.display.pin_images = parsed;
         }
         if let Ok(v) = std::env::var("JCODE_DISPLAY_CENTERED") {
             if let Some(parsed) = parse_env_bool(&v) {

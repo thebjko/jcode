@@ -261,6 +261,10 @@ impl BackgroundTaskManager {
         }
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Detached task registration mirrors persisted status fields and existing call sites"
+    )]
     pub async fn register_detached_task(
         &self,
         info: &BackgroundTaskInfo,

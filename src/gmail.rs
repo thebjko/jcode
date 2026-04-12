@@ -9,6 +9,12 @@ pub struct GmailClient {
     http: reqwest::Client,
 }
 
+impl Default for GmailClient {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GmailClient {
     pub fn new() -> Self {
         Self {
@@ -342,6 +348,10 @@ pub struct MessagePayload {
 }
 
 impl MessagePayload {
+    #[expect(
+        clippy::collapsible_if,
+        reason = "Nested MIME/body decoding is kept explicit for readability"
+    )]
     fn extract_text(&self) -> Option<String> {
         if let Some(ref mime) = self.mime_type {
             if mime == "text/plain" {

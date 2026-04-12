@@ -1051,7 +1051,9 @@ mod tests {
 
     #[test]
     fn resolve_provider_rejects_unsupported_browser() {
-        let err = resolve_provider(Some("chrome")).expect_err("chrome should not resolve yet");
+        let err = resolve_provider(Some("chrome"))
+            .err()
+            .expect("chrome should not resolve yet");
         assert!(
             err.to_string()
                 .contains("not wired into the built-in browser tool")

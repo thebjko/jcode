@@ -48,13 +48,6 @@ impl StartupHints {
         None
     }
 
-    #[cfg(target_os = "macos")]
-    fn is_empty(&self) -> bool {
-        self.auto_send_message.is_none()
-            && self.status_notice.is_none()
-            && self.display_message.is_none()
-    }
-
     fn with_spawn_notice(message: String) -> Self {
         Self {
             auto_send_message: None,
@@ -222,7 +215,7 @@ fn detect_macos_terminal() -> MacTerminalKind {
     }
 }
 
-#[cfg(any(test, target_os = "macos"))]
+#[cfg(target_os = "macos")]
 fn is_ghostty_installed() -> bool {
     if std::path::Path::new("/Applications/Ghostty.app").exists() {
         return true;
@@ -315,12 +308,12 @@ fn find_alacritty_path() -> Option<String> {
     None
 }
 
-#[cfg(any(test, target_os = "macos"))]
+#[cfg(target_os = "macos")]
 fn mac_hotkey_support_dir() -> Result<PathBuf> {
     Ok(storage::jcode_dir()?.join("hotkey"))
 }
 
-#[cfg(any(test, target_os = "macos"))]
+#[cfg(target_os = "macos")]
 fn mac_hotkey_launch_agent_path() -> Result<PathBuf> {
     let home = dirs::home_dir().context("Could not find home directory")?;
     Ok(home
@@ -375,7 +368,7 @@ fn launch_command_for_macos_terminal(terminal: MacTerminalKind, shell_command: &
     }
 }
 
-#[cfg(any(test, target_os = "macos"))]
+#[cfg(target_os = "macos")]
 fn launch_script_for_macos_terminal(terminal: MacTerminalKind, shell_command: &str) -> String {
     format!(
         "#!/bin/bash\nset -e\n{}\n",
@@ -463,24 +456,18 @@ fn install_macos_hotkey_listener(
     Ok(terminal)
 }
 
-#[cfg(target_os = "macos")]
-fn startup_spawn_notice(state: &SetupHintsState) -> Option<String> {
-    if !state.hotkey_configured || state.startup_spawn_hint_dismissed {
-        return None;
-    }
-    Some(format!(
-        "Press Alt+; from anywhere to open jcode in {}.",
-        effective_macos_terminal().label()
-    ))
-}
-
-#[cfg(not(target_os = "macos"))]
-fn startup_spawn_notice(_state: &SetupHintsState) -> Option<String> {
-    None
-}
-
 fn startup_hints_for_launch(state: &SetupHintsState) -> Option<StartupHints> {
-    let spawn_notice = startup_spawn_notice(state);
+    #[cfg(target_os = "macos")]
+    let spawn_notice = if !state.hotkey_configured || state.startup_spawn_hint_dismissed {
+        None
+    } else {
+        Some(format!(
+            "Press Alt+; from anywhere to open jcode in {}.",
+            effective_macos_terminal().label()
+        ))
+    };
+    #[cfg(not(target_os = "macos"))]
+    let spawn_notice: Option<String> = None;
 
     if state.launch_count == 1 {
         let mut message = "Tip: use `/alignment left` to switch to Claude-style left alignment, or press `Alt+C` to toggle left/centered for the current session.".to_string();
@@ -1151,7 +1138,7 @@ pub fn maybe_show_setup_hints() -> Option<StartupHints> {
     state.launch_count += 1;
     let _ = state.save();
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(test, target_os = "macos"))]
     {
         if should_refresh_macos_app_launcher(&state) {
             let _ = create_desktop_shortcut(&mut state);
@@ -1176,7 +1163,14 @@ pub fn maybe_show_setup_hints() -> Option<StartupHints> {
         if !state.mac_ghostty_guided && !state.mac_ghostty_dismissed {
             let mut hints = startup_hints.unwrap_or_default();
             hints.auto_send_message = nudge_macos_ghostty(&mut state);
-            return if hints.is_empty() { None } else { Some(hints) };
+            return if hints.auto_send_message.is_none()
+                && hints.status_notice.is_none()
+                && hints.display_message.is_none()
+            {
+                None
+            } else {
+                Some(hints)
+            };
         }
 
         return startup_hints;
@@ -1221,7 +1215,7 @@ pub fn maybe_show_setup_hints() -> Option<StartupHints> {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(test, target_os = "macos"))]
 fn macos_app_launcher_dir() -> Result<PathBuf> {
     let home = dirs::home_dir().context("Could not find home directory")?;
     Ok(home.join("Applications").join("Jcode.app"))
@@ -1253,7 +1247,7 @@ fn macos_app_launcher_is_valid(app_dir: &std::path::Path) -> bool {
         && macos_app_launcher_executable_path(app_dir).is_file()
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(test, target_os = "macos"))]
 fn remove_path_if_exists(path: &std::path::Path) -> Result<()> {
     if !path.exists() {
         return Ok(());
@@ -1271,7 +1265,7 @@ fn remove_path_if_exists(path: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(test, target_os = "macos"))]
 fn register_macos_app_launcher(app_dir: &std::path::Path) {
     let _ = std::process::Command::new("touch").arg(app_dir).status();
 
@@ -1298,7 +1292,7 @@ fn should_refresh_macos_app_launcher_paths(
         || legacy_app_dir.exists()
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(test, target_os = "macos"))]
 fn should_refresh_macos_app_launcher(state: &SetupHintsState) -> bool {
     match (macos_app_launcher_dir(), legacy_macos_app_launcher_dir()) {
         (Ok(app_dir), Ok(legacy_app_dir)) => {
@@ -1375,7 +1369,7 @@ exit 0
     )
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(test, target_os = "macos"))]
 fn install_macos_app_launcher() -> Result<(PathBuf, MacTerminalKind)> {
     let app_dir = macos_app_launcher_dir()?;
     let legacy_app_dir = legacy_macos_app_launcher_dir()?;
@@ -1532,7 +1526,7 @@ Write-Output "OK"
         }
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(test, target_os = "macos"))]
     {
         let (app_dir, _terminal) = install_macos_app_launcher()?;
 
@@ -1608,7 +1602,7 @@ mod tests {
         assert!(startup_hints_for_launch(&state).is_none());
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(test, target_os = "macos"))]
     #[test]
     fn first_three_launches_can_include_hotkey_notice_too() {
         let state = SetupHintsState {

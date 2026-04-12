@@ -232,8 +232,6 @@ mod queue_tests;
 #[cfg(test)]
 mod file_activity_tests;
 
-/// Set custom socket path (sets JCODE_SOCKET env var)
-
 /// Idle timeout for the shared server when no clients are connected (5 minutes)
 const IDLE_TIMEOUT_SECS: u64 = 300;
 

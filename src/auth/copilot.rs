@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{LazyLock, RwLock};
 
@@ -395,7 +395,7 @@ pub fn saved_hosts_path() -> PathBuf {
     legacy_copilot_config_dir().join("hosts.json")
 }
 
-fn load_token_from_config_json(path: &PathBuf) -> Result<String> {
+fn load_token_from_config_json(path: &Path) -> Result<String> {
     let path = crate::storage::validate_external_auth_file(path)?;
     let data = std::fs::read_to_string(&path)
         .with_context(|| format!("Failed to read {}", path.display()))?;
@@ -454,7 +454,7 @@ fn load_token_from_gh_cli() -> Option<String> {
 
 /// Parse a Copilot config JSON file to extract the oauth_token.
 /// Format: { "github.com": { "oauth_token": "gho_xxxx", "user": "..." } }
-fn load_token_from_json(path: &PathBuf) -> Result<String> {
+fn load_token_from_json(path: &Path) -> Result<String> {
     let path = crate::storage::validate_external_auth_file(path)?;
     let data = std::fs::read_to_string(&path)
         .with_context(|| format!("Failed to read {}", path.display()))?;

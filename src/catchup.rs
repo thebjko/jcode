@@ -498,9 +498,10 @@ fn collect_validation_notes(rendered: &[crate::session::RenderedMessage]) -> Vec
         };
         let ok = !looks_like_error(&msg.content);
         notes.push(format!(
-            "{} {}",
+            "{} {}: `{}`",
             if ok { "✓" } else { "✗" },
-            format!("{}: `{}`", label, truncate(command, 64))
+            label,
+            truncate(command, 64)
         ));
         if notes.len() >= 3 {
             break;

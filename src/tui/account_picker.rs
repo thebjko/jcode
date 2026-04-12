@@ -789,20 +789,6 @@ impl AccountPicker {
     }
 }
 
-#[cfg(test)]
-impl AccountPicker {
-    pub(crate) fn debug_filtered_titles(&self) -> Vec<String> {
-        self.filtered
-            .iter()
-            .map(|idx| self.items[*idx].title.clone())
-            .collect()
-    }
-
-    pub(crate) fn debug_selected_index(&self) -> usize {
-        self.selected
-    }
-}
-
 fn hotkey(text: &'static str) -> Span<'static> {
     Span::styled(text, Style::default().fg(Color::White).bg(Color::DarkGray))
 }

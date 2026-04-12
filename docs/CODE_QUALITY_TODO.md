@@ -11,10 +11,10 @@ Status values:
 
 ## Phase 0: Prevent Further Decay
 
-- [ ] Add CI job for `cargo check --all-targets --all-features`
-- [ ] Add CI job for `cargo clippy --all-targets --all-features -- -D warnings`
-- [ ] Keep warning policy on a downward ratchet
-- [ ] Add documented file-size and function-size targets to contributor guidance
+- [x] Add CI job for `cargo check --all-targets --all-features`
+- [x] Add CI job for `cargo clippy --all-targets --all-features -- -D warnings`
+- [x] Keep warning policy on a downward ratchet
+- [x] Add documented file-size and function-size targets to contributor guidance
 
 ## Phase 1: Warning and Dead-Code Burn-Down
 
@@ -71,5 +71,5 @@ Status values:
 
 - [ ] Land the quality plan document
 - [ ] Land this todo list
-- [ ] Tighten CI guardrails
+- [x] Tighten CI guardrails
 - [ ] Begin the first high-ROI cleanup or split

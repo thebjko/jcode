@@ -22,13 +22,14 @@ use ratatui::{
     prelude::*,
     widgets::{Block, BorderType, Borders, Paragraph},
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+#[cfg(test)]
+use std::collections::HashSet;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use unicode_width::UnicodeWidthStr;
 
 pub use graph::build_graph_topology;
-use graph::graph_node_score;
 use text::{truncate_chars, truncate_smart, truncate_with_ellipsis};
 pub(crate) use tips::occasional_status_tip;
 use tips::{render_tips_widget, tips_widget_height};
@@ -1268,16 +1269,20 @@ fn render_overview_widget(frame: &mut Frame, inner: Rect, data: &InfoWidgetData)
     lines.truncate(inner.height as usize);
     frame.render_widget(Paragraph::new(lines), inner);
 }
-
+#[cfg(test)]
+#[allow(dead_code)]
 const MEMORY_TEXT_SUBGRAPH_MAX_NODES: usize = 8;
+#[cfg(test)]
+#[allow(dead_code)]
 const MEMORY_TEXT_SUBGRAPH_MAX_EDGES: usize = 10;
-
+#[cfg(test)]
 #[derive(Debug, Clone)]
 struct MemorySubgraph {
     nodes: Vec<GraphNode>,
+    #[allow(dead_code)]
     edges: Vec<GraphEdge>,
 }
-
+#[cfg(test)]
 fn select_contextual_subgraph(
     info: &MemoryInfo,
     max_nodes: usize,
@@ -1286,11 +1291,9 @@ fn select_contextual_subgraph(
     if info.graph_nodes.is_empty() || max_nodes == 0 {
         return None;
     }
-
     let node_count = info.graph_nodes.len();
     let center_idx = pick_subgraph_center(info)?;
     let mut neighbors: Vec<Vec<(usize, usize)>> = vec![Vec::new(); node_count];
-
     for (edge_idx, edge) in info.graph_edges.iter().enumerate() {
         if edge.source >= node_count || edge.target >= node_count {
             continue;
@@ -1298,31 +1301,27 @@ fn select_contextual_subgraph(
         neighbors[edge.source].push((edge.target, edge_idx));
         neighbors[edge.target].push((edge.source, edge_idx));
     }
-
     let mut selected = Vec::with_capacity(max_nodes.min(node_count));
     let mut selected_set: HashSet<usize> = HashSet::new();
     let mut queue = std::collections::VecDeque::new();
     selected.push(center_idx);
     selected_set.insert(center_idx);
     queue.push_back(center_idx);
-
     while let Some(current) = queue.pop_front() {
         if selected.len() >= max_nodes {
             break;
         }
-
         let mut ranked = neighbors[current].clone();
         ranked.sort_by(|(a_idx, a_edge), (b_idx, b_edge)| {
             edge_kind_priority(&info.graph_edges[*b_edge].kind)
                 .cmp(&edge_kind_priority(&info.graph_edges[*a_edge].kind))
                 .then_with(|| {
-                    graph_node_score(&info.graph_nodes[*b_idx])
-                        .partial_cmp(&graph_node_score(&info.graph_nodes[*a_idx]))
+                    graph::graph_node_score(&info.graph_nodes[*b_idx])
+                        .partial_cmp(&graph::graph_node_score(&info.graph_nodes[*a_idx]))
                         .unwrap_or(std::cmp::Ordering::Equal)
                 })
                 .then_with(|| a_idx.cmp(b_idx))
         });
-
         for (next_idx, _) in ranked {
             if selected.len() >= max_nodes {
                 break;
@@ -1339,8 +1338,8 @@ fn select_contextual_subgraph(
             .filter(|idx| !selected_set.contains(idx))
             .collect();
         remaining.sort_by(|a, b| {
-            graph_node_score(&info.graph_nodes[*b])
-                .partial_cmp(&graph_node_score(&info.graph_nodes[*a]))
+            graph::graph_node_score(&info.graph_nodes[*b])
+                .partial_cmp(&graph::graph_node_score(&info.graph_nodes[*a]))
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then_with(|| a.cmp(b))
         });
@@ -1401,12 +1400,13 @@ fn select_contextual_subgraph(
     })
 }
 
+#[cfg(test)]
 fn pick_subgraph_center(info: &MemoryInfo) -> Option<usize> {
     let mut best_idx: Option<usize> = None;
     let mut best_score: f32 = -1.0;
 
     for (idx, node) in info.graph_nodes.iter().enumerate() {
-        let mut score = graph_node_score(node);
+        let mut score = graph::graph_node_score(node);
         if node.kind == "tag" || node.kind == "cluster" {
             score -= 0.75;
         }
@@ -1422,6 +1422,7 @@ fn pick_subgraph_center(info: &MemoryInfo) -> Option<usize> {
     best_idx
 }
 
+#[cfg(test)]
 fn edge_kind_priority(kind: &str) -> u8 {
     match kind {
         "contradicts" => 6,
@@ -2179,82 +2180,6 @@ fn memory_pipeline_progress_summary(pipeline: &PipelineState) -> String {
         format!("{}/4 done · {}", completed, active)
     } else {
         format!("{}/4 done", completed)
-    }
-}
-
-fn render_memory_topology_lines(info: &MemoryInfo, inner: Rect) -> Vec<Line<'static>> {
-    if info.graph_nodes.is_empty() || inner.width < 8 || inner.height == 0 {
-        return Vec::new();
-    }
-
-    let max_lines = inner.height.min(3) as usize;
-    let Some(subgraph) = select_contextual_subgraph(
-        info,
-        MEMORY_TEXT_SUBGRAPH_MAX_NODES,
-        MEMORY_TEXT_SUBGRAPH_MAX_EDGES,
-    ) else {
-        return Vec::new();
-    };
-    if subgraph.nodes.is_empty() {
-        return Vec::new();
-    }
-
-    let mut lines: Vec<Line> = Vec::new();
-    let hub = &subgraph.nodes[0];
-    let hub_label = truncate_smart(&hub.label, inner.width.saturating_sub(8) as usize);
-    let hub_kind = if hub.kind == "tag" { "tag" } else { "mem" };
-    lines.push(Line::from(vec![
-        Span::styled("• ", Style::default().fg(rgb(140, 180, 220))),
-        Span::styled(
-            format!("hub {}: {}", hub_kind, hub_label),
-            Style::default().fg(rgb(145, 145, 155)),
-        ),
-    ]));
-
-    let mut edges = subgraph.edges;
-    edges.sort_by(|a, b| {
-        let a_hub = a.source == 0 || a.target == 0;
-        let b_hub = b.source == 0 || b.target == 0;
-        b_hub
-            .cmp(&a_hub)
-            .then_with(|| edge_kind_priority(&b.kind).cmp(&edge_kind_priority(&a.kind)))
-            .then_with(|| a.source.cmp(&b.source))
-            .then_with(|| a.target.cmp(&b.target))
-    });
-
-    for edge in edges.into_iter().take(max_lines.saturating_sub(1)) {
-        let other_idx = if edge.source == 0 {
-            edge.target
-        } else {
-            edge.source
-        };
-        let Some(other) = subgraph.nodes.get(other_idx) else {
-            continue;
-        };
-        let relation = memory_edge_label(&edge.kind);
-        let text = format!("↳ {} {}", relation, other.label);
-        let text = truncate_smart(&text, inner.width.saturating_sub(2) as usize);
-        lines.push(Line::from(vec![Span::styled(
-            text,
-            Style::default().fg(rgb(110, 110, 122)),
-        )]));
-        if lines.len() >= max_lines {
-            break;
-        }
-    }
-
-    lines
-}
-
-fn memory_edge_label(kind: &str) -> &'static str {
-    match kind {
-        "has_tag" => "tag",
-        "in_cluster" => "cluster",
-        "supersedes" => "sup",
-        "contradicts" => "contra",
-        "derived_from" => "derived",
-        "relates_to" => "rel",
-        _ => "rel",
     }
 }
 
@@ -3177,8 +3102,7 @@ mod tests {
         BackgroundInfo, GraphEdge, GraphNode, InfoWidgetData, Margins, MemoryActivity, MemoryEvent,
         MemoryEventKind, MemoryInfo, MemoryState, PipelineState, StepStatus, SwarmInfo, UsageInfo,
         UsageProvider, WidgetKind, calculate_placements, occasional_status_tip,
-        render_memory_compact, render_memory_topology_lines, render_memory_widget,
-        render_model_widget, truncate_smart,
+        render_memory_compact, render_memory_widget, render_model_widget, truncate_smart,
     };
     use ratatui::layout::Rect;
     use std::time::{Duration, Instant};
@@ -3218,37 +3142,6 @@ mod tests {
             target,
             kind: kind.to_string(),
         }
-    }
-
-    #[test]
-    fn topology_lines_render_hub_and_edges() {
-        let info = MemoryInfo {
-            total_count: 4,
-            graph_nodes: vec![
-                node("fact", "Rust project uses cargo", 2),
-                node("preference", "User likes concise answers", 2),
-                node("correction", "Use oauth flow", 1),
-                node("tag", "rust", 1),
-            ],
-            graph_edges: vec![
-                edge(0, 1, "relates_to"),
-                edge(1, 2, "contradicts"),
-                edge(1, 3, "has_tag"),
-            ],
-            ..Default::default()
-        };
-
-        let lines = render_memory_topology_lines(&info, Rect::new(0, 0, 30, 3));
-        assert!(!lines.is_empty());
-
-        let text = lines
-            .iter()
-            .flat_map(|line| line.spans.iter())
-            .map(|span| span.content.as_ref())
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(text.contains("hub"));
-        assert!(text.contains("↳"));
     }
 
     #[test]
