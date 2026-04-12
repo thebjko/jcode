@@ -1,7 +1,7 @@
+use sha2::{Digest, Sha256};
 use std::io;
 use std::path::Path;
 use std::sync::Arc;
-use sha2::{Digest, Sha256};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::windows::named_pipe::{
     ClientOptions, NamedPipeClient, NamedPipeServer, ServerOptions,
@@ -22,7 +22,10 @@ fn path_to_pipe_name(path: &Path) -> String {
         .take(32)
         .collect();
     let stem = if stem.is_empty() { "jcode" } else { &stem };
-    let normalized = path.to_string_lossy().replace('\\', "/").to_ascii_lowercase();
+    let normalized = path
+        .to_string_lossy()
+        .replace('\\', "/")
+        .to_ascii_lowercase();
     let digest = Sha256::digest(normalized.as_bytes());
     let hash = hex::encode(digest);
     format!(r"\\.\pipe\{}-{}", stem, &hash[..16])

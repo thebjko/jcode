@@ -24,8 +24,9 @@ use mermaid_rs_renderer::{
     theme::Theme,
 };
 use ratatui::prelude::*;
+use ratatui::widgets::StatefulWidget;
 use ratatui_image::{
-    CropOptions, Resize, StatefulImage,
+    CropOptions, Resize, ResizeEncodeRender, StatefulImage,
     picker::{Picker, ProtocolType, cap_parser::Parser},
     protocol::StatefulProtocol,
 };
@@ -1569,8 +1570,8 @@ fn query_font_size() -> (u16, u16) {
 }
 
 fn fast_picker() -> Picker {
-    let font_size = query_font_size();
-    let mut picker = Picker::from_fontsize(font_size);
+    let _font_size = query_font_size();
+    let mut picker = Picker::halfblocks();
     if let Some(protocol) = infer_protocol_from_env(
         std::env::var("TERM").ok().as_deref(),
         std::env::var("TERM_PROGRAM").ok().as_deref(),
@@ -1619,7 +1620,9 @@ pub fn init_picker() {
 
 /// Get the current protocol type (for debugging/display)
 pub fn protocol_type() -> Option<ProtocolType> {
-    let real = PICKER.get().and_then(|p| p.map(|p| p.protocol_type()));
+    let real = PICKER
+        .get()
+        .and_then(|p| p.as_ref().map(|picker| picker.protocol_type()));
     if real.is_some() {
         return real;
     }
@@ -1631,7 +1634,7 @@ pub fn protocol_type() -> Option<ProtocolType> {
 }
 
 pub fn image_protocol_available() -> bool {
-    PICKER.get().and_then(|p| *p).is_some() || VIDEO_EXPORT_MODE.load(Ordering::Relaxed)
+    PICKER.get().and_then(|p| p.as_ref()).is_some() || VIDEO_EXPORT_MODE.load(Ordering::Relaxed)
 }
 
 /// Enable video-export mode: mermaid images produce hash-placeholder lines
@@ -1737,7 +1740,9 @@ pub fn error_lines_for(hash: u64) -> Option<Vec<Line<'static>>> {
 
 /// Get terminal font size for adaptive sizing
 pub fn get_font_size() -> Option<(u16, u16)> {
-    PICKER.get().and_then(|p| p.map(|p| p.font_size()))
+    PICKER
+        .get()
+        .and_then(|p| p.as_ref().map(|picker| picker.font_size()))
 }
 
 /// Maximum in-memory RENDER_CACHE entries (metadata only, not images).
@@ -2830,16 +2835,9 @@ pub fn render_image_widget(
 
             // If crop direction changed, force a re-encode so we don't reuse stale data
             if img_state.last_crop_top != crop_top {
-                let background = img_state.protocol.background_color();
-                let mut force_area = img_state.protocol.area();
-                if force_area.width == 0 || force_area.height == 0 {
-                    force_area = render_area;
-                }
-                img_state.protocol.resize_encode(
-                    &Resize::Crop(Some(crop_opts.clone())),
-                    background,
-                    force_area,
-                );
+                img_state
+                    .protocol
+                    .resize_encode(&Resize::Crop(Some(crop_opts.clone())), render_area);
                 img_state.last_crop_top = crop_top;
             }
 
@@ -3975,7 +3973,8 @@ pub fn result_to_content(result: RenderResult, max_width: Option<usize>) -> Merm
             ..
         } => {
             // Check if we have picker/protocol support (or video export mode)
-            if PICKER.get().and_then(|p| *p).is_some() || VIDEO_EXPORT_MODE.load(Ordering::Relaxed)
+            if PICKER.get().and_then(|p| p.as_ref()).is_some()
+                || VIDEO_EXPORT_MODE.load(Ordering::Relaxed)
             {
                 let max_w = max_width.map(|w| w as u16).unwrap_or(80);
                 let estimated_height = estimate_image_height(width, height, max_w);

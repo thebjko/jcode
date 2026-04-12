@@ -593,7 +593,9 @@ pub(in crate::tui::app) async fn handle_post_connect<B: ratatui::backend::Backen
             app.push_display_message(DisplayMessage::system(
                 "Server reloaded. Reloading client binary...".to_string(),
             ));
-            terminal.draw(|frame| crate::tui::ui::draw(frame, app))?;
+            terminal
+                .draw(|frame| crate::tui::ui::draw(frame, app))
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
             let session_id = app
                 .remote_session_id
                 .clone()

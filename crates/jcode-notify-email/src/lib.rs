@@ -63,8 +63,8 @@ pub async fn send_email(request: SendEmailRequest<'_>) -> Result<()> {
 }
 
 pub fn poll_imap_once(host: &str, port: u16, user: &str, pass: &str) -> Result<Vec<ReplyAction>> {
-    let tls = native_tls::TlsConnector::builder().build()?;
-    let client = imap::connect((host, port), host, &tls)?;
+    let _tls = native_tls::TlsConnector::builder().build()?;
+    let client = imap::ClientBuilder::new(host, port).connect()?;
     let mut session = client
         .login(user, pass)
         .map_err(|(e, _)| anyhow::anyhow!("IMAP login failed: {}", e))?;
@@ -74,7 +74,7 @@ pub fn poll_imap_once(host: &str, port: u16, user: &str, pass: &str) -> Result<V
     let reply_search = session.search("UNSEEN HEADER In-Reply-To \"@jcode>\"")?;
     let button_search = session.search("UNSEEN SUBJECT \"[jcode-perm:\"")?;
 
-    let mut all_seqs: Vec<u32> = reply_search.into_iter().chain(button_search).collect();
+    let mut all_seqs: Vec<_> = reply_search.into_iter().chain(button_search).collect();
     all_seqs.sort_unstable();
     all_seqs.dedup();
 

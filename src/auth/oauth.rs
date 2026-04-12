@@ -126,7 +126,9 @@ fn drain_http_headers_blocking<R: BufRead>(reader: &mut R) -> Result<bool> {
     }
 }
 
-async fn read_http_request_line_async<R>(reader: &mut tokio::io::BufReader<R>) -> Result<Option<String>>
+async fn read_http_request_line_async<R>(
+    reader: &mut tokio::io::BufReader<R>,
+) -> Result<Option<String>>
 where
     R: tokio::io::AsyncRead + Unpin,
 {
