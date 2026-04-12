@@ -124,10 +124,25 @@ impl Tool for BrowserTool {
                 "description": "Browser."
             }),
         );
+        properties.insert(
+            "provider_action".into(),
+            json!({
+                "type": "string",
+                "description": "Provider command name."
+            }),
+        );
+        properties.insert(
+            "params".into(),
+            json!({
+                "type": "object",
+                "description": "Raw provider params."
+            }),
+        );
         for (name, schema) in [
             ("url", json!({"type": "string"})),
             ("tab_id", json!({"type": "integer"})),
             ("frame_id", json!({"type": "integer"})),
+            ("all_frames", json!({"type": "boolean"})),
             ("selector", json!({"type": "string"})),
             ("text", json!({"type": "string"})),
             ("contains", json!({"type": "string"})),
@@ -137,6 +152,12 @@ impl Tool for BrowserTool {
             ("y", json!({"type": "number"})),
             ("wait", json!({"type": "boolean"})),
             ("new_tab", json!({"type": "boolean"})),
+            ("focus", json!({"type": "boolean"})),
+            ("clear", json!({"type": "boolean"})),
+            ("submit", json!({"type": "boolean"})),
+            ("page_world", json!({"type": "boolean"})),
+            ("position", json!({"type": "string"})),
+            ("behavior", json!({"type": "string"})),
             ("timeout_ms", json!({"type": "integer"})),
             ("path", json!({"type": "string"})),
         ] {
@@ -154,6 +175,7 @@ impl Tool for BrowserTool {
             "fields".into(),
             json!({
                 "type": "array",
+                "description": "Form fields.",
                 "items": {
                     "type": "object",
                     "required": ["selector"],
@@ -162,6 +184,16 @@ impl Tool for BrowserTool {
                         "value": { "type": "string" },
                         "checked": { "type": "boolean" }
                     }
+                }
+            }),
+        );
+        properties.insert(
+            "scroll_to".into(),
+            json!({
+                "type": "object",
+                "properties": {
+                    "x": { "type": "number" },
+                    "y": { "type": "number" }
                 }
             }),
         );
@@ -870,7 +902,7 @@ mod tests {
     }
 
     #[test]
-    fn schema_only_advertises_common_browser_fields() {
+    fn schema_exposes_advanced_browser_fields() {
         let schema = BrowserTool::new().parameters_schema();
         let props = schema["properties"]
             .as_object()
@@ -894,15 +926,15 @@ mod tests {
         assert!(props.contains_key("timeout_ms"));
         assert!(props.contains_key("path"));
         assert!(props.contains_key("fields"));
-        assert!(!props.contains_key("provider_action"));
-        assert!(!props.contains_key("params"));
-        assert!(!props.contains_key("all_frames"));
-        assert!(!props.contains_key("focus"));
-        assert!(!props.contains_key("clear"));
-        assert!(!props.contains_key("submit"));
-        assert!(!props.contains_key("page_world"));
-        assert!(!props.contains_key("position"));
-        assert!(!props.contains_key("behavior"));
-        assert!(!props.contains_key("scroll_to"));
+        assert!(props.contains_key("provider_action"));
+        assert!(props.contains_key("params"));
+        assert!(props.contains_key("all_frames"));
+        assert!(props.contains_key("focus"));
+        assert!(props.contains_key("clear"));
+        assert!(props.contains_key("submit"));
+        assert!(props.contains_key("page_world"));
+        assert!(props.contains_key("position"));
+        assert!(props.contains_key("behavior"));
+        assert!(props.contains_key("scroll_to"));
     }
 }
