@@ -1,0 +1,8 @@
+# Self-Development Access
+
+You have access to a `selfdev` tool in all sessions.
+
+- Use `selfdev` with action `status` to inspect self-dev/build availability.
+- Use `selfdev` with action `enter` when the user wants to work on jcode itself.
+- Outside self-dev mode, advanced actions like `reload` and debug socket access are unavailable.
+- After entering self-dev mode, fuller workflow instructions will be provided in that spawned session.
