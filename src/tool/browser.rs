@@ -98,7 +98,7 @@ impl Tool for BrowserTool {
     }
 
     fn description(&self) -> &str {
-        "Control a browser through the configured browser bridge. Prefer snapshot/get_content for inspection, act on the page with click/type/scroll/upload, and use eval when normal interaction fails or custom DOM needs inspection."
+        "Control a browser."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -109,7 +109,7 @@ impl Tool for BrowserTool {
                 "type": "string",
                 "enum": [
                     "status", "setup", "list_tabs", "new_tab", "select_tab", "get_active_tab",
-                    "list_frames", "open", "snapshot", "get_content", "click", "type",
+                    "list_frames", "open", "snapshot", "get_content", "interactables", "click", "type",
                     "fill_form", "select", "wait", "screenshot", "eval", "scroll", "upload",
                     "press", "provider_command"
                 ],
@@ -403,6 +403,7 @@ fn bridge_request(action: &str, input: &BrowserInput) -> Result<(String, Value, 
         "open" => "navigate",
         "snapshot" => "getContent",
         "get_content" => "getContent",
+        "interactables" => "getInteractables",
         "click" => "click",
         "type" => "type",
         "fill_form" => "fillForm",
@@ -464,6 +465,7 @@ fn bridge_request(action: &str, input: &BrowserInput) -> Result<(String, Value, 
                 json!(input.format.as_deref().unwrap_or("text")),
             );
         }
+        "interactables" => {}
         "click" => {
             if input.selector.is_none()
                 && input.text.is_none()
@@ -754,6 +756,7 @@ fn render_browser_output(action: &str, title: String, result: Value) -> ToolOutp
             .map(|s| s.to_string())
             .unwrap_or_else(|| serde_json::to_string_pretty(&result).unwrap_or_default()),
         "get_content" => format_content_result(&result),
+        "interactables" => format_interactables_result(&result),
         "eval" => format_eval_result(&result),
         _ => serde_json::to_string_pretty(&result).unwrap_or_else(|_| result.to_string()),
     };
@@ -794,6 +797,45 @@ fn format_eval_result(result: &Value) -> String {
         Some(kind) => format!("{}\n\n(type: {})", rendered, kind),
         None => rendered,
     }
+}
+
+fn format_interactables_result(result: &Value) -> String {
+    let Some(elements) = result.get("elements").and_then(|v| v.as_array()) else {
+        return serde_json::to_string_pretty(result).unwrap_or_default();
+    };
+
+    if elements.is_empty() {
+        return "No interactable elements found.".to_string();
+    }
+
+    let mut lines = Vec::new();
+    for (idx, element) in elements.iter().enumerate() {
+        let kind = element
+            .get("type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("element");
+        let tag = element.get("tag").and_then(|v| v.as_str()).unwrap_or("?");
+        let text = element
+            .get("text")
+            .or_else(|| element.get("label"))
+            .or_else(|| element.get("name"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let selector = element
+            .get("selector")
+            .and_then(|v| v.as_str())
+            .unwrap_or("-");
+        lines.push(format!(
+            "{}. [{}] <{}> {} | selector: {}",
+            idx + 1,
+            kind,
+            tag.to_lowercase(),
+            text,
+            selector
+        ));
+    }
+
+    lines.join("\n")
 }
 
 #[cfg(test)]
@@ -891,5 +933,44 @@ mod tests {
         assert_eq!(action, "evaluate");
         assert_eq!(params["script"], "return document.title");
         assert_eq!(params["pageWorld"], true);
+    }
+
+    #[test]
+    fn interactables_maps_to_bridge_action() {
+        let input = BrowserInput {
+            action: "interactables".into(),
+            browser: None,
+            provider_action: None,
+            params: None,
+            url: None,
+            tab_id: Some(9),
+            frame_id: None,
+            all_frames: None,
+            selector: Some("main".into()),
+            text: None,
+            contains: None,
+            script: None,
+            key: None,
+            x: None,
+            y: None,
+            format: None,
+            wait: None,
+            new_tab: None,
+            focus: None,
+            clear: None,
+            submit: None,
+            page_world: None,
+            position: None,
+            behavior: None,
+            timeout_ms: None,
+            path: None,
+            fields: None,
+            scroll_to: None,
+        };
+
+        let (action, params, _) = bridge_request("interactables", &input).unwrap();
+        assert_eq!(action, "getInteractables");
+        assert_eq!(params["tabId"], 9);
+        assert_eq!(params["selector"], "main");
     }
 }
