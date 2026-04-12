@@ -1,0 +1,815 @@
+use super::{Tool, ToolContext, ToolOutput};
+use anyhow::{Context, Result};
+use async_trait::async_trait;
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use serde::Deserialize;
+use serde_json::{Map, Value, json};
+use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+pub struct BrowserTool;
+
+impl BrowserTool {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct BrowserInput {
+    action: String,
+    #[serde(default)]
+    browser: Option<String>,
+    #[serde(default)]
+    provider_action: Option<String>,
+    #[serde(default)]
+    params: Option<Value>,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    tab_id: Option<i64>,
+    #[serde(default)]
+    frame_id: Option<i64>,
+    #[serde(default)]
+    all_frames: Option<bool>,
+    #[serde(default)]
+    selector: Option<String>,
+    #[serde(default)]
+    text: Option<String>,
+    #[serde(default)]
+    contains: Option<String>,
+    #[serde(default)]
+    script: Option<String>,
+    #[serde(default)]
+    key: Option<String>,
+    #[serde(default)]
+    x: Option<f64>,
+    #[serde(default)]
+    y: Option<f64>,
+    #[serde(default)]
+    format: Option<String>,
+    #[serde(default)]
+    wait: Option<bool>,
+    #[serde(default)]
+    new_tab: Option<bool>,
+    #[serde(default)]
+    focus: Option<bool>,
+    #[serde(default)]
+    clear: Option<bool>,
+    #[serde(default)]
+    submit: Option<bool>,
+    #[serde(default)]
+    page_world: Option<bool>,
+    #[serde(default)]
+    position: Option<String>,
+    #[serde(default)]
+    behavior: Option<String>,
+    #[serde(default)]
+    timeout_ms: Option<u64>,
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    fields: Option<Vec<BrowserField>>,
+    #[serde(default)]
+    scroll_to: Option<ScrollTo>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BrowserField {
+    selector: String,
+    #[serde(default)]
+    value: Option<String>,
+    #[serde(default)]
+    checked: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ScrollTo {
+    #[serde(default)]
+    x: Option<f64>,
+    #[serde(default)]
+    y: Option<f64>,
+}
+
+#[async_trait]
+impl Tool for BrowserTool {
+    fn name(&self) -> &str {
+        "browser"
+    }
+
+    fn description(&self) -> &str {
+        "Control a browser through the configured browser bridge. Prefer snapshot/get_content for inspection, act on the page with click/type/scroll/upload, and use eval when normal interaction fails or custom DOM needs inspection."
+    }
+
+    fn parameters_schema(&self) -> Value {
+        let mut properties = Map::new();
+        properties.insert(
+            "action".into(),
+            json!({
+                "type": "string",
+                "enum": [
+                    "status", "setup", "list_tabs", "new_tab", "select_tab", "get_active_tab",
+                    "list_frames", "open", "snapshot", "get_content", "click", "type",
+                    "fill_form", "select", "wait", "screenshot", "eval", "scroll", "upload",
+                    "press", "provider_command"
+                ],
+                "description": "Browser action to perform. Use snapshot/get_content to inspect pages. If an interaction fails, use eval to inspect or recover from custom DOM behavior."
+            }),
+        );
+        properties.insert(
+            "browser".into(),
+            json!({
+                "type": "string",
+                "enum": ["auto", "firefox", "chrome", "safari", "edge"],
+                "description": "Preferred browser family. Currently the built-in backend supports Firefox Agent Bridge. Use auto or firefox for now."
+            }),
+        );
+        properties.insert(
+            "provider_action".into(),
+            json!({
+                "type": "string",
+                "description": "Advanced escape hatch for provider-specific commands when action='provider_command'."
+            }),
+        );
+        properties.insert(
+            "params".into(),
+            json!({
+                "type": "object",
+                "description": "Optional raw provider params when action='provider_command'."
+            }),
+        );
+        for (name, schema) in [
+            (
+                "url",
+                json!({"type": "string", "description": "URL for open/new_tab."}),
+            ),
+            (
+                "tab_id",
+                json!({"type": "integer", "description": "Specific browser tab id for tab-targeted actions."}),
+            ),
+            (
+                "frame_id",
+                json!({"type": "integer", "description": "Specific frame id for frame-targeted actions."}),
+            ),
+            (
+                "all_frames",
+                json!({"type": "boolean", "description": "If true, let the bridge try matching across all frames."}),
+            ),
+            (
+                "selector",
+                json!({"type": "string", "description": "CSS selector target for actions like click, type, get_content, scroll, wait, upload, and select."}),
+            ),
+            (
+                "text",
+                json!({"type": "string", "description": "Text target or typed text, depending on action."}),
+            ),
+            (
+                "contains",
+                json!({"type": "string", "description": "Substring to wait for when action='wait'."}),
+            ),
+            (
+                "script",
+                json!({"type": "string", "description": "JavaScript to execute when action='eval'."}),
+            ),
+            (
+                "key",
+                json!({"type": "string", "description": "Keyboard key for action='press', e.g. Enter, Escape, Tab, Control+A."}),
+            ),
+            (
+                "x",
+                json!({"type": "number", "description": "X coordinate or scroll delta depending on action."}),
+            ),
+            (
+                "y",
+                json!({"type": "number", "description": "Y coordinate or scroll delta depending on action."}),
+            ),
+            (
+                "wait",
+                json!({"type": "boolean", "description": "Whether open/new_tab should wait for page load. Defaults to true."}),
+            ),
+            (
+                "new_tab",
+                json!({"type": "boolean", "description": "Open URL in a new tab for action='open'."}),
+            ),
+            (
+                "focus",
+                json!({"type": "boolean", "description": "Whether select_tab should focus the browser tab."}),
+            ),
+            (
+                "clear",
+                json!({"type": "boolean", "description": "Whether type should clear existing content before entering text."}),
+            ),
+            (
+                "submit",
+                json!({"type": "boolean", "description": "Whether type/select should submit after setting the value."}),
+            ),
+            (
+                "page_world",
+                json!({"type": "boolean", "description": "For eval, run in the page world to bypass extension wrapper limitations when needed."}),
+            ),
+            (
+                "timeout_ms",
+                json!({"type": "integer", "description": "Timeout in milliseconds for open/wait operations."}),
+            ),
+            (
+                "path",
+                json!({"type": "string", "description": "Local file path for upload."}),
+            ),
+        ] {
+            properties.insert(name.into(), schema);
+        }
+        properties.insert(
+            "format".into(),
+            json!({
+                "type": "string",
+                "enum": ["annotated", "text", "textFast", "html", "title"],
+                "description": "Content format for get_content. snapshot always uses annotated."
+            }),
+        );
+        properties.insert(
+            "position".into(),
+            json!({
+                "type": "string",
+                "enum": ["top", "bottom", "left", "right"],
+                "description": "Named scroll position for action='scroll'."
+            }),
+        );
+        properties.insert(
+            "behavior".into(),
+            json!({
+                "type": "string",
+                "enum": ["auto", "smooth"],
+                "description": "Scroll behavior for action='scroll'."
+            }),
+        );
+        properties.insert(
+            "fields".into(),
+            json!({
+                "type": "array",
+                "description": "Fields for fill_form. Each field needs a selector and value or checked state.",
+                "items": {
+                    "type": "object",
+                    "required": ["selector"],
+                    "properties": {
+                        "selector": { "type": "string" },
+                        "value": { "type": "string" },
+                        "checked": { "type": "boolean" }
+                    }
+                }
+            }),
+        );
+        properties.insert(
+            "scroll_to".into(),
+            json!({
+                "type": "object",
+                "description": "Absolute scroll target for action='scroll'.",
+                "properties": {
+                    "x": { "type": "number" },
+                    "y": { "type": "number" }
+                }
+            }),
+        );
+
+        Value::Object(Map::from_iter([
+            ("type".into(), json!("object")),
+            ("required".into(), json!(["action"])),
+            ("properties".into(), Value::Object(properties)),
+        ]))
+    }
+
+    async fn execute(&self, input: Value, ctx: ToolContext) -> Result<ToolOutput> {
+        let params: BrowserInput = serde_json::from_value(input)?;
+        ensure_supported_browser(params.browser.as_deref())?;
+
+        match params.action.as_str() {
+            "status" => browser_status(&ctx).await,
+            "setup" => browser_setup().await,
+            other => {
+                let setup_message = ensure_ready().await?;
+                let output = execute_browser_action(other, &params, &ctx).await?;
+                Ok(match setup_message {
+                    Some(message) if !message.is_empty() => {
+                        ToolOutput::new(format!("{}\n\n{}", message, output.output))
+                            .with_title(output.title.unwrap_or_else(|| "browser".to_string()))
+                            .with_metadata(
+                                output
+                                    .metadata
+                                    .unwrap_or_else(|| json!({"setup_ran": true})),
+                            )
+                    }
+                    _ => output,
+                })
+            }
+        }
+    }
+}
+
+fn ensure_supported_browser(browser: Option<&str>) -> Result<()> {
+    match browser.unwrap_or("auto") {
+        "auto" | "firefox" => Ok(()),
+        other => anyhow::bail!(
+            "Browser backend '{}' is not wired into the built-in browser tool yet. Use auto/firefox for now.",
+            other
+        ),
+    }
+}
+
+async fn browser_status(ctx: &ToolContext) -> Result<ToolOutput> {
+    let setup_complete = crate::browser::is_setup_complete();
+    let mut metadata = json!({
+        "setup_complete": setup_complete,
+        "backend": if setup_complete { "firefox_agent_bridge" } else { "unconfigured" },
+    });
+
+    if !setup_complete {
+        return Ok(ToolOutput::new(
+            "Browser bridge is not set up. Run the browser tool with action='setup' or use `jcode browser setup`.",
+        )
+        .with_title("browser status")
+        .with_metadata(metadata));
+    }
+
+    let ping = run_bridge_command("ping", json!({}), ctx).await;
+    match ping {
+        Ok(result) => {
+            metadata["ready"] = json!(true);
+            metadata["ping"] = result;
+            Ok(
+                ToolOutput::new("Browser bridge is installed and responding.")
+                    .with_title("browser status")
+                    .with_metadata(metadata),
+            )
+        }
+        Err(err) => {
+            metadata["ready"] = json!(false);
+            metadata["error"] = json!(err.to_string());
+            Ok(ToolOutput::new(format!(
+                "Browser bridge binaries are installed, but the live bridge is not responding: {}",
+                err
+            ))
+            .with_title("browser status")
+            .with_metadata(metadata))
+        }
+    }
+}
+
+async fn browser_setup() -> Result<ToolOutput> {
+    let log = crate::browser::ensure_browser_setup().await?;
+    let setup_complete = crate::browser::is_setup_complete();
+    let title = if setup_complete {
+        "browser setup"
+    } else {
+        "browser setup (incomplete)"
+    };
+    Ok(ToolOutput::new(log).with_title(title).with_metadata(json!({
+        "setup_complete": setup_complete,
+        "backend": "firefox_agent_bridge"
+    })))
+}
+
+async fn ensure_ready() -> Result<Option<String>> {
+    if crate::browser::is_setup_complete() {
+        return Ok(None);
+    }
+    let log = crate::browser::ensure_browser_setup().await?;
+    if !crate::browser::is_setup_complete() {
+        anyhow::bail!(log);
+    }
+    Ok(Some(log))
+}
+
+async fn execute_browser_action(
+    action: &str,
+    input: &BrowserInput,
+    ctx: &ToolContext,
+) -> Result<ToolOutput> {
+    let (bridge_action, bridge_params, title) = bridge_request(action, input)?;
+
+    if bridge_action == "screenshot" {
+        return screenshot_via_bridge(&bridge_params, title, ctx).await;
+    }
+
+    let result = run_bridge_command(&bridge_action, bridge_params, ctx).await?;
+    Ok(render_browser_output(action, title, result))
+}
+
+fn bridge_request(action: &str, input: &BrowserInput) -> Result<(String, Value, String)> {
+    let bridge_action = match action {
+        "list_tabs" => "listTabs",
+        "new_tab" => "newSession",
+        "select_tab" => "setActiveTab",
+        "get_active_tab" => "getActiveTab",
+        "list_frames" => "listFrames",
+        "open" => "navigate",
+        "snapshot" => "getContent",
+        "get_content" => "getContent",
+        "click" => "click",
+        "type" => "type",
+        "fill_form" => "fillForm",
+        "select" => "fillForm",
+        "wait" => "waitFor",
+        "screenshot" => "screenshot",
+        "eval" => "evaluate",
+        "scroll" => "scroll",
+        "upload" => "uploadFile",
+        "press" => "evaluate",
+        "provider_command" => input.provider_action.as_deref().ok_or_else(|| {
+            anyhow::anyhow!("provider_action is required when action='provider_command'")
+        })?,
+        other => anyhow::bail!("Unsupported browser action: {}", other),
+    }
+    .to_string();
+
+    let mut params = Map::new();
+    apply_common_targeting(&mut params, input);
+
+    match action {
+        "new_tab" => {
+            if let Some(url) = &input.url {
+                params.insert("url".into(), json!(url));
+            }
+            if let Some(timeout_ms) = input.timeout_ms {
+                params.insert("timeoutMs".into(), json!(timeout_ms));
+            }
+        }
+        "select_tab" => {
+            let tab_id = input
+                .tab_id
+                .ok_or_else(|| anyhow::anyhow!("tab_id is required for select_tab"))?;
+            params.insert("tabId".into(), json!(tab_id));
+            if let Some(focus) = input.focus {
+                params.insert("focus".into(), json!(focus));
+            }
+        }
+        "open" => {
+            let url = input
+                .url
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("url is required for open"))?;
+            params.insert("url".into(), json!(url));
+            params.insert("wait".into(), json!(input.wait.unwrap_or(true)));
+            if let Some(new_tab) = input.new_tab {
+                params.insert("newTab".into(), json!(new_tab));
+            }
+            if let Some(timeout_ms) = input.timeout_ms {
+                params.insert("timeoutMs".into(), json!(timeout_ms));
+            }
+        }
+        "snapshot" => {
+            params.insert("format".into(), json!("annotated"));
+        }
+        "get_content" => {
+            params.insert(
+                "format".into(),
+                json!(input.format.as_deref().unwrap_or("text")),
+            );
+        }
+        "click" => {
+            if input.selector.is_none()
+                && input.text.is_none()
+                && input.x.is_none()
+                && input.y.is_none()
+            {
+                anyhow::bail!("click requires selector, text, or x/y coordinates");
+            }
+            if let Some(x) = input.x {
+                params.insert("x".into(), json!(x));
+            }
+            if let Some(y) = input.y {
+                params.insert("y".into(), json!(y));
+            }
+        }
+        "type" => {
+            let text = input
+                .text
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("text is required for type"))?;
+            params.insert("text".into(), json!(text));
+            if let Some(clear) = input.clear {
+                params.insert("clear".into(), json!(clear));
+            }
+            if let Some(submit) = input.submit {
+                params.insert("submit".into(), json!(submit));
+            }
+        }
+        "fill_form" => {
+            let fields = input
+                .fields
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("fields are required for fill_form"))?;
+            let mapped: Vec<Value> = fields
+                .iter()
+                .map(|field| {
+                    let mut obj = Map::new();
+                    obj.insert("selector".into(), json!(field.selector));
+                    if let Some(value) = &field.value {
+                        obj.insert("value".into(), json!(value));
+                    }
+                    if let Some(checked) = field.checked {
+                        obj.insert("checked".into(), json!(checked));
+                    }
+                    Value::Object(obj)
+                })
+                .collect();
+            params.insert("fields".into(), Value::Array(mapped));
+        }
+        "select" => {
+            let selector = input
+                .selector
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("selector is required for select"))?;
+            let value = input.text.as_deref().ok_or_else(|| {
+                anyhow::anyhow!("text is required for select and is used as the option value")
+            })?;
+            params.insert(
+                "fields".into(),
+                json!([{ "selector": selector, "value": value }]),
+            );
+        }
+        "wait" => {
+            if input.selector.is_none() && input.text.is_none() && input.contains.is_none() {
+                anyhow::bail!("wait requires selector, text, or contains");
+            }
+            if let Some(timeout_ms) = input.timeout_ms {
+                params.insert("timeout".into(), json!(timeout_ms));
+            }
+            if let Some(contains) = &input.contains {
+                params.insert("contains".into(), json!(contains));
+            }
+        }
+        "screenshot" => {}
+        "eval" => {
+            let script = input
+                .script
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("script is required for eval"))?;
+            params.insert("script".into(), json!(script));
+            if let Some(page_world) = input.page_world {
+                params.insert("pageWorld".into(), json!(page_world));
+            }
+        }
+        "scroll" => {
+            if let Some(x) = input.x {
+                params.insert("x".into(), json!(x));
+            }
+            if let Some(y) = input.y {
+                params.insert("y".into(), json!(y));
+            }
+            if let Some(position) = &input.position {
+                params.insert("position".into(), json!(position));
+            }
+            if let Some(behavior) = &input.behavior {
+                params.insert("behavior".into(), json!(behavior));
+            }
+            if let Some(scroll_to) = &input.scroll_to {
+                let mut target = Map::new();
+                if let Some(x) = scroll_to.x {
+                    target.insert("x".into(), json!(x));
+                }
+                if let Some(y) = scroll_to.y {
+                    target.insert("y".into(), json!(y));
+                }
+                params.insert("scrollTo".into(), Value::Object(target));
+            }
+            if !params.contains_key("x")
+                && !params.contains_key("y")
+                && !params.contains_key("selector")
+                && !params.contains_key("position")
+                && !params.contains_key("scrollTo")
+            {
+                anyhow::bail!("scroll requires x/y, selector, position, or scroll_to");
+            }
+        }
+        "upload" => {
+            let path = input
+                .path
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("path is required for upload"))?;
+            params.insert("path".into(), json!(path));
+        }
+        "press" => {
+            let script = build_press_script(input.key.as_deref(), input.selector.as_deref())?;
+            params.insert("script".into(), json!(script));
+            params.insert("pageWorld".into(), json!(true));
+        }
+        "provider_command" => {
+            if let Some(raw) = &input.params {
+                return Ok((bridge_action, raw.clone(), format!("browser {}", action)));
+            }
+        }
+        _ => {}
+    }
+
+    Ok((
+        bridge_action,
+        Value::Object(params),
+        format!("browser {}", action),
+    ))
+}
+
+fn apply_common_targeting(params: &mut Map<String, Value>, input: &BrowserInput) {
+    if let Some(tab_id) = input.tab_id {
+        params.insert("tabId".into(), json!(tab_id));
+    }
+    if let Some(frame_id) = input.frame_id {
+        params.insert("frameId".into(), json!(frame_id));
+    }
+    if let Some(all_frames) = input.all_frames {
+        params.insert("allFrames".into(), json!(all_frames));
+    }
+    if let Some(selector) = &input.selector {
+        params.insert("selector".into(), json!(selector));
+    }
+    if let Some(text) = &input.text {
+        params.insert("text".into(), json!(text));
+    }
+}
+
+fn build_press_script(key: Option<&str>, selector: Option<&str>) -> Result<String> {
+    let key = key.ok_or_else(|| anyhow::anyhow!("key is required for press"))?;
+    let selector_literal = selector.map(|s| serde_json::to_string(s)).transpose()?;
+    let selector_expr = selector_literal
+        .map(|s| format!("document.querySelector({})", s))
+        .unwrap_or_else(|| "null".to_string());
+    let key_literal = serde_json::to_string(key)?;
+    Ok(format!(
+        r#"return (() => {{
+  const target = {selector_expr} || document.activeElement || document.body;
+  if (!target) throw new Error('No target available for key press');
+  if (typeof target.focus === 'function') target.focus();
+  const key = {key_literal};
+  const eventInit = {{ key, bubbles: true, cancelable: true }};
+  target.dispatchEvent(new KeyboardEvent('keydown', eventInit));
+  target.dispatchEvent(new KeyboardEvent('keypress', eventInit));
+  if (key === 'Enter' && target.form && typeof target.form.submit === 'function') {{
+    target.form.submit();
+  }}
+  target.dispatchEvent(new KeyboardEvent('keyup', eventInit));
+  return {{ pressed: true, key, tag: target.tagName || null }};
+}})();"#
+    ))
+}
+
+async fn run_bridge_command(action: &str, params: Value, ctx: &ToolContext) -> Result<Value> {
+    let bin = crate::browser::browser_binary_path();
+    if !bin.exists() {
+        anyhow::bail!(
+            "Browser bridge binary is not installed yet. Run the browser tool with action='setup'."
+        );
+    }
+
+    let params_json = serde_json::to_string(&params)?;
+    let mut command = tokio::process::Command::new(&bin);
+    command.arg(action).arg(&params_json);
+    command.stdin(std::process::Stdio::null());
+    command.stdout(std::process::Stdio::piped());
+    command.stderr(std::process::Stdio::piped());
+
+    #[cfg(not(windows))]
+    if std::env::var("BROWSER_SESSION").is_err()
+        && let Some(session_name) = crate::browser::ensure_browser_session(&ctx.session_id)
+    {
+        command.env("BROWSER_SESSION", session_name);
+    }
+
+    let output = command
+        .output()
+        .await
+        .with_context(|| format!("Failed to run browser bridge action '{}'.", action))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+
+    if !output.status.success() {
+        let details = if stderr.is_empty() {
+            stdout
+        } else if stdout.is_empty() {
+            stderr
+        } else {
+            format!("{}\n{}", stderr, stdout)
+        };
+        anyhow::bail!(details);
+    }
+
+    if stdout.is_empty() {
+        return Ok(json!({ "ok": true }));
+    }
+
+    serde_json::from_str(&stdout).or_else(|_| Ok(json!({ "raw": stdout })))
+}
+
+async fn screenshot_via_bridge(
+    params: &Value,
+    title: String,
+    ctx: &ToolContext,
+) -> Result<ToolOutput> {
+    let filename = temp_screenshot_path();
+    let mut screenshot_params = params.clone();
+    if let Some(map) = screenshot_params.as_object_mut() {
+        map.insert(
+            "filename".into(),
+            json!(filename.to_string_lossy().to_string()),
+        );
+    }
+
+    let result = run_bridge_command("screenshot", screenshot_params, ctx).await?;
+    let saved = result
+        .get("saved")
+        .and_then(|v| v.as_str())
+        .map(PathBuf::from)
+        .unwrap_or(filename);
+
+    let mut output = ToolOutput::new(format!(
+        "Captured browser screenshot to {}.",
+        saved.display()
+    ))
+    .with_title(title)
+    .with_metadata(result.clone());
+
+    if let Ok(bytes) = tokio::fs::read(&saved).await {
+        output = output.with_labeled_image(
+            "image/png",
+            STANDARD.encode(&bytes),
+            format!("browser screenshot: {}", saved.display()),
+        );
+        let _ = tokio::fs::remove_file(&saved).await;
+    }
+
+    Ok(output)
+}
+
+fn temp_screenshot_path() -> PathBuf {
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    std::env::temp_dir().join(format!("jcode-browser-{}.png", ts))
+}
+
+fn render_browser_output(action: &str, title: String, result: Value) -> ToolOutput {
+    let body = match action {
+        "snapshot" => result
+            .get("content")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| serde_json::to_string_pretty(&result).unwrap_or_default()),
+        "get_content" => format_content_result(&result),
+        "eval" => format_eval_result(&result),
+        _ => serde_json::to_string_pretty(&result).unwrap_or_else(|_| result.to_string()),
+    };
+
+    ToolOutput::new(body)
+        .with_title(title)
+        .with_metadata(result)
+}
+
+fn format_content_result(result: &Value) -> String {
+    if let Some(content) = result.get("content").and_then(|v| v.as_str()) {
+        return content.to_string();
+    }
+    if let Some(text) = result.get("text").and_then(|v| v.as_str()) {
+        return text.to_string();
+    }
+    if let Some(html) = result.get("html").and_then(|v| v.as_str()) {
+        return html.to_string();
+    }
+    if let Some(title) = result.get("title").and_then(|v| v.as_str()) {
+        if let Some(url) = result.get("url").and_then(|v| v.as_str()) {
+            return format!("{}\n{}", title, url);
+        }
+        return title.to_string();
+    }
+    serde_json::to_string_pretty(result).unwrap_or_default()
+}
+
+fn format_eval_result(result: &Value) -> String {
+    let value = result.get("result").cloned().unwrap_or(Value::Null);
+    let rendered = if let Some(s) = value.as_str() {
+        s.to_string()
+    } else {
+        serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string())
+    };
+
+    match result.get("type").and_then(|v| v.as_str()) {
+        Some(kind) => format!("{}\n\n(type: {})", rendered, kind),
+        None => rendered,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn press_script_uses_selector_when_present() {
+        let script = build_press_script(Some("Enter"), Some("#email")).unwrap();
+        assert!(script.contains("document.querySelector"));
+        assert!(script.contains("Enter"));
+    }
+
+    #[test]
+    fn content_formatter_prefers_content_text() {
+        let rendered = format_content_result(&json!({"content": "hello", "title": "x"}));
+        assert_eq!(rendered, "hello");
+    }
+}

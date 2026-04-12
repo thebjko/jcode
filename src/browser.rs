@@ -22,7 +22,7 @@ fn browser_dir() -> PathBuf {
     jcode_dir().join("browser")
 }
 
-fn browser_binary_path() -> PathBuf {
+pub fn browser_binary_path() -> PathBuf {
     let dir = browser_dir();
     #[cfg(windows)]
     {
