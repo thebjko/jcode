@@ -91,8 +91,14 @@ impl UsageLog {
     pub fn record(&mut self, record: UsageRecord) {
         self.records.push(record);
         self.unsaved_count += 1;
-        if self.unsaved_count >= SAVE_INTERVAL {
-            let _ = self.save();
+        if self.unsaved_count >= SAVE_INTERVAL
+            && let Err(err) = self.save()
+        {
+            crate::logging::warn(&format!(
+                "Failed to persist ambient usage log '{}': {}",
+                self.path.display(),
+                err
+            ));
         }
     }
 

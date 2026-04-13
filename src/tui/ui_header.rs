@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use super::box_utils::render_rounded_box;
 use super::changelog::get_unseen_changelog_entries;
 use super::{

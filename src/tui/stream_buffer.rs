@@ -1,7 +1,5 @@
 //! Semantic stream buffer - chunks streaming text at natural boundaries
 
-#![allow(dead_code)]
-
 use serde::Serialize;
 use std::time::{Duration, Instant};
 
@@ -49,6 +47,7 @@ impl StreamBuffer {
     }
 
     /// Check if buffer should be flushed due to timeout
+    #[allow(dead_code)]
     pub fn should_flush(&self) -> bool {
         !self.buffer.is_empty() && self.last_flush.elapsed() > self.timeout
     }
@@ -64,6 +63,7 @@ impl StreamBuffer {
     }
 
     /// Check if buffer is empty
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.buffer.is_empty()
     }

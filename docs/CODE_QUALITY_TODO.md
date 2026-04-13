@@ -30,7 +30,7 @@ Status values:
 - [ ] Split `tests/e2e/main.rs` by feature area
   - Started 2026-03-24: extracted feature modules `session_flow`, `transport`, `provider_behavior`, `binary_integration`, `safety`, and `ambient`
   - Completed 2026-03-24: extracted shared helpers into `tests/e2e/test_support/mod.rs`
-- [ ] Continue splitting `src/server.rs` into focused submodules
+- [ ] Continue splitting `src/server.rs` into focused submodules ([#53](https://github.com/1jehuang/jcode/issues/53))
   - Progress 2026-03-24: extracted shared server/swarm state into `src/server/state.rs`
   - Progress 2026-03-24: extracted socket/bootstrap helpers into `src/server/socket.rs`
   - Progress 2026-03-24: extracted reload marker/signal state into `src/server/reload_state.rs`
@@ -38,17 +38,17 @@ Status values:
 - [ ] Split `src/agent.rs` into orchestration, stream, interrupt, and tool-exec modules
 
 ### Next wave
-- [ ] Split `src/provider/mod.rs` into traits, pricing, routes, and shared HTTP helpers
-- [ ] Split `src/provider/openai.rs` into request, stream, tool, and response modules
-- [ ] Split `src/tui/ui.rs` by render responsibility
-- [ ] Split `src/tui/info_widget.rs` by widget/domain sections
+- [ ] Split `src/provider/mod.rs` into traits, pricing, routes, and shared HTTP helpers ([#52](https://github.com/1jehuang/jcode/issues/52))
+- [ ] Split `src/provider/openai.rs` into request, stream, tool, and response modules ([#52](https://github.com/1jehuang/jcode/issues/52))
+- [ ] Split `src/tui/ui.rs` by render responsibility ([#51](https://github.com/1jehuang/jcode/issues/51))
+- [ ] Split `src/tui/info_widget.rs` by widget/domain sections ([#51](https://github.com/1jehuang/jcode/issues/51))
 
 ## Phase 3: Error Handling Hardening
 
 - [ ] Count production `unwrap` / `expect` separately from test-only usages
 - [ ] Replace easy production `unwrap` / `expect` hotspots with explicit errors
 - [ ] Add better error context for provider stream parsing failures
-- [ ] Add better error context for reload and socket lifecycle failures
+- [ ] Add better error context for reload and socket lifecycle failures ([#53](https://github.com/1jehuang/jcode/issues/53))
 
 ## Phase 4: Test Strategy Improvements
 
@@ -73,3 +73,4 @@ Status values:
 - [ ] Land this todo list
 - [x] Tighten CI guardrails
 - [ ] Begin the first high-ROI cleanup or split
+  - Follow-up tracking issues: #51, #52, #53, #54

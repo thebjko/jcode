@@ -1,7 +1,5 @@
 //! MCP Tool - wraps MCP server tools for jcode's tool system
 
-#![allow(dead_code)]
-
 use super::manager::McpManager;
 use super::protocol::{ContentBlock, McpToolDef};
 use crate::tool::{Tool, ToolContext, ToolOutput};
@@ -29,11 +27,6 @@ impl McpTool {
             tool_def,
             manager,
         }
-    }
-
-    /// Generate a prefixed tool name (mcp__server__toolname)
-    pub fn prefixed_name(&self) -> String {
-        format!("mcp__{}__{}", self.server_name, self.tool_def.name)
     }
 }
 

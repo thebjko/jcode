@@ -4,8 +4,6 @@
 //!
 //! Supports thread-local context for server, session, provider, and model info.
 
-#![allow(dead_code)]
-
 use chrono::Local;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -31,6 +29,7 @@ thread_local! {
 }
 
 /// Set the logging context for the current thread
+#[allow(dead_code)]
 pub fn set_context(ctx: LogContext) {
     if with_task_context_mut(|task_ctx| {
         *task_ctx = ctx.clone();
@@ -86,6 +85,7 @@ pub fn set_provider_info(provider: &str, model: &str) {
 }
 
 /// Clear the logging context for the current thread
+#[allow(dead_code)]
 #[expect(
     clippy::collapsible_if,
     reason = "Logger lock + optional logger branching is intentionally straightforward"
@@ -172,7 +172,6 @@ fn context_prefix_for(ctx: &LogContext) -> String {
 
 pub struct Logger {
     file: File,
-    path: PathBuf,
 }
 
 fn log_dir() -> Option<PathBuf> {
@@ -194,15 +193,20 @@ impl Logger {
             .open(&path)
             .ok()?;
 
-        Some(Self { file, path })
+        Some(Self { file })
     }
 
     fn write(&mut self, level: &str, message: &str) {
         let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
         let ctx = context_prefix();
         let line = format!("[{}] [{}] {}{}\n", timestamp, level, ctx, message);
-        let _ = self.file.write_all(line.as_bytes());
-        let _ = self.file.flush();
+        if let Err(err) = self.file.write_all(line.as_bytes()) {
+            eprintln!("jcode logger write failed: {err}");
+            return;
+        }
+        if let Err(err) = self.file.flush() {
+            eprintln!("jcode logger flush failed: {err}");
+        }
     }
 }
 
@@ -327,8 +331,10 @@ pub fn cleanup_old_logs() {
                 && let Ok(modified) = metadata.modified()
             {
                 let modified: chrono::DateTime<Local> = modified.into();
-                if modified < cutoff {
-                    let _ = fs::remove_file(entry.path());
+                if modified < cutoff
+                    && let Err(err) = fs::remove_file(entry.path())
+                {
+                    eprintln!("jcode logger cleanup failed: {err}");
                 }
             }
         }
