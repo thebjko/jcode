@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 use ratatui::prelude::*;
 use serde::Serialize;
@@ -365,13 +363,8 @@ impl IncrementalMarkdownRenderer {
         self.rendered_lines.clone()
     }
 
-    /// Find a safe point to start re-rendering from
-    fn find_safe_rerender_point(&self) -> usize {
-        // Start from the last checkpoint
-        self.last_checkpoint
-    }
-
     /// Find the last complete block in text
+    #[cfg(test)]
     fn find_last_complete_block(&self, text: &str) -> Option<usize> {
         self.find_last_complete_block_checkpoint(text)
             .map(|checkpoint| checkpoint.offset)
@@ -692,12 +685,6 @@ fn with_blockquote_prefix(line: Line<'static>, blockquote_depth: usize) -> Line<
     match alignment {
         Some(align) => line.alignment(align),
         None => line.left_aligned(),
-    }
-}
-
-fn flush_current_line(lines: &mut Vec<Line<'static>>, current_spans: &mut Vec<Span<'static>>) {
-    if !current_spans.is_empty() {
-        lines.push(Line::from(std::mem::take(current_spans)));
     }
 }
 

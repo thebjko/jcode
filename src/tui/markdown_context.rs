@@ -61,6 +61,7 @@ pub(super) fn effective_markdown_spacing_mode() -> MarkdownSpacingMode {
         .with(|mode| mode.get().unwrap_or(config().display.markdown_spacing))
 }
 
+#[cfg(test)]
 pub(crate) fn with_markdown_spacing_mode_override<T>(
     mode: Option<MarkdownSpacingMode>,
     f: impl FnOnce() -> T,
