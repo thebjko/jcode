@@ -11,6 +11,10 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Instant;
+#[path = "session_active_pids.rs"]
+mod active_pids;
+use active_pids::{active_pids_dir, register_active_pid, unregister_active_pid};
+pub use active_pids::{active_session_ids, find_active_session_id_by_pid};
 
 /// Session exit status - why the session ended
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -2461,52 +2465,6 @@ fn is_pid_running(pid: u32) -> bool {
 // Written on mark_active(), removed on mark_closed()/mark_crashed().
 // On startup we only need to scan this tiny directory (usually 0-5 files)
 // instead of the entire sessions/ directory (tens of thousands of files).
-
-fn active_pids_dir() -> Option<std::path::PathBuf> {
-    storage::jcode_dir().ok().map(|d| d.join("active_pids"))
-}
-
-fn register_active_pid(session_id: &str, pid: u32) {
-    if let Some(dir) = active_pids_dir() {
-        let _ = std::fs::create_dir_all(&dir);
-        let _ = std::fs::write(dir.join(session_id), pid.to_string());
-    }
-}
-
-fn unregister_active_pid(session_id: &str) {
-    if let Some(dir) = active_pids_dir() {
-        let _ = std::fs::remove_file(dir.join(session_id));
-    }
-}
-
-/// Find the active session ID currently owned by the given process ID.
-pub fn find_active_session_id_by_pid(pid: u32) -> Option<String> {
-    let dir = active_pids_dir()?;
-    for entry in std::fs::read_dir(dir).ok()? {
-        let entry = entry.ok()?;
-        let session_id = entry.file_name().to_string_lossy().to_string();
-        let stored = std::fs::read_to_string(entry.path()).ok()?;
-        if stored.trim().parse::<u32>().ok()? == pid {
-            return Some(session_id);
-        }
-    }
-    None
-}
-
-/// List active session IDs currently tracked in ~/.jcode/active_pids.
-pub fn active_session_ids() -> Vec<String> {
-    let Some(dir) = active_pids_dir() else {
-        return Vec::new();
-    };
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return Vec::new();
-    };
-
-    entries
-        .filter_map(|entry| entry.ok())
-        .map(|entry| entry.file_name().to_string_lossy().to_string())
-        .collect()
-}
 
 /// Find a session by ID or memorable name
 /// If the input doesn't look like a full session ID (doesn't contain underscore followed by digits),
