@@ -1343,50 +1343,6 @@ pub(super) fn render_batch_subcall_line(
     Line::from(spans)
 }
 
-pub(super) fn format_batch_running_tool(tool: &ToolCall, bash_max_chars: usize) -> String {
-    let prefix = batch_subcall_index(&tool.id)
-        .map(|idx| format!("#{} ", idx))
-        .unwrap_or_default();
-    let detail = get_tool_summary_with_budget(tool, bash_max_chars, None);
-
-    if detail.is_empty() {
-        format!("{}{}", prefix, tool.name)
-    } else {
-        format!("{}{} ({})", prefix, tool.name, detail)
-    }
-}
-
-pub(super) fn summarize_batch_running_tools(
-    running: &[ToolCall],
-    max_visible: usize,
-    bash_max_chars: usize,
-) -> Option<String> {
-    if running.is_empty() {
-        return None;
-    }
-
-    let mut running_sorted = running.to_vec();
-    running_sorted.sort_by(|a, b| {
-        batch_subcall_index(&a.id)
-            .unwrap_or(usize::MAX)
-            .cmp(&batch_subcall_index(&b.id).unwrap_or(usize::MAX))
-            .then_with(|| a.id.cmp(&b.id))
-    });
-
-    let visible = max_visible.max(1);
-    let mut labels: Vec<String> = running_sorted
-        .iter()
-        .take(visible)
-        .map(|tool| format_batch_running_tool(tool, bash_max_chars))
-        .collect();
-
-    if running_sorted.len() > visible {
-        labels.push(format!("+{} more", running_sorted.len() - visible));
-    }
-
-    Some(labels.join(", "))
-}
-
 pub(super) fn summarize_batch_running_tools_compact(running: &[ToolCall]) -> Option<String> {
     if running.is_empty() {
         return None;
