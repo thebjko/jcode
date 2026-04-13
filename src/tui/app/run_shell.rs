@@ -21,6 +21,10 @@ impl App {
             }
 
             if needs_redraw {
+                if self.force_full_redraw {
+                    terminal.clear()?;
+                    self.force_full_redraw = false;
+                }
                 terminal.draw(|frame| crate::tui::ui::draw(frame, &self))?;
                 if let Some(native) = handterm_native_scroll.as_mut() {
                     native.sync_from_app(&self);
@@ -62,6 +66,7 @@ impl App {
                     } => {
                         if let Some(command) = command {
                             self.apply_handterm_native_scroll(command);
+                            self.request_full_redraw();
                             needs_redraw = true;
                         }
                     }
@@ -104,6 +109,10 @@ impl App {
                 }
             }
             if needs_redraw {
+                if self.force_full_redraw {
+                    terminal.clear()?;
+                    self.force_full_redraw = false;
+                }
                 terminal.draw(|frame| crate::tui::ui::draw(frame, &self))?;
                 needs_redraw = false;
             }
@@ -148,6 +157,10 @@ impl App {
                 }
 
                 if needs_redraw {
+                    if self.force_full_redraw {
+                        terminal.clear()?;
+                        self.force_full_redraw = false;
+                    }
                     terminal.draw(|frame| crate::tui::ui::draw(frame, &self))?;
                     if let Some(native) = handterm_native_scroll.as_mut() {
                         native.sync_from_app(&self);
@@ -196,6 +209,7 @@ impl App {
                     } => {
                         if let Some(command) = command {
                             self.apply_handterm_native_scroll(command);
+                            self.request_full_redraw();
                             needs_redraw = true;
                         }
                     }

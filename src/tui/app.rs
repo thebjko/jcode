@@ -709,6 +709,9 @@ pub struct App {
     pending_login: Option<PendingLogin>,
     /// Pending account picker follow-up input (new label or setting value)
     pending_account_input: Option<auth::PendingAccountInput>,
+    /// One-shot flag: force the next paint to clear the terminal first.
+    /// Needed after native terminal scrolls mutate the screen outside ratatui's diff model.
+    force_full_redraw: bool,
     /// Last mouse scroll event timestamp (for trackpad velocity detection)
     last_mouse_scroll: Option<Instant>,
     /// Active smooth-scroll target for queued mouse-wheel motion.

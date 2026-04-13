@@ -1347,7 +1347,15 @@ impl App {
         Ok(())
     }
 
-    pub(super) fn redraw_now(&self, terminal: &mut DefaultTerminal) -> Result<()> {
+    pub(super) fn request_full_redraw(&mut self) {
+        self.force_full_redraw = true;
+    }
+
+    pub(super) fn redraw_now(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
+        if self.force_full_redraw {
+            terminal.clear()?;
+            self.force_full_redraw = false;
+        }
         terminal.draw(|frame| crate::tui::ui::draw(frame, self))?;
         Ok(())
     }
