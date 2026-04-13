@@ -1,5 +1,5 @@
-
 use super::*;
+use crate::agent::env_support::EnvSnapshotDetail;
 use crate::message::{Message, StreamEvent, ToolDefinition};
 use crate::provider::{EventStream, Provider};
 use crate::tool::Registry;

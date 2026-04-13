@@ -2,6 +2,7 @@
 #![cfg_attr(test, allow(clippy::await_holding_lock))]
 
 mod compaction_support;
+mod env_support;
 mod interrupts;
 mod message_support;
 mod prompt_support;
@@ -14,7 +15,7 @@ use self::stream_support::{
     send_stream_keepalive_broadcast, send_stream_keepalive_mpsc, stream_keepalive_ticker,
 };
 use self::tool_support::{print_tool_summary, tool_output_to_content_blocks};
-use self::utils::{git_state_for_dir, trace_enabled};
+use self::utils::trace_enabled;
 use crate::build;
 use crate::bus::{Bus, BusEvent, SubagentStatus, ToolEvent, ToolStatus};
 use crate::cache_tracker::CacheTracker;
@@ -26,17 +27,14 @@ use crate::message::{
 };
 use crate::protocol::{HistoryMessage, ServerEvent};
 use crate::provider::{NativeToolResult, Provider};
-use crate::session::{
-    EnvSnapshot, GitState, Session, SessionStatus, StoredDisplayRole, StoredMessage,
-};
+use crate::session::{GitState, Session, SessionStatus, StoredDisplayRole, StoredMessage};
 use crate::skill::SkillRegistry;
 use crate::tool::{Registry, ToolContext, ToolExecutionMode};
 use anyhow::Result;
-use chrono::Utc;
 use futures::StreamExt;
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, LazyLock, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, mpsc};
@@ -63,27 +61,6 @@ static JCODE_REPO_SOURCE_STATE: LazyLock<(Option<String>, Option<bool>)> = LazyL
 static WORKING_GIT_STATE_CACHE: LazyLock<StdMutex<HashMap<PathBuf, Option<GitState>>>> =
     LazyLock::new(|| StdMutex::new(HashMap::new()));
 const STREAM_KEEPALIVE_PONG_ID: u64 = 0;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum EnvSnapshotDetail {
-    Minimal,
-    Full,
-}
-
-fn cached_git_state_for_dir(dir: &Path) -> Option<GitState> {
-    let cache_key = dir.to_path_buf();
-    if let Ok(cache) = WORKING_GIT_STATE_CACHE.lock()
-        && let Some(state) = cache.get(&cache_key)
-    {
-        return state.clone();
-    }
-
-    let state = git_state_for_dir(dir);
-    if let Ok(mut cache) = WORKING_GIT_STATE_CACHE.lock() {
-        cache.insert(cache_key, state.clone());
-    }
-    state
-}
 
 /// Token usage from the last API request
 #[derive(Debug, Clone, Default, serde::Serialize)]
@@ -601,69 +578,6 @@ impl Agent {
     /// Get the last token usage from the most recent API request
     pub fn last_usage(&self) -> &TokenUsage {
         &self.last_usage
-    }
-
-    /// Set logging context for this agent's session/provider
-    fn set_log_context(&self) {
-        logging::set_session(&self.session.id);
-        logging::set_provider_info(self.provider.name(), &self.provider.model());
-    }
-
-    /// Record a lightweight environment snapshot for post-mortem debugging
-    fn log_env_snapshot(&mut self, reason: &str) {
-        let snapshot = self.build_env_snapshot(reason, self.env_snapshot_detail());
-        self.session.record_env_snapshot(snapshot.clone());
-        if !self.session.messages.is_empty() {
-            let _ = self.session.save();
-        }
-        if let Ok(json) = serde_json::to_string(&snapshot) {
-            logging::info(&format!("ENV_SNAPSHOT {}", json));
-        } else {
-            logging::info("ENV_SNAPSHOT {}");
-        }
-    }
-
-    fn env_snapshot_detail(&self) -> EnvSnapshotDetail {
-        if self.session.messages.is_empty() {
-            EnvSnapshotDetail::Minimal
-        } else {
-            EnvSnapshotDetail::Full
-        }
-    }
-
-    fn build_env_snapshot(&self, reason: &str, detail: EnvSnapshotDetail) -> EnvSnapshot {
-        let (jcode_git_hash, jcode_git_dirty) = match detail {
-            EnvSnapshotDetail::Full => JCODE_REPO_SOURCE_STATE.clone(),
-            EnvSnapshotDetail::Minimal => (None, None),
-        };
-
-        let working_dir = self.session.working_dir.clone();
-        let working_git = match detail {
-            EnvSnapshotDetail::Full => working_dir
-                .as_deref()
-                .and_then(|dir| cached_git_state_for_dir(Path::new(dir))),
-            EnvSnapshotDetail::Minimal => None,
-        };
-
-        EnvSnapshot {
-            captured_at: Utc::now(),
-            reason: reason.to_string(),
-            session_id: self.session.id.clone(),
-            working_dir,
-            provider: self.provider.name().to_string(),
-            model: self.provider.model().to_string(),
-            jcode_version: env!("JCODE_VERSION").to_string(),
-            jcode_git_hash,
-            jcode_git_dirty,
-            os: std::env::consts::OS.to_string(),
-            arch: std::env::consts::ARCH.to_string(),
-            pid: std::process::id(),
-            is_selfdev: self.session.is_self_dev(),
-            is_debug: self.session.is_debug,
-            is_canary: self.session.is_canary,
-            testing_build: self.session.testing_build.clone(),
-            working_git,
-        }
     }
 
     pub fn message_count(&self) -> usize {
