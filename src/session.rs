@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use crate::id::{extract_session_name, new_id, new_memorable_session_id};
 use crate::message::{ContentBlock, Message, Role, ToolCall};
 use crate::storage;
@@ -867,18 +865,10 @@ impl Session {
         }
     }
 
-    fn mark_memory_injections_full_dirty(&mut self) {
-        self.persist_state.memory_injections_mode = PersistVectorMode::Full;
-    }
-
     fn mark_replay_events_append_dirty(&mut self) {
         if self.persist_state.replay_events_mode != PersistVectorMode::Full {
             self.persist_state.replay_events_mode = PersistVectorMode::Append;
         }
-    }
-
-    fn mark_replay_events_full_dirty(&mut self) {
-        self.persist_state.replay_events_mode = PersistVectorMode::Full;
     }
 
     fn metadata_requires_snapshot(prev: &SessionJournalMeta, current: &SessionJournalMeta) -> bool {
