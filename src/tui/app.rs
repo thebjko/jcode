@@ -37,6 +37,7 @@ use tokio::time::interval;
 mod auth;
 mod catchup;
 mod commands;
+mod commands_review;
 mod conversation_state;
 mod copy_selection;
 mod debug;
