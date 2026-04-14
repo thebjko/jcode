@@ -12,7 +12,7 @@ const LUMINANCE: &[u8] = b".,-~:;=!*#$@";
 
 const STARTUP_VARIANTS: &[&str] = &["donut", "globe", "cube", "octahedron", "lorenz", "rabbit"];
 
-const IDLE_VARIANTS: &[&str] = &["donut", "pulse_donut", "three_rings", "orbit_rings"];
+const IDLE_VARIANTS: &[&str] = &["donut", "three_rings", "orbit_rings", "cube"];
 
 struct RenderBuffers {
     output: Vec<Vec<u8>>,
@@ -145,74 +145,6 @@ fn render_startup_animation(
         "black_hole" => render_black_hole(elapsed, width, height),
         _ => render_donut(elapsed, width, height),
     }
-}
-
-fn overlay_ascii_art(
-    base: Vec<String>,
-    overlay: &[String],
-    origin_x: usize,
-    origin_y: usize,
-    clear_background: bool,
-) -> Vec<String> {
-    let mut rows: Vec<Vec<u8>> = base.into_iter().map(String::into_bytes).collect();
-
-    if clear_background {
-        let clear_width = overlay.iter().map(|line| line.len()).max().unwrap_or(0);
-        let clear_height = overlay.len();
-
-        let clear_x0 = origin_x.saturating_sub(1);
-        let clear_y0 = origin_y.saturating_sub(1);
-        let clear_x1 = origin_x.saturating_add(clear_width.saturating_add(1));
-        let clear_y1 = origin_y.saturating_add(clear_height.saturating_add(1));
-
-        for y in clear_y0..clear_y1.min(rows.len()) {
-            if let Some(row) = rows.get_mut(y) {
-                let row_len = row.len();
-                let end_x = clear_x1.min(row_len);
-                if clear_x0 < end_x {
-                    row[clear_x0..end_x].fill(b' ');
-                }
-            }
-        }
-    }
-
-    for (dy, overlay_line) in overlay.iter().enumerate() {
-        let y = origin_y + dy;
-        if y >= rows.len() {
-            break;
-        }
-        let row = &mut rows[y];
-        for (dx, ch) in overlay_line.bytes().enumerate() {
-            if ch == b' ' {
-                continue;
-            }
-            let x = origin_x + dx;
-            if x < row.len() {
-                row[x] = ch;
-            }
-        }
-    }
-
-    rows.into_iter()
-        .map(|row| String::from_utf8(row).expect("startup splash art should stay ASCII"))
-        .collect()
-}
-
-fn render_startup_splash(elapsed: f32, width: usize, height: usize, variant: &str) -> Vec<String> {
-    let art = render_startup_animation(elapsed, width, height, variant);
-
-    if variant == "cube" || width < 32 || height < 12 {
-        return art;
-    }
-
-    let badge_width = (width / 4).clamp(10, 18);
-    let badge_height = (height / 3).clamp(6, 10);
-    let cube_badge =
-        render_cube_with_style(elapsed * 1.15 + 0.7, badge_width, badge_height, b'+', b'o');
-    let origin_x = width.saturating_sub(badge_width + 2);
-    let origin_y = 1usize.min(height.saturating_sub(badge_height));
-
-    overlay_ascii_art(art, &cube_badge, origin_x, origin_y, true)
 }
 
 fn render_black_hole(elapsed: f32, width: usize, height: usize) -> Vec<String> {
@@ -757,7 +689,7 @@ pub(super) fn build_startup_animation_lines(
     let max_w = (term_width as usize).min(80);
     let max_h = max_w / 2;
     let variant = startup_animation_variant();
-    let anim_lines = render_startup_splash(elapsed, max_w, max_h, variant);
+    let anim_lines = render_startup_animation(elapsed, max_w, max_h, variant);
 
     let mut lines = Vec::new();
     lines.push(Line::from(""));
@@ -846,7 +778,7 @@ pub(super) fn draw_idle_animation(frame: &mut Frame, app: &dyn TuiState, area: R
                 &mut bufs.lum_map,
                 &mut bufs.z_buf,
             ),
-            "pulse_donut" => sample_pulse_donut(
+            "orbit_rings" => sample_orbit_rings(
                 elapsed,
                 sw,
                 sh,
@@ -854,7 +786,7 @@ pub(super) fn draw_idle_animation(frame: &mut Frame, app: &dyn TuiState, area: R
                 &mut bufs.lum_map,
                 &mut bufs.z_buf,
             ),
-            "orbit_rings" => sample_orbit_rings(
+            "cube" => sample_cube(
                 elapsed,
                 sw,
                 sh,
@@ -998,7 +930,46 @@ fn sample_donut(
     }
 }
 
-fn sample_pulse_donut(
+fn idle_animation_variant() -> &'static str {
+    choose_animation_variant(IDLE_VARIANTS, 0x4944_4c45_414e_494d)
+}
+
+fn plot_idle_sample(
+    sw: usize,
+    sh: usize,
+    hit: &mut [bool],
+    lum_map: &mut [f32],
+    z_buf: &mut [f32],
+    x: f32,
+    y: f32,
+    z: f32,
+    cam_dist: f32,
+    scale_base: f32,
+    aspect: f32,
+    lum: f32,
+) {
+    let d = cam_dist + z;
+    if d < 0.1 {
+        return;
+    }
+
+    let proj = cam_dist / d;
+    let xp = (sw as f32 / 2.0 + x * proj * scale_base) as isize;
+    let yp = (sh as f32 / 2.0 - y * proj * scale_base * aspect) as isize;
+    if xp < 0 || (xp as usize) >= sw || yp < 0 || (yp as usize) >= sh {
+        return;
+    }
+
+    let idx = yp as usize * sw + xp as usize;
+    let depth = 1.0 / d;
+    if depth > z_buf[idx] {
+        z_buf[idx] = depth;
+        lum_map[idx] = lum.clamp(-1.0, 1.0);
+        hit[idx] = true;
+    }
+}
+
+fn sample_cube(
     elapsed: f32,
     sw: usize,
     sh: usize,
@@ -1006,65 +977,94 @@ fn sample_pulse_donut(
     lum_map: &mut [f32],
     z_buf: &mut [f32],
 ) {
-    let a_rot = elapsed * 1.05 + (elapsed * 0.75).sin() * 0.45;
-    let b_rot = elapsed * 0.48 + (elapsed * 0.55).cos() * 0.30;
-    let cos_a = a_rot.cos();
-    let sin_a = a_rot.sin();
-    let cos_b = b_rot.cos();
-    let sin_b = b_rot.sin();
+    let rot_x = elapsed * 0.65 + (elapsed * 0.8).sin() * 0.20;
+    let rot_y = elapsed * 0.95;
+    let rot_z = elapsed * 0.35 + (elapsed * 0.55).cos() * 0.12;
+    let cam_dist = 6.8f32;
+    let aspect = 0.5f32;
+    let scale_base = (sw as f32).min(sh as f32 / aspect) * 0.46;
+    let s = 1.45f32;
 
-    let aspect = 0.5;
-    let base_r1 = 0.88f32 + 0.10 * (elapsed * 1.6).sin();
-    let base_r2 = 2.0f32 + 0.18 * (elapsed * 0.9).cos();
-    let k2 = 5.2f32;
-    let k1 = (sw as f32).min(sh as f32 / aspect) * k2 * 0.34 / (base_r1 + base_r2 + 0.25);
+    let faces = [
+        (1.0f32, 0.0f32, 0.0f32),
+        (-1.0, 0.0, 0.0),
+        (0.0, 1.0, 0.0),
+        (0.0, -1.0, 0.0),
+        (0.0, 0.0, 1.0),
+        (0.0, 0.0, -1.0),
+    ];
 
-    let mut theta: f32 = 0.0;
-    while theta < std::f32::consts::TAU {
-        let ct = theta.cos();
-        let st = theta.sin();
-        let ring_wobble = (elapsed * 1.25 + theta * 3.0).sin();
-        let r1 = base_r1 * (1.0 + 0.14 * ring_wobble);
-        let r2 = base_r2 + 0.16 * (elapsed * 0.8 + theta * 2.0).cos();
-
-        let mut phi: f32 = 0.0;
-        while phi < std::f32::consts::TAU {
-            let cp = phi.cos();
-            let sp = phi.sin();
-
-            let cx = r2 + r1 * ct;
-            let cy = r1 * st;
-
-            let x = cx * (cos_b * cp + sin_a * sin_b * sp) - cy * cos_a * sin_b;
-            let y = cx * (sin_b * cp - sin_a * cos_b * sp) + cy * cos_a * cos_b;
-            let z = k2 + cos_a * cx * sp + cy * sin_a;
-            let ooz = 1.0 / z;
-
-            let xp = (sw as f32 / 2.0 + k1 * ooz * x) as isize;
-            let yp = (sh as f32 / 2.0 - k1 * ooz * y * aspect) as isize;
-
-            let lum = (cp * ct * sin_b - cos_a * ct * sp - sin_a * st
-                + cos_b * (cos_a * st - ct * sin_a * sp)
-                + ring_wobble * 0.18)
-                .clamp(-1.0, 1.0);
-
-            if xp >= 0 && (xp as usize) < sw && yp >= 0 && (yp as usize) < sh {
-                let idx = yp as usize * sw + xp as usize;
-                if ooz > z_buf[idx] {
-                    z_buf[idx] = ooz;
-                    lum_map[idx] = lum;
-                    hit[idx] = true;
-                }
-            }
-
-            phi += 0.016;
+    for &(nx0, ny0, nz0) in &faces {
+        let (rnx, rny, rnz) = rotate_xyz(nx0, ny0, nz0, rot_x, rot_y, rot_z);
+        let face_lum = (rnx * 0.25 + rny * 0.15 + rnz * 0.90).clamp(-1.0, 1.0);
+        if face_lum < -0.25 {
+            continue;
         }
-        theta += 0.038;
-    }
-}
 
-fn idle_animation_variant() -> &'static str {
-    choose_animation_variant(IDLE_VARIANTS, 0x4944_4c45_414e_494d)
+        let mut u = -s;
+        while u <= s {
+            let mut v = -s;
+            while v <= s {
+                let (x, y, z) = if nx0 != 0.0 {
+                    (nx0 * s, u, v)
+                } else if ny0 != 0.0 {
+                    (u, ny0 * s, v)
+                } else {
+                    (u, v, nz0 * s)
+                };
+                let (rx, ry, rz) = rotate_xyz(x, y, z, rot_x, rot_y, rot_z);
+                plot_idle_sample(
+                    sw, sh, hit, lum_map, z_buf, rx, ry, rz, cam_dist, scale_base, aspect, face_lum,
+                );
+                v += 0.20;
+            }
+            u += 0.20;
+        }
+    }
+
+    let verts: [(f32, f32, f32); 8] = [
+        (-s, -s, -s),
+        (s, -s, -s),
+        (s, s, -s),
+        (-s, s, -s),
+        (-s, -s, s),
+        (s, -s, s),
+        (s, s, s),
+        (-s, s, s),
+    ];
+    let edges: [(usize, usize); 12] = [
+        (0, 1),
+        (1, 2),
+        (2, 3),
+        (3, 0),
+        (4, 5),
+        (5, 6),
+        (6, 7),
+        (7, 4),
+        (0, 4),
+        (1, 5),
+        (2, 6),
+        (3, 7),
+    ];
+    let rotated: Vec<(f32, f32, f32)> = verts
+        .iter()
+        .map(|&(x, y, z)| rotate_xyz(x, y, z, rot_x, rot_y, rot_z))
+        .collect();
+
+    for &(a, b) in &edges {
+        let (x0, y0, z0) = rotated[a];
+        let (x1, y1, z1) = rotated[b];
+        for step in 0..=72 {
+            let t = step as f32 / 72.0;
+            let x = x0 + (x1 - x0) * t;
+            let y = y0 + (y1 - y0) * t;
+            let z = z0 + (z1 - z0) * t;
+            let edge_lum = (0.55 + z * 0.12).clamp(-1.0, 1.0);
+            plot_idle_sample(
+                sw, sh, hit, lum_map, z_buf, x, y, z, cam_dist, scale_base, aspect, edge_lum,
+            );
+        }
+    }
 }
 
 fn sample_black_hole(
@@ -1589,9 +1589,11 @@ mod tests {
     }
 
     #[test]
-    fn idle_variants_include_new_donut_and_ring_variants() {
-        assert!(IDLE_VARIANTS.contains(&"pulse_donut"));
+    fn idle_variants_keep_normal_donut_and_include_cube() {
+        assert!(IDLE_VARIANTS.contains(&"donut"));
+        assert!(!IDLE_VARIANTS.contains(&"pulse_donut"));
         assert!(IDLE_VARIANTS.contains(&"orbit_rings"));
+        assert!(IDLE_VARIANTS.contains(&"cube"));
     }
 
     #[test]
@@ -1610,24 +1612,16 @@ mod tests {
     }
 
     #[test]
-    fn startup_splash_adds_cube_badge_to_non_cube_variants() {
-        let base = render_startup_animation(0.8, 60, 20, "donut");
-        assert!(!base.iter().any(|line| line.contains('o')));
+    fn cube_idle_sampler_marks_pixels() {
+        let sw = 120;
+        let sh = 60;
+        let mut hit = vec![false; sw * sh];
+        let mut lum_map = vec![0.0; sw * sh];
+        let mut z_buf = vec![0.0; sw * sh];
 
-        let splash = render_startup_splash(0.8, 60, 20, "donut");
-        assert!(splash.iter().any(|line| line.contains('o')));
-    }
+        sample_cube(0.8, sw, sh, &mut hit, &mut lum_map, &mut z_buf);
 
-    #[test]
-    fn startup_splash_skips_cube_badge_when_cube_is_main_variant() {
-        let splash = render_startup_splash(0.8, 60, 20, "cube");
-        assert!(!splash.iter().any(|line| line.contains('o')));
-    }
-
-    #[test]
-    fn startup_splash_skips_cube_badge_on_small_terminals() {
-        let base = render_startup_animation(0.8, 28, 10, "donut");
-        let splash = render_startup_splash(0.8, 28, 10, "donut");
-        assert_eq!(splash, base);
+        let lit_pixels = hit.iter().filter(|&&value| value).count();
+        assert!(lit_pixels > (sw * sh) / 40);
     }
 }
