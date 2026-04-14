@@ -1400,5 +1400,4 @@ mod tests {
         assert!(command.contains("Jcode exited with status"));
         assert!(command.contains("jcode executable not found"));
     }
-
 }

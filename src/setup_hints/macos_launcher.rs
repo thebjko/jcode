@@ -98,7 +98,10 @@ fn macos_app_launcher_info_plist_path(app_dir: &Path) -> PathBuf {
 }
 
 fn macos_app_launcher_executable_path(app_dir: &Path) -> PathBuf {
-    app_dir.join("Contents").join("MacOS").join("jcode-launcher")
+    app_dir
+        .join("Contents")
+        .join("MacOS")
+        .join("jcode-launcher")
 }
 
 fn macos_app_launcher_is_valid(app_dir: &Path) -> bool {
@@ -288,8 +291,7 @@ mod tests {
         let app_dir = temp.path().join("Jcode.app");
         let legacy_app_dir = temp.path().join("jcode.app");
         std::fs::create_dir_all(app_dir.join("Contents")).expect("create incomplete bundle");
-        std::fs::write(macos_app_launcher_info_plist_path(&app_dir), "plist")
-            .expect("write plist");
+        std::fs::write(macos_app_launcher_info_plist_path(&app_dir), "plist").expect("write plist");
         let state = SetupHintsState {
             desktop_shortcut_created: true,
             ..SetupHintsState::default()
@@ -310,8 +312,7 @@ mod tests {
         let legacy_app_dir = temp.path().join("jcode.app");
         std::fs::create_dir_all(app_dir.join("Contents").join("MacOS"))
             .expect("create new app dir");
-        std::fs::write(macos_app_launcher_info_plist_path(&app_dir), "plist")
-            .expect("write plist");
+        std::fs::write(macos_app_launcher_info_plist_path(&app_dir), "plist").expect("write plist");
         std::fs::write(macos_app_launcher_executable_path(&app_dir), "#!/bin/sh\n")
             .expect("write launcher executable");
         let state = SetupHintsState {
