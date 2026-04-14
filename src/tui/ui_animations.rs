@@ -147,6 +147,74 @@ fn render_startup_animation(
     }
 }
 
+fn overlay_ascii_art(
+    base: Vec<String>,
+    overlay: &[String],
+    origin_x: usize,
+    origin_y: usize,
+    clear_background: bool,
+) -> Vec<String> {
+    let mut rows: Vec<Vec<u8>> = base.into_iter().map(String::into_bytes).collect();
+
+    if clear_background {
+        let clear_width = overlay.iter().map(|line| line.len()).max().unwrap_or(0);
+        let clear_height = overlay.len();
+
+        let clear_x0 = origin_x.saturating_sub(1);
+        let clear_y0 = origin_y.saturating_sub(1);
+        let clear_x1 = origin_x.saturating_add(clear_width.saturating_add(1));
+        let clear_y1 = origin_y.saturating_add(clear_height.saturating_add(1));
+
+        for y in clear_y0..clear_y1.min(rows.len()) {
+            if let Some(row) = rows.get_mut(y) {
+                let row_len = row.len();
+                let end_x = clear_x1.min(row_len);
+                if clear_x0 < end_x {
+                    row[clear_x0..end_x].fill(b' ');
+                }
+            }
+        }
+    }
+
+    for (dy, overlay_line) in overlay.iter().enumerate() {
+        let y = origin_y + dy;
+        if y >= rows.len() {
+            break;
+        }
+        let row = &mut rows[y];
+        for (dx, ch) in overlay_line.bytes().enumerate() {
+            if ch == b' ' {
+                continue;
+            }
+            let x = origin_x + dx;
+            if x < row.len() {
+                row[x] = ch;
+            }
+        }
+    }
+
+    rows.into_iter()
+        .map(|row| String::from_utf8(row).expect("startup splash art should stay ASCII"))
+        .collect()
+}
+
+fn render_startup_splash(elapsed: f32, width: usize, height: usize, variant: &str) -> Vec<String> {
+    let art = render_startup_animation(elapsed, width, height, variant);
+
+    if variant == "cube" || width < 32 || height < 12 {
+        return art;
+    }
+
+    let badge_width = (width / 4).clamp(10, 18);
+    let badge_height = (height / 3).clamp(6, 10);
+    let cube_badge =
+        render_cube_with_style(elapsed * 1.15 + 0.7, badge_width, badge_height, b'+', b'o');
+    let origin_x = width.saturating_sub(badge_width + 2);
+    let origin_y = 1usize.min(height.saturating_sub(badge_height));
+
+    overlay_ascii_art(art, &cube_badge, origin_x, origin_y, true)
+}
+
 fn render_black_hole(elapsed: f32, width: usize, height: usize) -> Vec<String> {
     with_render_buffers(width, height, |output, _zbuffer| {
         let cx = width as f32 / 2.0;
@@ -328,7 +396,13 @@ fn draw_line_3d(
     }
 }
 
-fn render_cube(elapsed: f32, width: usize, height: usize) -> Vec<String> {
+fn render_cube_with_style(
+    elapsed: f32,
+    width: usize,
+    height: usize,
+    edge_ch: u8,
+    vertex_ch: u8,
+) -> Vec<String> {
     with_render_buffers(width, height, |output, zbuffer| {
         let ax = elapsed * 0.7;
         let ay = elapsed * 1.1;
@@ -366,7 +440,7 @@ fn render_cube(elapsed: f32, width: usize, height: usize) -> Vec<String> {
             let (x0, y0, z0) = rotated[a];
             let (x1, y1, z1) = rotated[b];
             draw_line_3d(
-                output, zbuffer, x0, y0, z0, x1, y1, z1, width, height, cam_dist, b'#',
+                output, zbuffer, x0, y0, z0, x1, y1, z1, width, height, cam_dist, edge_ch,
             );
         }
         for &(x, y, z) in &rotated {
@@ -376,10 +450,14 @@ fn render_cube(elapsed: f32, width: usize, height: usize) -> Vec<String> {
                 && yp >= 0
                 && (yp as usize) < height
             {
-                output[yp as usize][xp as usize] = b'@';
+                output[yp as usize][xp as usize] = vertex_ch;
             }
         }
     })
+}
+
+fn render_cube(elapsed: f32, width: usize, height: usize) -> Vec<String> {
+    render_cube_with_style(elapsed, width, height, b'#', b'@')
 }
 
 fn render_octahedron(elapsed: f32, width: usize, height: usize) -> Vec<String> {
@@ -679,7 +757,7 @@ pub(super) fn build_startup_animation_lines(
     let max_w = (term_width as usize).min(80);
     let max_h = max_w / 2;
     let variant = startup_animation_variant();
-    let anim_lines = render_startup_animation(elapsed, max_w, max_h, variant);
+    let anim_lines = render_startup_splash(elapsed, max_w, max_h, variant);
 
     let mut lines = Vec::new();
     lines.push(Line::from(""));
@@ -1529,5 +1607,27 @@ mod tests {
         let variant = choose_animation_variant_from_disabled(IDLE_VARIANTS, 7, &disabled);
         assert_ne!(variant, "donut");
         assert_ne!(variant, "three_rings");
+    }
+
+    #[test]
+    fn startup_splash_adds_cube_badge_to_non_cube_variants() {
+        let base = render_startup_animation(0.8, 60, 20, "donut");
+        assert!(!base.iter().any(|line| line.contains('o')));
+
+        let splash = render_startup_splash(0.8, 60, 20, "donut");
+        assert!(splash.iter().any(|line| line.contains('o')));
+    }
+
+    #[test]
+    fn startup_splash_skips_cube_badge_when_cube_is_main_variant() {
+        let splash = render_startup_splash(0.8, 60, 20, "cube");
+        assert!(!splash.iter().any(|line| line.contains('o')));
+    }
+
+    #[test]
+    fn startup_splash_skips_cube_badge_on_small_terminals() {
+        let base = render_startup_animation(0.8, 28, 10, "donut");
+        let splash = render_startup_splash(0.8, 28, 10, "donut");
+        assert_eq!(splash, base);
     }
 }
