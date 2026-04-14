@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use crate::bus::{BackgroundTaskCompleted, BackgroundTaskStatus};
 use chrono::Utc;
 use regex::Regex;
