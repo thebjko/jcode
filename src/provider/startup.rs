@@ -1,6 +1,217 @@
 use super::*;
 
 impl MultiProvider {
+    pub(super) fn new_with_auth_status(auth_status: auth::AuthStatus) -> Self {
+        let provider_init_start = std::time::Instant::now();
+        let has_claude_creds = auth::claude::load_credentials().is_ok();
+        let has_openai_creds = auth::codex::load_credentials().is_ok();
+        let has_copilot_api = auth_status.copilot_has_api_token;
+        let has_gemini_creds = auth::gemini::load_tokens().is_ok();
+        let has_cursor_creds = matches!(auth_status.cursor, auth::AuthState::Available);
+        let has_openrouter_creds = openrouter::OpenRouterProvider::has_credentials();
+
+        let use_claude_cli = std::env::var("JCODE_USE_CLAUDE_CLI")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        if use_claude_cli {
+            crate::logging::warn(
+                "JCODE_USE_CLAUDE_CLI is deprecated and will be removed. Direct Anthropic API transport is the default.",
+            );
+        }
+
+        let claude = if has_claude_creds && use_claude_cli {
+            crate::logging::info(
+                "Using deprecated Claude CLI provider (forced by JCODE_USE_CLAUDE_CLI=1)",
+            );
+            Some(Arc::new(claude::ClaudeProvider::new()))
+        } else {
+            None
+        };
+
+        let anthropic = if has_claude_creds && !use_claude_cli {
+            Some(Arc::new(anthropic::AnthropicProvider::new()))
+        } else {
+            None
+        };
+
+        let openai = if has_openai_creds {
+            auth::codex::load_credentials()
+                .ok()
+                .map(openai::OpenAIProvider::new)
+                .map(Arc::new)
+        } else {
+            None
+        };
+
+        let copilot_api = if has_copilot_api {
+            let copilot_init_start = std::time::Instant::now();
+            match copilot::CopilotApiProvider::new() {
+                Ok(p) => {
+                    crate::logging::info(&format!(
+                        "Copilot API provider initialized (direct API) in {}ms",
+                        copilot_init_start.elapsed().as_millis()
+                    ));
+                    let provider = Arc::new(p);
+                    if should_eager_detect_copilot_tier() {
+                        let p_clone = provider.clone();
+                        tokio::spawn(async move {
+                            p_clone.detect_tier_and_set_default().await;
+                        });
+                    } else {
+                        crate::logging::info(
+                            "Deferring Copilot tier detection during non-interactive startup",
+                        );
+                        provider.complete_init_without_tier_detection();
+                    }
+                    Some(provider)
+                }
+                Err(e) => {
+                    crate::logging::info(&format!("Failed to initialize Copilot API: {}", e));
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        let gemini_provider = if has_gemini_creds {
+            Some(Arc::new(gemini::GeminiProvider::new()))
+        } else {
+            None
+        };
+
+        let cursor_provider = if has_cursor_creds {
+            Some(Arc::new(cursor::CursorCliProvider::new()))
+        } else {
+            None
+        };
+
+        let openrouter = if has_openrouter_creds {
+            match openrouter::OpenRouterProvider::new() {
+                Ok(p) => Some(Arc::new(p)),
+                Err(e) => {
+                    crate::logging::info(&format!("Failed to initialize OpenRouter: {}", e));
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        let copilot_premium_zero = matches!(
+            std::env::var("JCODE_COPILOT_PREMIUM").ok().as_deref(),
+            Some("0")
+        );
+        let mut active = Self::auto_default_provider(
+            openai.is_some(),
+            claude.is_some() || anthropic.is_some(),
+            copilot_api.is_some(),
+            gemini_provider.is_some(),
+            cursor_provider.is_some(),
+            openrouter.is_some(),
+            copilot_premium_zero,
+        );
+
+        if copilot_premium_zero && matches!(active, ActiveProvider::Copilot) {
+            crate::logging::info(
+                "Copilot premium mode is Zero (free requests) - defaulting to Copilot provider",
+            );
+        }
+
+        let forced_provider = Self::forced_provider_from_env();
+        let cfg = crate::config::config();
+        if let Some(forced) = forced_provider {
+            active = forced;
+            let is_configured = match forced {
+                ActiveProvider::Claude => claude.is_some() || anthropic.is_some(),
+                ActiveProvider::OpenAI => openai.is_some(),
+                ActiveProvider::Copilot => copilot_api.is_some(),
+                ActiveProvider::Gemini => gemini_provider.is_some(),
+                ActiveProvider::Cursor => cursor_provider.is_some(),
+                ActiveProvider::OpenRouter => openrouter.is_some(),
+            };
+            if is_configured {
+                crate::logging::info(&format!(
+                    "Using forced provider '{}' from CLI/environment",
+                    Self::provider_key(forced)
+                ));
+            } else {
+                crate::logging::warn(&format!(
+                    "Forced provider '{}' is not configured; requests will fail until credentials are available",
+                    Self::provider_key(forced)
+                ));
+            }
+        } else if let Some(ref pref) = cfg.provider.default_provider {
+            if let Some(pref_provider) = Self::parse_provider_hint(pref) {
+                let is_configured = match pref_provider {
+                    ActiveProvider::Claude => claude.is_some() || anthropic.is_some(),
+                    ActiveProvider::OpenAI => openai.is_some(),
+                    ActiveProvider::Copilot => copilot_api.is_some(),
+                    ActiveProvider::Gemini => gemini_provider.is_some(),
+                    ActiveProvider::Cursor => cursor_provider.is_some(),
+                    ActiveProvider::OpenRouter => openrouter.is_some(),
+                };
+                if is_configured {
+                    active = pref_provider;
+                    crate::logging::info(&format!(
+                        "Using preferred provider '{}' from config",
+                        pref
+                    ));
+                } else {
+                    crate::logging::warn(&format!(
+                        "Preferred provider '{}' is not configured, using auto-detected default",
+                        pref
+                    ));
+                }
+            } else {
+                crate::logging::warn(&format!(
+                    "Unknown default_provider '{}' in config (expected: claude|openai|copilot|gemini|cursor|openrouter)",
+                    pref
+                ));
+            }
+        }
+
+        let result = Self {
+            claude: RwLock::new(claude),
+            anthropic: RwLock::new(anthropic),
+            openai: RwLock::new(openai),
+            copilot_api: RwLock::new(copilot_api),
+            gemini: RwLock::new(gemini_provider),
+            cursor: RwLock::new(cursor_provider),
+            openrouter: RwLock::new(openrouter),
+            active: RwLock::new(active),
+            use_claude_cli,
+            startup_notices: RwLock::new(Vec::new()),
+            forced_provider,
+        };
+
+        if let Some(ref model) = cfg.provider.default_model {
+            if let Err(e) = result.set_model(model) {
+                crate::logging::warn(&format!(
+                    "Failed to apply default_model '{}' from config: {}",
+                    model, e
+                ));
+            } else {
+                crate::logging::info(&format!("Applied default model '{}' from config", model));
+            }
+        }
+
+        result.spawn_openai_catalog_refresh_if_needed();
+        result.auto_select_active_multi_account();
+        crate::logging::info(&format!(
+            "[TIMING] provider_init: claude={}, anthropic={}, openai={}, copilot={}, gemini={}, cursor={}, openrouter={}, total={}ms",
+            result.claude.read().unwrap().is_some(),
+            result.anthropic.read().unwrap().is_some(),
+            result.openai.read().unwrap().is_some(),
+            result.copilot_api.read().unwrap().is_some(),
+            result.gemini.read().unwrap().is_some(),
+            result.cursor.read().unwrap().is_some(),
+            result.openrouter.read().unwrap().is_some(),
+            provider_init_start.elapsed().as_millis()
+        ));
+        result
+    }
+
     pub(super) fn spawn_openai_catalog_refresh_if_needed(&self) {
         if self.openai_provider().is_none() {
             return;
