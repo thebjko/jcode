@@ -18,7 +18,10 @@ pub fn manifest_path() -> Result<PathBuf> {
 
 /// Get path to a specific version's binary
 pub fn version_binary_path(hash: &str) -> Result<PathBuf> {
-    Ok(builds_dir()?.join("versions").join(hash).join(binary_name()))
+    Ok(builds_dir()?
+        .join("versions")
+        .join(hash)
+        .join(binary_name()))
 }
 
 /// Get path to stable symlink
