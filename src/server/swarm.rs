@@ -131,7 +131,7 @@ pub(super) async fn broadcast_swarm_status(
     let should_spawn = {
         let mut pending = pending_swarm_status_broadcasts()
             .lock()
-            .expect("pending swarm status broadcasts lock poisoned");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let entry = pending.entry(key.clone()).or_default();
         if entry.scheduled {
             entry.dirty = true;
@@ -164,7 +164,7 @@ pub(super) async fn broadcast_swarm_status(
 
             let mut pending = pending_swarm_status_broadcasts()
                 .lock()
-                .expect("pending swarm status broadcasts lock poisoned");
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             let Some(entry) = pending.get_mut(&key) else {
                 break;
             };

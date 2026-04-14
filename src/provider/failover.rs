@@ -59,10 +59,22 @@ impl MultiProvider {
         match provider {
             ActiveProvider::Claude => self.has_claude_runtime(),
             ActiveProvider::OpenAI => self.openai_provider().is_some(),
-            ActiveProvider::Copilot => self.copilot_api.read().unwrap().is_some(),
+            ActiveProvider::Copilot => self
+                .copilot_api
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .is_some(),
             ActiveProvider::Gemini => self.gemini_provider().is_some(),
-            ActiveProvider::Cursor => self.cursor.read().unwrap().is_some(),
-            ActiveProvider::OpenRouter => self.openrouter.read().unwrap().is_some(),
+            ActiveProvider::Cursor => self
+                .cursor
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .is_some(),
+            ActiveProvider::OpenRouter => self
+                .openrouter
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .is_some(),
         }
     }
 
@@ -71,9 +83,9 @@ impl MultiProvider {
         provider: ActiveProvider,
     ) -> Option<String> {
         match provider {
-            ActiveProvider::Claude if self.is_claude_usage_exhausted() => {
-                Some(crate::provider::account_failover::usage_exhausted_reason(provider))
-            }
+            ActiveProvider::Claude if self.is_claude_usage_exhausted() => Some(
+                crate::provider::account_failover::usage_exhausted_reason(provider),
+            ),
             _ => None,
         }
     }

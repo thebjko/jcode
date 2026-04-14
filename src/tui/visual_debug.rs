@@ -308,7 +308,9 @@ pub fn record_frame(frame: FrameCapture) {
         return;
     }
 
-    let mut buffer = get_frame_buffer().lock().unwrap();
+    let mut buffer = get_frame_buffer()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
 
     // Skip duplicate frames - only capture when something changes
     // Always capture frames with anomalies
@@ -343,7 +345,9 @@ pub fn dump_to_file() -> std::io::Result<PathBuf> {
         fs::create_dir_all(parent)?;
     }
 
-    let buffer = get_frame_buffer().lock().unwrap();
+    let buffer = get_frame_buffer()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let mut file = File::create(&path)?;
 
     writeln!(file, "=== JCODE VISUAL DEBUG DUMP ===")?;

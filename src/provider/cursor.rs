@@ -152,7 +152,11 @@ impl Provider for CursorCliProvider {
         resume_session_id: Option<&str>,
     ) -> Result<EventStream> {
         let prompt = build_cli_prompt(system, messages);
-        let model = self.model.read().unwrap().clone();
+        let model = self
+            .model
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
         let cli_path = self.cli_path.clone();
         let client = self.client.clone();
         let api_key = runtime_cursor_api_key();
@@ -180,7 +184,10 @@ impl Provider for CursorCliProvider {
     }
 
     fn model(&self) -> String {
-        self.model.read().unwrap().clone()
+        self.model
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
 
     fn set_model(&self, model: &str) -> Result<()> {
@@ -188,7 +195,10 @@ impl Provider for CursorCliProvider {
         if trimmed.is_empty() {
             anyhow::bail!("Cursor model cannot be empty");
         }
-        *self.model.write().unwrap() = trimmed.to_string();
+        *self
+            .model
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = trimmed.to_string();
         Ok(())
     }
 
@@ -201,7 +211,11 @@ impl Provider for CursorCliProvider {
     }
 
     fn available_models_display(&self) -> Vec<String> {
-        let dynamic = self.fetched_models.read().unwrap().clone();
+        let dynamic = self
+            .fetched_models
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
         merge_cursor_models(&dynamic, &self.model())
     }
 
@@ -217,7 +231,10 @@ impl Provider for CursorCliProvider {
                         "Discovered Cursor models: {}",
                         models.join(", ")
                     ));
-                    *self.fetched_models.write().unwrap() = models;
+                    *self
+                        .fetched_models
+                        .write()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner()) = models;
                 }
             }
             Err(err) => {

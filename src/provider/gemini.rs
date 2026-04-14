@@ -587,7 +587,10 @@ impl Provider for GeminiProvider {
     }
 
     fn model(&self) -> String {
-        self.model.read().unwrap().clone()
+        self.model
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
 
     fn set_model(&self, model: &str) -> Result<()> {
@@ -595,7 +598,10 @@ impl Provider for GeminiProvider {
         if trimmed.is_empty() {
             anyhow::bail!("Gemini model cannot be empty");
         }
-        *self.model.write().unwrap() = trimmed.to_string();
+        *self
+            .model
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = trimmed.to_string();
         Ok(())
     }
 

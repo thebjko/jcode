@@ -178,7 +178,10 @@ impl Logger {
 
 /// Initialize the logger (call once at startup)
 pub fn init() {
-    let mut guard = LOGGER.lock().unwrap();
+    let mut guard = match LOGGER.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
     if guard.is_none() {
         *guard = Logger::new();
     }

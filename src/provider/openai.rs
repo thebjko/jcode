@@ -1642,8 +1642,10 @@ async fn stream_response(
                 }
             }
             Err(e) => {
-                let _ = tx.send(Err(e)).await;
-                return Ok(());
+                return Err(OpenAIStreamFailure::Other(anyhow::anyhow!(
+                    "Stream error: {}",
+                    e
+                )));
             }
         }
     }
@@ -2109,9 +2111,11 @@ async fn stream_response_websocket_persistent(
         )));
     }
     {
-        let obj = request_event
-            .as_object_mut()
-            .expect("request_event is object");
+        let Some(obj) = request_event.as_object_mut() else {
+            return Err(OpenAIStreamFailure::Other(anyhow::anyhow!(
+                "Invalid websocket request payload shape; expected an object"
+            )));
+        };
         obj.insert(
             "type".to_string(),
             serde_json::Value::String("response.create".to_string()),

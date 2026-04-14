@@ -78,6 +78,9 @@ impl MultiProvider {
     }
 
     pub(super) fn set_active_provider(&self, provider: ActiveProvider) {
-        *self.active.write().unwrap() = provider;
+        *self
+            .active
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = provider;
     }
 }

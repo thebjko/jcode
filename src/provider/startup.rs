@@ -200,13 +200,41 @@ impl MultiProvider {
         result.auto_select_active_multi_account();
         crate::logging::info(&format!(
             "[TIMING] provider_init: claude={}, anthropic={}, openai={}, copilot={}, gemini={}, cursor={}, openrouter={}, total={}ms",
-            result.claude.read().unwrap().is_some(),
-            result.anthropic.read().unwrap().is_some(),
-            result.openai.read().unwrap().is_some(),
-            result.copilot_api.read().unwrap().is_some(),
-            result.gemini.read().unwrap().is_some(),
-            result.cursor.read().unwrap().is_some(),
-            result.openrouter.read().unwrap().is_some(),
+            result
+                .claude
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .is_some(),
+            result
+                .anthropic
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .is_some(),
+            result
+                .openai
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .is_some(),
+            result
+                .copilot_api
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .is_some(),
+            result
+                .gemini
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .is_some(),
+            result
+                .cursor
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .is_some(),
+            result
+                .openrouter
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .is_some(),
             provider_init_start.elapsed().as_millis()
         ));
         result
@@ -250,7 +278,10 @@ impl MultiProvider {
             && prefer_openai
             && provider.openai_provider().is_some()
         {
-            *provider.active.write().unwrap() = ActiveProvider::OpenAI;
+            *provider
+                .active
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = ActiveProvider::OpenAI;
         }
         provider
     }
@@ -261,13 +292,19 @@ impl MultiProvider {
             && prefer_openai
             && provider.openai_provider().is_some()
         {
-            *provider.active.write().unwrap() = ActiveProvider::OpenAI;
+            *provider
+                .active
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = ActiveProvider::OpenAI;
         }
         provider
     }
 
     pub(super) fn active_provider(&self) -> ActiveProvider {
-        *self.active.read().unwrap()
+        *self
+            .active
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     pub fn auto_select_active_multi_account(&self) {
@@ -345,7 +382,10 @@ impl MultiProvider {
                 "⚡ Auto-switched {} account: **{}** -> **{}** (previous account exhausted)",
                 provider_name, probe.current_label, alternative.label
             );
-            self.startup_notices.write().unwrap().push(notice);
+            self.startup_notices
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(notice);
             return;
         }
 
@@ -355,7 +395,10 @@ impl MultiProvider {
                 "⚠ All {} accounts exhausted - will fall back to other providers if available",
                 provider_name
             );
-            self.startup_notices.write().unwrap().push(notice);
+            self.startup_notices
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(notice);
         }
     }
 

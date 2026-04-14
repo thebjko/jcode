@@ -615,7 +615,11 @@ impl CopilotApiProvider {
         use crate::message::ConnectionPhase;
 
         self.wait_for_init().await;
-        let model = self.model.read().unwrap().clone();
+        let model = self
+            .model
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
         let max_tokens: u32 = 32_768;
         let initiator = if is_user_initiated { "user" } else { "agent" };
 

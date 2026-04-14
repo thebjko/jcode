@@ -149,7 +149,10 @@ fn glob_blocking(base: &Path, pattern: &str) -> Result<Vec<(String, std::time::S
                     .unwrap_or(std::time::UNIX_EPOCH);
 
                 count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                results.lock().unwrap().push((path_str.to_string(), mtime));
+                let mut guard = results
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                guard.push((path_str.to_string(), mtime));
             }
 
             ignore::WalkState::Continue
@@ -157,8 +160,13 @@ fn glob_blocking(base: &Path, pattern: &str) -> Result<Vec<(String, std::time::S
     });
 
     let mut final_results = match Arc::try_unwrap(results) {
-        Ok(mutex) => mutex.into_inner().unwrap(),
-        Err(arc) => arc.lock().unwrap().clone(),
+        Ok(mutex) => mutex
+            .into_inner()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        Err(arc) => arc
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone(),
     };
 
     // Sort by modification time (newest first)

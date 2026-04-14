@@ -208,7 +208,10 @@ fn grep_blocking(base: &Path, pattern: &str, include: Option<&str>) -> Result<Ve
                 if !local_results.is_empty() {
                     let count = local_results.len();
                     hit_count.fetch_add(count, Ordering::Relaxed);
-                    results.lock().unwrap().extend(local_results);
+                    let mut guard = results
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    guard.extend(local_results);
                 }
             }
 
@@ -217,8 +220,13 @@ fn grep_blocking(base: &Path, pattern: &str, include: Option<&str>) -> Result<Ve
     });
 
     let mut final_results = match Arc::try_unwrap(results) {
-        Ok(mutex) => mutex.into_inner().unwrap(),
-        Err(arc) => arc.lock().unwrap().clone(),
+        Ok(mutex) => mutex
+            .into_inner()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        Err(arc) => arc
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone(),
     };
 
     // Sort by file then line number for deterministic output

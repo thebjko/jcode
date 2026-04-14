@@ -769,7 +769,10 @@ impl Provider for ClaudeProvider {
     }
 
     fn model(&self) -> String {
-        self.model.read().unwrap().clone()
+        self.model
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
 
     fn set_model(&self, model: &str) -> Result<()> {

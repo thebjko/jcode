@@ -223,7 +223,15 @@ impl Agent {
             self.session.messages.len()
         ));
         let compaction = self.registry.compaction();
-        let mut manager = compaction.try_write().expect("compaction lock");
+        let mut manager = match compaction.try_write() {
+            Ok(manager) => manager,
+            Err(_) => {
+                logging::warn(
+                    "seed_compaction_from_session: compaction lock unavailable, skipping restore",
+                );
+                return;
+            }
+        };
         manager.reset();
         let budget = self.provider.context_window();
         manager.set_budget(budget);

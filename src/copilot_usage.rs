@@ -109,14 +109,20 @@ impl CopilotUsageTracker {
 
 /// Record a completed Copilot request.
 pub fn record_request(input_tokens: u64, output_tokens: u64, is_premium: bool) {
-    let mut guard = TRACKER.lock().unwrap();
+    let mut guard = match TRACKER.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
     let tracker = guard.get_or_insert_with(CopilotUsageTracker::load);
     tracker.record(input_tokens, output_tokens, is_premium);
 }
 
 /// Get current usage snapshot.
 pub fn get_usage() -> CopilotUsageTracker {
-    let mut guard = TRACKER.lock().unwrap();
+    let mut guard = match TRACKER.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
     let tracker = guard.get_or_insert_with(CopilotUsageTracker::load);
     tracker.roll_if_needed();
     tracker.clone()

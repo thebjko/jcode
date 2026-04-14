@@ -535,7 +535,11 @@ impl Provider for AnthropicProvider {
         _resume_session_id: Option<&str>,
     ) -> Result<EventStream> {
         let (token, is_oauth) = self.get_access_token().await?;
-        let model = self.model.read().unwrap().clone();
+        let model = self
+            .model
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
         let api_model = strip_1m_suffix(&model).to_string();
 
         // Format request
@@ -586,7 +590,10 @@ impl Provider for AnthropicProvider {
     }
 
     fn model(&self) -> String {
-        self.model.read().unwrap().clone()
+        self.model
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
 
     fn set_model(&self, model: &str) -> Result<()> {
@@ -596,7 +603,10 @@ impl Provider for AnthropicProvider {
         {
             anyhow::bail!("Model {} not supported by Anthropic provider", model);
         }
-        *self.model.write().unwrap() = model.to_string();
+        *self
+            .model
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = model.to_string();
         Ok(())
     }
 
@@ -648,7 +658,12 @@ impl Provider for AnthropicProvider {
     fn fork(&self) -> Arc<dyn Provider> {
         Arc::new(Self {
             client: self.client.clone(),
-            model: Arc::new(std::sync::RwLock::new(self.model.read().unwrap().clone())),
+            model: Arc::new(std::sync::RwLock::new(
+                self.model
+                    .read()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone(),
+            )),
             credentials: Arc::new(RwLock::new(None)),
             max_tokens: self.max_tokens,
         })
@@ -674,7 +689,11 @@ impl Provider for AnthropicProvider {
         _resume_session_id: Option<&str>,
     ) -> Result<EventStream> {
         let (token, is_oauth) = self.get_access_token().await?;
-        let model = self.model.read().unwrap().clone();
+        let model = self
+            .model
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
         let api_model = strip_1m_suffix(&model).to_string();
 
         // Format request

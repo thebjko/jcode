@@ -56,7 +56,11 @@ impl Provider for AntigravityCliProvider {
         _resume_session_id: Option<&str>,
     ) -> Result<EventStream> {
         let prompt = build_cli_prompt(system, messages);
-        let model = self.model.read().unwrap().clone();
+        let model = self
+            .model
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
         let cli_path = self.cli_path.clone();
         let prompt_flag = self.prompt_flag.clone();
         let model_flag = self.model_flag.clone();
@@ -99,7 +103,10 @@ impl Provider for AntigravityCliProvider {
     }
 
     fn model(&self) -> String {
-        self.model.read().unwrap().clone()
+        self.model
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
 
     fn set_model(&self, model: &str) -> Result<()> {
@@ -107,7 +114,10 @@ impl Provider for AntigravityCliProvider {
         if trimmed.is_empty() {
             anyhow::bail!("Antigravity model cannot be empty");
         }
-        *self.model.write().unwrap() = trimmed.to_string();
+        *self
+            .model
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = trimmed.to_string();
         Ok(())
     }
 

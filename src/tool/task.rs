@@ -143,7 +143,9 @@ impl Tool for SubagentTool {
                         if event.session_id != session_id {
                             continue;
                         }
-                        let mut summary = summary_map_handle.lock().expect("tool summary lock");
+                        let mut summary = summary_map_handle
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
                         summary.insert(
                             event.tool_call_id.clone(),
                             ToolSummary {

@@ -1,6 +1,7 @@
+mod accessors;
+mod account_failover;
 pub mod anthropic;
 pub mod antigravity;
-mod account_failover;
 pub mod claude;
 pub mod cli_common;
 pub mod copilot;
@@ -496,26 +497,6 @@ impl MultiProvider {
         (chars, tokens)
     }
 
-    fn claude_provider(&self) -> Option<Arc<claude::ClaudeProvider>> {
-        self.claude.read().unwrap().clone()
-    }
-
-    fn anthropic_provider(&self) -> Option<Arc<anthropic::AnthropicProvider>> {
-        self.anthropic.read().unwrap().clone()
-    }
-
-    fn openai_provider(&self) -> Option<Arc<openai::OpenAIProvider>> {
-        self.openai.read().unwrap().clone()
-    }
-
-    fn gemini_provider(&self) -> Option<Arc<gemini::GeminiProvider>> {
-        self.gemini.read().unwrap().clone()
-    }
-
-    fn has_claude_runtime(&self) -> bool {
-        self.anthropic_provider().is_some() || self.claude_provider().is_some()
-    }
-
     fn spawn_post_auth_model_refresh(provider: Arc<dyn Provider>, provider_label: &'static str) {
         let Ok(handle) = tokio::runtime::Handle::try_current() else {
             return;
@@ -621,7 +602,10 @@ impl MultiProvider {
 
             match attempt {
                 Ok(stream) => {
-                    self.startup_notices.write().unwrap().push(format!(
+                    self.startup_notices
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(format!(
                         "⚡ Auto-switched {} account: {} → {}. To turn this off, set `[provider].same_provider_account_failover = false` in `~/.jcode/config.toml` or export `JCODE_SAME_PROVIDER_ACCOUNT_FAILOVER=false`.",
                         provider_label, original_label, alternative_label
                     ));
@@ -783,10 +767,13 @@ impl MultiProvider {
                             from_label,
                             to_label
                         ));
-                        self.startup_notices.write().unwrap().push(format!(
-                            "⚡ Auto-fallback: {} unavailable, switched to {}",
-                            from_label, to_label
-                        ));
+                        self.startup_notices
+                            .write()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .push(format!(
+                                "⚡ Auto-fallback: {} unavailable, switched to {}",
+                                from_label, to_label
+                            ));
                     }
                     return Ok(stream);
                 }
@@ -828,7 +815,6 @@ impl MultiProvider {
 
         Err(self.no_provider_available_error(&notes))
     }
-
 }
 
 impl Default for MultiProvider {
@@ -904,10 +890,7 @@ impl Provider for MultiProvider {
                 .map(|o| o.model())
                 .unwrap_or_else(|| "gpt-5.4".to_string()),
             ActiveProvider::Copilot => self
-                .copilot_api
-                .read()
-                .unwrap()
-                .as_ref()
+                .copilot_provider()
                 .map(|o| o.model())
                 .unwrap_or_else(|| "claude-sonnet-4".to_string()),
             ActiveProvider::Gemini => self
@@ -915,17 +898,11 @@ impl Provider for MultiProvider {
                 .map(|o| o.model())
                 .unwrap_or_else(|| "gemini-2.5-pro".to_string()),
             ActiveProvider::Cursor => self
-                .cursor
-                .read()
-                .unwrap()
-                .as_ref()
+                .cursor_provider()
                 .map(|o| o.model())
                 .unwrap_or_else(|| "composer-1.5".to_string()),
             ActiveProvider::OpenRouter => self
-                .openrouter
-                .read()
-                .unwrap()
-                .as_ref()
+                .openrouter_provider()
                 .map(|o| o.model())
                 .unwrap_or_else(|| "anthropic/claude-sonnet-4".to_string()),
         }
@@ -941,7 +918,10 @@ impl Provider for MultiProvider {
             if let Some(forced) = self.forced_provider
                 && forced != ActiveProvider::Copilot
             {
-                let copilot_guard = self.copilot_api.read().unwrap();
+                let copilot_guard = self
+                    .copilot_api
+                    .read()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                 if copilot_guard.is_none() {
                     anyhow::bail!(
                         "Model '{}' requires GitHub Copilot but Copilot credentials are not configured. Run `jcode login --provider copilot` first.",
@@ -955,9 +935,15 @@ impl Provider for MultiProvider {
                     copilot_model,
                 ));
             }
-            let copilot_guard = self.copilot_api.read().unwrap();
+            let copilot_guard = self
+                .copilot_api
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             if copilot_guard.is_some() {
-                *self.active.write().unwrap() = ActiveProvider::Copilot;
+                *self
+                    .active
+                    .write()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = ActiveProvider::Copilot;
                 if let Some(ref copilot) = *copilot_guard {
                     copilot.set_model(copilot_model)?;
                 }
@@ -984,7 +970,10 @@ impl Provider for MultiProvider {
             if let Some(forced) = self.forced_provider
                 && forced != ActiveProvider::Cursor
             {
-                let cursor_guard = self.cursor.read().unwrap();
+                let cursor_guard = self
+                    .cursor
+                    .read()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                 if cursor_guard.is_none() {
                     anyhow::bail!(
                         "Model '{}' requires Cursor but Cursor credentials are not configured. Run `jcode login --provider cursor` first.",
@@ -998,9 +987,15 @@ impl Provider for MultiProvider {
                     cursor_model,
                 ));
             }
-            let cursor_guard = self.cursor.read().unwrap();
+            let cursor_guard = self
+                .cursor
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             if cursor_guard.is_some() {
-                *self.active.write().unwrap() = ActiveProvider::Cursor;
+                *self
+                    .active
+                    .write()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = ActiveProvider::Cursor;
                 if let Some(ref cursor) = *cursor_guard {
                     cursor.set_model(cursor_model)?;
                 }
@@ -1045,9 +1040,9 @@ impl Provider for MultiProvider {
                     ActiveProvider::Claude => self.has_claude_runtime(),
                     ActiveProvider::OpenAI => self.openai_provider().is_some(),
                     ActiveProvider::Gemini => self.gemini_provider().is_some(),
-                    ActiveProvider::Cursor => self.cursor.read().unwrap().is_some(),
-                    ActiveProvider::OpenRouter => self.openrouter.read().unwrap().is_some(),
-                    ActiveProvider::Copilot => self.copilot_api.read().unwrap().is_some(),
+                    ActiveProvider::Cursor => self.cursor_provider().is_some(),
+                    ActiveProvider::OpenRouter => self.openrouter_provider().is_some(),
+                    ActiveProvider::Copilot => self.copilot_provider().is_some(),
                 };
                 if !has_target_creds {
                     anyhow::bail!(
@@ -1074,7 +1069,10 @@ impl Provider for MultiProvider {
                 ));
             }
             // Switch active provider to Claude
-            *self.active.write().unwrap() = ActiveProvider::Claude;
+            *self
+                .active
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = ActiveProvider::Claude;
             // Set on whichever is available
             if let Some(anthropic) = self.anthropic_provider() {
                 anthropic.set_model(model)
@@ -1090,7 +1088,10 @@ impl Provider for MultiProvider {
                 ));
             }
             // Switch active provider to OpenAI
-            *self.active.write().unwrap() = ActiveProvider::OpenAI;
+            *self
+                .active
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = ActiveProvider::OpenAI;
             if let Some(openai) = self.openai_provider() {
                 openai.set_model(model)
             } else {
@@ -1103,34 +1104,50 @@ impl Provider for MultiProvider {
                     "Gemini credentials not available. Run `jcode login --provider gemini` first."
                 ));
             }
-            *self.active.write().unwrap() = ActiveProvider::Gemini;
+            *self
+                .active
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = ActiveProvider::Gemini;
             if let Some(gemini) = gemini {
                 gemini.set_model(model)
             } else {
                 Ok(())
             }
         } else if target_provider == Some("cursor") {
-            let cursor_guard = self.cursor.read().unwrap();
+            let cursor_guard = self
+                .cursor
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             if cursor_guard.is_none() {
                 return Err(anyhow::anyhow!(
                     "Cursor credentials not available. Run `jcode login --provider cursor` first."
                 ));
             }
-            *self.active.write().unwrap() = ActiveProvider::Cursor;
+            *self
+                .active
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = ActiveProvider::Cursor;
             if let Some(ref cursor) = *cursor_guard {
                 cursor.set_model(model)
             } else {
                 Ok(())
             }
         } else if target_provider == Some("openrouter") {
-            let openrouter = self.openrouter.read().unwrap().clone();
+            let openrouter = self
+                .openrouter
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone();
             if openrouter.is_none() {
                 return Err(anyhow::anyhow!(
                     "OpenRouter credentials not available. Set OPENROUTER_API_KEY environment variable."
                 ));
             }
             // Switch active provider to OpenRouter
-            *self.active.write().unwrap() = ActiveProvider::OpenRouter;
+            *self
+                .active
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = ActiveProvider::OpenRouter;
             if let Some(openrouter) = openrouter {
                 openrouter.set_model(model)
             } else {
@@ -1156,32 +1173,28 @@ impl Provider for MultiProvider {
                     }
                 }
                 ActiveProvider::Copilot => {
-                    let copilot_guard = self.copilot_api.read().unwrap();
-                    if let Some(ref copilot) = *copilot_guard {
+                    if let Some(copilot) = self.copilot_provider() {
                         copilot.set_model(model)
                     } else {
                         Err(anyhow::anyhow!("Unknown model: {}", model))
                     }
                 }
                 ActiveProvider::Gemini => {
-                    let gemini_guard = self.gemini.read().unwrap();
-                    if let Some(ref gemini) = *gemini_guard {
+                    if let Some(gemini) = self.gemini_provider() {
                         gemini.set_model(model)
                     } else {
                         Err(anyhow::anyhow!("Unknown model: {}", model))
                     }
                 }
                 ActiveProvider::Cursor => {
-                    let cursor_guard = self.cursor.read().unwrap();
-                    if let Some(ref cursor) = *cursor_guard {
+                    if let Some(cursor) = self.cursor_provider() {
                         cursor.set_model(model)
                     } else {
                         Err(anyhow::anyhow!("Unknown model: {}", model))
                     }
                 }
                 ActiveProvider::OpenRouter => {
-                    let openrouter = self.openrouter.read().unwrap().clone();
-                    if let Some(openrouter) = openrouter {
+                    if let Some(openrouter) = self.openrouter_provider() {
                         openrouter.set_model(model)
                     } else {
                         Err(anyhow::anyhow!("Unknown model: {}", model))
@@ -1214,31 +1227,19 @@ impl Provider for MultiProvider {
                 .map(|openai| openai.available_models_for_switching())
                 .unwrap_or_default(),
             ActiveProvider::Copilot => self
-                .copilot_api
-                .read()
-                .unwrap()
-                .as_ref()
+                .copilot_provider()
                 .map(|copilot| copilot.available_models_for_switching())
                 .unwrap_or_default(),
             ActiveProvider::Gemini => self
-                .gemini
-                .read()
-                .unwrap()
-                .as_ref()
+                .gemini_provider()
                 .map(|gemini| gemini.available_models_for_switching())
                 .unwrap_or_default(),
             ActiveProvider::Cursor => self
-                .cursor
-                .read()
-                .unwrap()
-                .as_ref()
+                .cursor_provider()
                 .map(|cursor| cursor.available_models_for_switching())
                 .unwrap_or_default(),
             ActiveProvider::OpenRouter => self
-                .openrouter
-                .read()
-                .unwrap()
-                .as_ref()
+                .openrouter_provider()
                 .map(|openrouter| openrouter.available_models_for_switching())
                 .unwrap_or_default(),
         }
@@ -1249,7 +1250,10 @@ impl Provider for MultiProvider {
         models.extend(known_anthropic_model_ids());
         models.extend(known_openai_model_ids());
         {
-            let copilot_guard = self.copilot_api.read().unwrap();
+            let copilot_guard = self
+                .copilot_api
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             if let Some(ref copilot) = *copilot_guard {
                 for m in copilot.available_models_display() {
                     if !models.contains(&m) {
@@ -1259,7 +1263,10 @@ impl Provider for MultiProvider {
             }
         }
         {
-            let gemini_guard = self.gemini.read().unwrap();
+            let gemini_guard = self
+                .gemini
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             if let Some(ref gemini) = *gemini_guard {
                 for m in gemini.available_models_display() {
                     if !models.contains(&m) {
@@ -1269,7 +1276,10 @@ impl Provider for MultiProvider {
             }
         }
         {
-            let cursor_guard = self.cursor.read().unwrap();
+            let cursor_guard = self
+                .cursor
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             if let Some(ref cursor) = *cursor_guard {
                 for m in cursor.available_models_display() {
                     if !models.contains(&m) {
@@ -1278,7 +1288,12 @@ impl Provider for MultiProvider {
                 }
             }
         }
-        if let Some(openrouter) = self.openrouter.read().unwrap().clone() {
+        if let Some(openrouter) = self
+            .openrouter
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+        {
             models.extend(openrouter.available_models_display());
         }
         filtered_display_models(models)
@@ -1286,7 +1301,7 @@ impl Provider for MultiProvider {
 
     fn available_providers_for_model(&self, model: &str) -> Vec<String> {
         if model.contains('/')
-            && let Some(openrouter) = self.openrouter.read().unwrap().clone()
+            && let Some(openrouter) = self.openrouter_provider()
         {
             return openrouter.available_providers_for_model(model);
         }
@@ -1295,7 +1310,7 @@ impl Provider for MultiProvider {
 
     fn provider_details_for_model(&self, model: &str) -> Vec<(String, String)> {
         if model.contains('/')
-            && let Some(openrouter) = self.openrouter.read().unwrap().clone()
+            && let Some(openrouter) = self.openrouter_provider()
         {
             return openrouter.provider_details_for_model(model);
         }
@@ -1303,8 +1318,14 @@ impl Provider for MultiProvider {
     }
 
     fn preferred_provider(&self) -> Option<String> {
-        if let Some(openrouter) = self.openrouter.read().unwrap().clone()
-            && matches!(*self.active.read().unwrap(), ActiveProvider::OpenRouter)
+        if let Some(openrouter) = self.openrouter_provider()
+            && matches!(
+                *self
+                    .active
+                    .read()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()),
+                ActiveProvider::OpenRouter
+            )
         {
             return openrouter.preferred_provider();
         }
@@ -1392,8 +1413,7 @@ impl Provider for MultiProvider {
 
         // GitHub Copilot models
         {
-            let copilot_guard = self.copilot_api.read().unwrap();
-            if let Some(ref copilot) = *copilot_guard {
+            if let Some(copilot) = self.copilot_provider() {
                 let copilot_models = copilot.available_models_display();
                 let detail = copilot.model_catalog_detail();
                 let copilot_models_empty = copilot_models.is_empty();
@@ -1432,8 +1452,7 @@ impl Provider for MultiProvider {
 
         // Gemini models
         {
-            let gemini_guard = self.gemini.read().unwrap();
-            if let Some(ref gemini) = *gemini_guard {
+            if let Some(gemini) = self.gemini_provider() {
                 for model in gemini.available_models_display() {
                     routes.push(ModelRoute {
                         model,
@@ -1449,8 +1468,7 @@ impl Provider for MultiProvider {
 
         // Cursor models
         {
-            let cursor_guard = self.cursor.read().unwrap();
-            if let Some(ref cursor) = *cursor_guard {
+            if let Some(cursor) = self.cursor_provider() {
                 for model in cursor.available_models_display() {
                     routes.push(ModelRoute {
                         model,
@@ -1465,8 +1483,8 @@ impl Provider for MultiProvider {
         }
 
         // OpenRouter models (with per-provider endpoints)
-        let has_openrouter = self.openrouter.read().unwrap().is_some();
-        if let Some(openrouter) = self.openrouter.read().unwrap().clone() {
+        let has_openrouter = self.openrouter_provider().is_some();
+        if let Some(openrouter) = self.openrouter_provider() {
             for model in openrouter.available_models_display() {
                 let cached = openrouter::load_endpoints_disk_cache_public(&model);
                 let age_str = cached.as_ref().map(|(_, age)| {
@@ -1618,12 +1636,16 @@ impl Provider for MultiProvider {
         if let Some(openai) = self.openai_provider() {
             openai.prefetch_models().await?;
         }
-        let openrouter = { self.openrouter.read().unwrap().clone() };
+        let openrouter = self.openrouter_provider();
         if let Some(openrouter) = openrouter {
             openrouter.prefetch_models().await?;
         }
         {
-            let copilot = self.copilot_api.read().unwrap().clone();
+            let copilot = self
+                .copilot_api
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone();
             if let Some(copilot) = copilot {
                 copilot.prefetch_models().await?;
             }
@@ -1635,7 +1657,7 @@ impl Provider for MultiProvider {
             }
         }
         {
-            let cursor = self.cursor.read().unwrap().clone();
+            let cursor = self.cursor_provider();
             if let Some(cursor) = cursor {
                 cursor.prefetch_models().await?;
             }
@@ -1647,20 +1669,31 @@ impl Provider for MultiProvider {
         if self.use_claude_cli {
             if self.claude_provider().is_none() && crate::auth::claude::load_credentials().is_ok() {
                 crate::logging::info("Hot-initialized Claude CLI provider after auth change");
-                *self.claude.write().unwrap() = Some(Arc::new(claude::ClaudeProvider::new()));
+                *self
+                    .claude
+                    .write()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                    Some(Arc::new(claude::ClaudeProvider::new()));
             }
         } else if self.anthropic_provider().is_none()
             && crate::auth::claude::load_credentials().is_ok()
         {
             crate::logging::info("Hot-initialized Anthropic provider after auth change");
-            *self.anthropic.write().unwrap() = Some(Arc::new(anthropic::AnthropicProvider::new()));
+            *self
+                .anthropic
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                Some(Arc::new(anthropic::AnthropicProvider::new()));
         }
 
         if let Some(openai) = self.openai_provider() {
             openai.reload_credentials_now();
         } else if let Ok(credentials) = crate::auth::codex::load_credentials() {
             crate::logging::info("Hot-initialized OpenAI provider after auth change");
-            *self.openai.write().unwrap() =
+            *self
+                .openai
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) =
                 Some(Arc::new(openai::OpenAIProvider::new(credentials)));
         }
 
@@ -1670,7 +1703,11 @@ impl Provider for MultiProvider {
                     crate::logging::info(
                         "Hot-initialized OpenRouter/OpenAI-compatible provider after auth change",
                     );
-                    *self.openrouter.write().unwrap() = Some(Arc::new(provider));
+                    *self
+                        .openrouter
+                        .write()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                        Some(Arc::new(provider));
                 }
                 Err(e) => {
                     crate::logging::info(&format!(
@@ -1681,7 +1718,7 @@ impl Provider for MultiProvider {
             }
         }
 
-        let already_has = self.copilot_api.read().unwrap().is_some();
+        let already_has = self.copilot_provider().is_some();
         if !already_has {
             let status = crate::auth::AuthStatus::check();
             if status.copilot_has_api_token {
@@ -1693,7 +1730,10 @@ impl Provider for MultiProvider {
                         tokio::spawn(async move {
                             p_clone.detect_tier_and_set_default().await;
                         });
-                        *self.copilot_api.write().unwrap() = Some(provider);
+                        *self
+                            .copilot_api
+                            .write()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(provider);
                     }
                     Err(e) => {
                         crate::logging::info(&format!(
@@ -1705,13 +1745,17 @@ impl Provider for MultiProvider {
             }
         }
 
-        let already_has_gemini = self.gemini.read().unwrap().is_some();
+        let already_has_gemini = self.gemini_provider().is_some();
         if !already_has_gemini && crate::auth::gemini::load_tokens().is_ok() {
             crate::logging::info("Hot-initialized Gemini provider after login");
-            *self.gemini.write().unwrap() = Some(Arc::new(gemini::GeminiProvider::new()));
+            *self
+                .gemini
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                Some(Arc::new(gemini::GeminiProvider::new()));
         }
 
-        let already_has_cursor = self.cursor.read().unwrap().is_some();
+        let already_has_cursor = self.cursor_provider().is_some();
         if !already_has_cursor
             && matches!(
                 crate::auth::AuthStatus::check().cursor,
@@ -1719,7 +1763,11 @@ impl Provider for MultiProvider {
             )
         {
             crate::logging::info("Hot-initialized Cursor provider after login");
-            *self.cursor.write().unwrap() = Some(Arc::new(cursor::CursorCliProvider::new()));
+            *self
+                .cursor
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                Some(Arc::new(cursor::CursorCliProvider::new()));
         }
         if let Some(anthropic) = self.anthropic_provider() {
             Self::spawn_post_auth_model_refresh(anthropic, "Anthropic");
@@ -1733,10 +1781,10 @@ impl Provider for MultiProvider {
         if let Some(gemini) = self.gemini_provider() {
             Self::spawn_post_auth_model_refresh(gemini, "Gemini");
         }
-        if let Some(cursor) = self.cursor.read().unwrap().clone() {
+        if let Some(cursor) = self.cursor_provider() {
             Self::spawn_post_auth_model_refresh(cursor, "Cursor");
         }
-        if let Some(openrouter) = self.openrouter.read().unwrap().clone() {
+        if let Some(openrouter) = self.openrouter_provider() {
             Self::spawn_post_auth_model_refresh(openrouter, "OpenRouter");
         }
     }
@@ -1767,18 +1815,12 @@ impl Provider for MultiProvider {
                 .map(|o| o.handles_tools_internally())
                 .unwrap_or(false),
             ActiveProvider::Copilot => self
-                .copilot_api
-                .read()
-                .unwrap()
-                .as_ref()
+                .copilot_provider()
                 .map(|o| o.handles_tools_internally())
                 .unwrap_or(false),
             ActiveProvider::Gemini => false,
             ActiveProvider::Cursor => self
-                .cursor
-                .read()
-                .unwrap()
-                .as_ref()
+                .cursor_provider()
                 .map(|o| o.handles_tools_internally())
                 .unwrap_or(false),
             ActiveProvider::OpenRouter => false, // jcode executes tools
@@ -1915,10 +1957,7 @@ impl Provider for MultiProvider {
                 .map(|o| o.supports_compaction())
                 .unwrap_or(false),
             ActiveProvider::Copilot => self
-                .copilot_api
-                .read()
-                .unwrap()
-                .as_ref()
+                .copilot_provider()
                 .map(|o| o.supports_compaction())
                 .unwrap_or(false),
             ActiveProvider::Gemini => self
@@ -1926,17 +1965,11 @@ impl Provider for MultiProvider {
                 .map(|o| o.supports_compaction())
                 .unwrap_or(false),
             ActiveProvider::Cursor => self
-                .cursor
-                .read()
-                .unwrap()
-                .as_ref()
+                .cursor_provider()
                 .map(|o| o.supports_compaction())
                 .unwrap_or(false),
             ActiveProvider::OpenRouter => self
-                .openrouter
-                .read()
-                .unwrap()
-                .as_ref()
+                .openrouter_provider()
                 .map(|o| o.supports_compaction())
                 .unwrap_or(false),
         }
@@ -1958,31 +1991,19 @@ impl Provider for MultiProvider {
                 .map(|o| o.uses_jcode_compaction())
                 .unwrap_or(false),
             ActiveProvider::Copilot => self
-                .copilot_api
-                .read()
-                .unwrap()
-                .as_ref()
+                .copilot_provider()
                 .map(|o| o.uses_jcode_compaction())
                 .unwrap_or(false),
             ActiveProvider::Gemini => self
-                .gemini
-                .read()
-                .unwrap()
-                .as_ref()
+                .gemini_provider()
                 .map(|o| o.uses_jcode_compaction())
                 .unwrap_or(false),
             ActiveProvider::Cursor => self
-                .cursor
-                .read()
-                .unwrap()
-                .as_ref()
+                .cursor_provider()
                 .map(|o| o.uses_jcode_compaction())
                 .unwrap_or(false),
             ActiveProvider::OpenRouter => self
-                .openrouter
-                .read()
-                .unwrap()
-                .as_ref()
+                .openrouter_provider()
                 .map(|o| o.uses_jcode_compaction())
                 .unwrap_or(false),
         }
@@ -2030,7 +2051,7 @@ impl Provider for MultiProvider {
                 }
             }
             ActiveProvider::Copilot => {
-                let provider = self.copilot_api.read().unwrap().clone();
+                let provider = self.copilot_provider();
                 if let Some(copilot) = provider {
                     copilot
                         .native_compact(
@@ -2044,7 +2065,7 @@ impl Provider for MultiProvider {
                 }
             }
             ActiveProvider::Gemini => {
-                let provider = self.gemini.read().unwrap().clone();
+                let provider = self.gemini_provider();
                 if let Some(gemini) = provider {
                     gemini
                         .native_compact(
@@ -2058,7 +2079,7 @@ impl Provider for MultiProvider {
                 }
             }
             ActiveProvider::Cursor => {
-                let provider = self.cursor.read().unwrap().clone();
+                let provider = self.cursor_provider();
                 if let Some(cursor) = provider {
                     cursor
                         .native_compact(
@@ -2072,7 +2093,7 @@ impl Provider for MultiProvider {
                 }
             }
             ActiveProvider::OpenRouter => {
-                let provider = self.openrouter.read().unwrap().clone();
+                let provider = self.openrouter_provider();
                 if let Some(openrouter) = provider {
                     openrouter
                         .native_compact(
@@ -2089,13 +2110,13 @@ impl Provider for MultiProvider {
     }
 
     fn set_premium_mode(&self, mode: copilot::PremiumMode) {
-        if let Some(ref copilot) = *self.copilot_api.read().unwrap() {
+        if let Some(copilot) = self.copilot_provider() {
             copilot.set_premium_mode(mode);
         }
     }
 
     fn premium_mode(&self) -> copilot::PremiumMode {
-        if let Some(ref copilot) = *self.copilot_api.read().unwrap() {
+        if let Some(copilot) = self.copilot_provider() {
             copilot.get_premium_mode()
         } else {
             copilot::PremiumMode::Normal
@@ -2103,7 +2124,12 @@ impl Provider for MultiProvider {
     }
 
     fn drain_startup_notices(&self) -> Vec<String> {
-        std::mem::take(&mut *self.startup_notices.write().unwrap())
+        std::mem::take(
+            &mut *self
+                .startup_notices
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        )
     }
 
     fn context_window(&self) -> usize {
@@ -2122,31 +2148,19 @@ impl Provider for MultiProvider {
                 .map(|o| o.context_window())
                 .unwrap_or(DEFAULT_CONTEXT_LIMIT),
             ActiveProvider::Copilot => self
-                .copilot_api
-                .read()
-                .unwrap()
-                .as_ref()
+                .copilot_provider()
                 .map(|o| o.context_window())
                 .unwrap_or(DEFAULT_CONTEXT_LIMIT),
             ActiveProvider::Gemini => self
-                .gemini
-                .read()
-                .unwrap()
-                .as_ref()
+                .gemini_provider()
                 .map(|o| o.context_window())
                 .unwrap_or(DEFAULT_CONTEXT_LIMIT),
             ActiveProvider::Cursor => self
-                .cursor
-                .read()
-                .unwrap()
-                .as_ref()
+                .cursor_provider()
                 .map(|o| o.context_window())
                 .unwrap_or(DEFAULT_CONTEXT_LIMIT),
             ActiveProvider::OpenRouter => self
-                .openrouter
-                .read()
-                .unwrap()
-                .as_ref()
+                .openrouter_provider()
                 .map(|o| o.context_window())
                 .unwrap_or(DEFAULT_CONTEXT_LIMIT),
         }
@@ -2175,14 +2189,32 @@ impl Provider for MultiProvider {
         } else {
             None
         };
-        let copilot_api = self.copilot_api.read().unwrap().clone();
-        let gemini_provider = self.gemini.read().unwrap().clone();
-        let cursor_provider = if self.cursor.read().unwrap().is_some() {
+        let copilot_api = self
+            .copilot_api
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        let gemini_provider = self
+            .gemini
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        let cursor_provider = if self
+            .cursor
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_some()
+        {
             Some(Arc::new(cursor::CursorCliProvider::new()))
         } else {
             None
         };
-        let openrouter = if self.openrouter.read().unwrap().is_some() {
+        let openrouter = if self
+            .openrouter
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_some()
+        {
             openrouter::OpenRouterProvider::new().ok().map(Arc::new)
         } else {
             None

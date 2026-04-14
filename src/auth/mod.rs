@@ -1109,7 +1109,14 @@ fn summarize_sources(
     }
     match collected.len() {
         0 => (AuthCredentialSource::None, "not configured".to_string()),
-        1 => collected.into_iter().next().unwrap(),
+        1 => {
+            let mut iter = collected.into_iter();
+            if let Some(only) = iter.next() {
+                only
+            } else {
+                unreachable!("collected.len() == 1 but no source was present")
+            }
+        }
         _ => (
             AuthCredentialSource::Mixed,
             collected

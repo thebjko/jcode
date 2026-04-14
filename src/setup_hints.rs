@@ -44,10 +44,6 @@ pub struct StartupHints {
 }
 
 impl StartupHints {
-    fn none() -> Option<Self> {
-        None
-    }
-
     fn with_spawn_notice(message: String) -> Self {
         Self {
             auto_send_message: None,
@@ -1131,7 +1127,7 @@ fn run_macos_hotkey_listener() -> Result<()> {
 ///   to AI-guided setup by returning a prebuilt prompt.
 pub fn maybe_show_setup_hints() -> Option<StartupHints> {
     if !io::stdin().is_terminal() || !io::stderr().is_terminal() {
-        return StartupHints::none();
+        return None;
     }
 
     let mut state = SetupHintsState::load();

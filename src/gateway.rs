@@ -303,7 +303,10 @@ async fn handle_ws_connection(
             }
 
             let ws_auth = extract_ws_auth(request)?;
-            *auth_cb.lock().expect("websocket auth mutex poisoned") = Some(ws_auth);
+            let mut guard = auth_cb
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            *guard = Some(ws_auth);
             Ok(response)
         },
     )
@@ -312,7 +315,7 @@ async fn handle_ws_connection(
     // Validate auth token
     let auth = auth
         .lock()
-        .expect("websocket auth mutex poisoned")
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
         .take()
         .ok_or_else(|| anyhow::anyhow!("No auth token provided"))?;
     let token = auth.token;
@@ -564,17 +567,27 @@ fn ws_error_response(
     reason: &str,
     body: &str,
 ) -> tokio_tungstenite::tungstenite::handshake::server::ErrorResponse {
-    tokio_tungstenite::tungstenite::http::Response::builder()
+    let primary = tokio_tungstenite::tungstenite::http::Response::builder()
         .status(status)
         .header("Content-Type", "text/plain; charset=utf-8")
         .header("Connection", "close")
-        .body(Some(format!("{}\n", body)))
-        .unwrap_or_else(|_| {
-            tokio_tungstenite::tungstenite::http::Response::builder()
-                .status(500)
-                .body(Some(format!("{}\n", reason)))
-                .expect("build fallback websocket error response")
-        })
+        .body(Some(format!("{}\n", body)));
+    if let Ok(response) = primary {
+        return response;
+    }
+
+    let fallback = tokio_tungstenite::tungstenite::http::Response::builder()
+        .status(500)
+        .body(Some(format!("{}\n", reason)));
+    if let Ok(response) = fallback {
+        return response;
+    }
+
+    let mut response =
+        tokio_tungstenite::tungstenite::http::Response::new(Some(format!("{}\n", reason)));
+    *response.status_mut() =
+        tokio_tungstenite::tungstenite::http::StatusCode::INTERNAL_SERVER_ERROR;
+    response
 }
 
 // ---------------------------------------------------------------------------

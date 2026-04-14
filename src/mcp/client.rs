@@ -84,12 +84,18 @@ impl McpHandle {
 
     /// Get server info
     pub fn server_info(&self) -> Option<ServerInfo> {
-        self.server_info.read().unwrap().clone()
+        self.server_info
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
 
     /// Get available tools
     pub fn tools(&self) -> Vec<McpToolDef> {
-        self.tools.read().unwrap().clone()
+        self.tools
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
 
     /// Refresh the list of available tools
@@ -98,7 +104,10 @@ impl McpHandle {
 
         if let Some(result) = response.result {
             let tools_result: ToolsListResult = serde_json::from_value(result)?;
-            *self.tools.write().unwrap() = tools_result.tools;
+            *self
+                .tools
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = tools_result.tools;
         }
 
         Ok(())
@@ -272,8 +281,16 @@ impl McpClient {
 
         if let Some(result) = response.result {
             let init_result: InitializeResult = serde_json::from_value(result)?;
-            *self.handle.server_info.write().unwrap() = init_result.server_info;
-            *self.handle.capabilities.write().unwrap() = init_result.capabilities;
+            *self
+                .handle
+                .server_info
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = init_result.server_info;
+            *self
+                .handle
+                .capabilities
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = init_result.capabilities;
         }
 
         // Send initialized notification

@@ -37,7 +37,11 @@ impl MultiProvider {
                 }
             }
             ActiveProvider::Copilot => {
-                let copilot = self.copilot_api.read().unwrap().clone();
+                let copilot = self
+                    .copilot_api
+                    .read()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone();
                 if let Some(copilot) = copilot {
                     copilot
                         .complete(messages, tools, system, resume_session_id)
@@ -49,7 +53,11 @@ impl MultiProvider {
                 }
             }
             ActiveProvider::Gemini => {
-                let gemini = self.gemini.read().unwrap().clone();
+                let gemini = self
+                    .gemini
+                    .read()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone();
                 if let Some(gemini) = gemini {
                     gemini
                         .complete(messages, tools, system, resume_session_id)
@@ -61,7 +69,11 @@ impl MultiProvider {
                 }
             }
             ActiveProvider::Cursor => {
-                let cursor = self.cursor.read().unwrap().clone();
+                let cursor = self
+                    .cursor
+                    .read()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone();
                 if let Some(cursor) = cursor {
                     cursor
                         .complete(messages, tools, system, resume_session_id)
@@ -73,7 +85,11 @@ impl MultiProvider {
                 }
             }
             ActiveProvider::OpenRouter => {
-                let openrouter = self.openrouter.read().unwrap().clone();
+                let openrouter = self
+                    .openrouter
+                    .read()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone();
                 if let Some(openrouter) = openrouter {
                     openrouter
                         .complete(messages, tools, system, resume_session_id)
@@ -142,7 +158,11 @@ impl MultiProvider {
                 }
             }
             ActiveProvider::Copilot => {
-                let copilot = self.copilot_api.read().unwrap().clone();
+                let copilot = self
+                    .copilot_api
+                    .read()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone();
                 if let Some(copilot) = copilot {
                     copilot
                         .complete_split(
@@ -160,7 +180,11 @@ impl MultiProvider {
                 }
             }
             ActiveProvider::Gemini => {
-                let gemini = self.gemini.read().unwrap().clone();
+                let gemini = self
+                    .gemini
+                    .read()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone();
                 if let Some(gemini) = gemini {
                     gemini
                         .complete_split(
@@ -178,7 +202,11 @@ impl MultiProvider {
                 }
             }
             ActiveProvider::Cursor => {
-                let cursor = self.cursor.read().unwrap().clone();
+                let cursor = self
+                    .cursor
+                    .read()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone();
                 if let Some(cursor) = cursor {
                     cursor
                         .complete_split(
@@ -196,7 +224,11 @@ impl MultiProvider {
                 }
             }
             ActiveProvider::OpenRouter => {
-                let openrouter = self.openrouter.read().unwrap().clone();
+                let openrouter = self
+                    .openrouter
+                    .read()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone();
                 if let Some(openrouter) = openrouter {
                     openrouter
                         .complete_split(

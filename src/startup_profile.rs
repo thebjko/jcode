@@ -19,7 +19,10 @@ impl StartupProfile {
 }
 
 pub fn init() {
-    let mut guard = PROFILE.lock().unwrap();
+    let mut guard = match PROFILE.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
     *guard = Some(StartupProfile::new());
 }
 
@@ -32,7 +35,10 @@ pub fn mark(name: &str) {
 }
 
 pub fn report() -> String {
-    let guard = PROFILE.lock().unwrap();
+    let guard = match PROFILE.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
     let profile = match guard.as_ref() {
         Some(p) => p,
         None => return "No startup profile recorded".to_string(),
@@ -41,9 +47,8 @@ pub fn report() -> String {
     let total = profile
         .marks
         .last()
-        .expect("at least one profile mark")
-        .1
-        .duration_since(profile.start);
+        .map(|(_, instant)| instant.duration_since(profile.start))
+        .unwrap_or_default();
     let mut lines = vec![format!(
         "=== Startup Profile ({:.1}ms total) ===",
         total.as_secs_f64() * 1000.0

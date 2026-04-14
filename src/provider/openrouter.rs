@@ -595,7 +595,10 @@ impl OpenRouterProvider {
     }
 
     fn set_explicit_pin(&self, model: &str, provider: ParsedProvider) {
-        let mut pin = self.provider_pin.lock().unwrap();
+        let mut pin = self
+            .provider_pin
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         *pin = Some(ProviderPin {
             model: model.to_string(),
             provider: provider.name,
@@ -606,7 +609,10 @@ impl OpenRouterProvider {
     }
 
     fn clear_pin_if_model_changed(&self, model: &str, clear_explicit: bool) {
-        let mut pin = self.provider_pin.lock().unwrap();
+        let mut pin = self
+            .provider_pin
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(existing) = pin.as_ref() {
             let should_clear = existing.model != model
                 || (clear_explicit && existing.source == PinSource::Explicit);
@@ -626,7 +632,11 @@ impl OpenRouterProvider {
         }
 
         let base = self.provider_routing.read().await.clone();
-        let pin = self.provider_pin.lock().unwrap().clone();
+        let pin = self
+            .provider_pin
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
 
         if let Some(pin) = pin
             && pin.model == model
@@ -719,8 +729,11 @@ impl OpenRouterProvider {
         let model = self.model.try_read().ok()?.clone();
 
         // Check pin first
-        if let Ok(pin) = self.provider_pin.lock()
-            && let Some(ref pin) = *pin
+        let pin = self
+            .provider_pin
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(ref pin) = *pin
             && pin.model == model
         {
             return Some(pin.provider.clone());
@@ -2016,14 +2029,15 @@ async fn stream_response(
 
     loop {
         let event = match tokio::time::timeout(SSE_CHUNK_TIMEOUT, stream.next()).await {
-            Ok(Some(event)) => event,
+            Ok(Some(Ok(event))) => event,
+            Ok(Some(Err(e))) => anyhow::bail!("Stream error: {}", e),
             Ok(None) => break, // stream ended normally
             Err(_) => {
                 crate::logging::warn("OpenRouter SSE stream timed out (no data for 180s)");
                 anyhow::bail!("Stream read timeout: no data received for 180 seconds");
             }
         };
-        if tx.send(event).await.is_err() {
+        if tx.send(Ok(event)).await.is_err() {
             return Ok(());
         }
     }
@@ -2088,7 +2102,10 @@ impl OpenRouterStream {
     }
 
     fn observe_provider(&mut self, provider: &str) {
-        let mut pin = self.provider_pin.lock().unwrap();
+        let mut pin = self
+            .provider_pin
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(existing) = pin.as_ref() {
             if existing.source == PinSource::Explicit && existing.model == self.model {
                 return;
@@ -2111,7 +2128,10 @@ impl OpenRouterStream {
     }
 
     fn refresh_cache_pin(&mut self, provider: &str) {
-        let mut pin = self.provider_pin.lock().unwrap();
+        let mut pin = self
+            .provider_pin
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(existing) = pin.as_mut()
             && existing.model == self.model
             && existing.provider == provider

@@ -126,18 +126,17 @@ impl BackgroundTaskManager {
     /// Generate a short, unique task ID
     fn generate_task_id() -> String {
         use std::time::{SystemTime, UNIX_EPOCH};
+        const TASK_ID_ALPHABET: &[u8; 36] = b"abcdefghijklmnopqrstuvwxyz0123456789";
+
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .expect("system time after unix epoch")
+            .unwrap_or_default()
             .as_millis();
         // Use last 6 digits of timestamp + 4 random chars
         let rand_part: String = (0..4)
             .map(|_| {
-                let idx = (rand::random::<u8>() % 36) as usize;
-                "abcdefghijklmnopqrstuvwxyz0123456789"
-                    .chars()
-                    .nth(idx)
-                    .expect("idx < 36")
+                let idx = (rand::random::<u8>() as usize) % TASK_ID_ALPHABET.len();
+                TASK_ID_ALPHABET[idx] as char
             })
             .collect();
         format!(
