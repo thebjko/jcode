@@ -58,6 +58,7 @@ mod remote_notifications;
 mod replay;
 mod run_shell;
 mod state_ui;
+mod state_ui_input_helpers;
 mod state_ui_messages;
 mod state_ui_maintenance;
 mod state_ui_storage;
