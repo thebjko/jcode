@@ -8,12 +8,17 @@ use tokio::time::{Duration, Instant, sleep};
 
 pub(crate) struct ActiveDictation {
     pid: u32,
+    #[cfg(not(unix))]
     child: Arc<Mutex<Option<Child>>>,
 }
 
 impl ActiveDictation {
-    fn new(pid: u32, child: Arc<Mutex<Option<Child>>>) -> Self {
-        Self { pid, child }
+    fn new(pid: u32, _child: Arc<Mutex<Option<Child>>>) -> Self {
+        Self {
+            pid,
+            #[cfg(not(unix))]
+            child: _child,
+        }
     }
 
     async fn request_stop(&self) -> Result<(), String> {
@@ -313,6 +318,7 @@ async fn publish_dictation_result(
     }
 }
 
+#[cfg(test)]
 async fn run_dictation_command(command: &str, timeout_secs: u64) -> Result<String, String> {
     let mut child = shell_command(command);
     child.stdout(Stdio::piped()).stderr(Stdio::piped());

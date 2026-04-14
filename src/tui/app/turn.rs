@@ -19,6 +19,7 @@ impl App {
         split.dynamic_part.push_str(reminder);
     }
 
+    #[allow(dead_code)]
     async fn run_turn(&mut self) -> Result<()> {
         loop {
             let repaired = self.repair_missing_tool_outputs();
@@ -1579,6 +1580,7 @@ impl App {
         Ok(())
     }
 
+    #[allow(dead_code)]
     fn build_system_prompt(&mut self, memory_prompt: Option<&str>) -> String {
         let split = self.build_system_prompt_split(memory_prompt);
         if split.dynamic_part.is_empty() {

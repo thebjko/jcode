@@ -441,11 +441,6 @@ impl App {
         self.set_diagram_pane_ratio(next, true, true);
     }
 
-    pub(super) fn adjust_diagram_pane_ratio_immediate(&mut self, delta: i8) {
-        let next = self.diagram_pane_ratio_target as i16 + delta as i16;
-        self.set_diagram_pane_ratio(next, false, false);
-    }
-
     pub(super) fn set_diagram_pane_ratio_immediate(&mut self, next: u8) {
         self.set_diagram_pane_ratio(next as i16, false, false);
     }
@@ -647,18 +642,6 @@ impl App {
             KeyCode::Char('4') => Some(100),
             _ => None,
         }
-    }
-
-    pub(super) fn jump_diagram(&mut self, index: usize) {
-        let total = crate::tui::mermaid::get_active_diagrams().len();
-        if total == 0 {
-            return;
-        }
-        let target = index.min(total - 1);
-        self.diagram_index = target;
-        self.diagram_scroll_x = 0;
-        self.diagram_scroll_y = 0;
-        self.set_status_notice(format!("Pinned {}/{}", target + 1, total));
     }
 
     pub(super) fn handle_diagram_focus_key(

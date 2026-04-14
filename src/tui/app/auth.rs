@@ -3,22 +3,11 @@ use crossterm::event::{KeyCode, KeyModifiers};
 
 #[derive(Debug, Clone)]
 pub(super) enum PendingLogin {
-    /// Waiting for user to paste Claude OAuth code (verifier needed for token exchange)
-    Claude {
-        verifier: String,
-        redirect_uri: Option<String>,
-    },
     /// Waiting for user to paste Claude OAuth code for a specific stored account
     ClaudeAccount {
         verifier: String,
         label: String,
         redirect_uri: Option<String>,
-    },
-    /// Waiting for user to paste an OpenAI OAuth callback URL/query.
-    OpenAi {
-        verifier: String,
-        expected_state: String,
-        redirect_uri: String,
     },
     /// Waiting for user to paste an OpenAI OAuth callback URL/query for a specific stored account.
     OpenAiAccount {
@@ -64,19 +53,13 @@ pub(super) enum PendingLogin {
     AutoImportSelection {
         candidates: Vec<crate::cli::provider_init::ExternalAuthReviewCandidate>,
     },
-    /// Interactive provider selection (user picks a number)
-    ProviderSelection,
 }
 
 impl PendingLogin {
     fn telemetry_context(&self) -> Option<(String, String)> {
         match self {
-            Self::Claude { .. } | Self::ClaudeAccount { .. } => {
-                Some(("claude".to_string(), "oauth".to_string()))
-            }
-            Self::OpenAi { .. } | Self::OpenAiAccount { .. } => {
-                Some(("openai".to_string(), "oauth".to_string()))
-            }
+            Self::ClaudeAccount { .. } => Some(("claude".to_string(), "oauth".to_string())),
+            Self::OpenAiAccount { .. } => Some(("openai".to_string(), "oauth".to_string())),
             Self::Gemini { .. } => Some(("gemini".to_string(), "oauth".to_string())),
             Self::Antigravity { .. } => Some(("antigravity".to_string(), "oauth".to_string())),
             Self::ApiKeyProfile {
@@ -97,7 +80,7 @@ impl PendingLogin {
             }
             Self::CursorApiKey => Some(("cursor".to_string(), "api_key".to_string())),
             Self::Copilot => Some(("copilot".to_string(), "device_code".to_string())),
-            Self::AutoImportSelection { .. } | Self::ProviderSelection => None,
+            Self::AutoImportSelection { .. } => None,
         }
     }
 }
@@ -263,41 +246,6 @@ impl App {
         self.set_status_notice("Login: choose a provider");
     }
 
-    pub(super) fn open_login_picker(&mut self) {
-        use crate::tui::login_picker::{LoginPicker, LoginPickerItem, LoginPickerSummary};
-
-        crate::telemetry::record_setup_step_once("login_picker_opened");
-
-        let status = crate::auth::AuthStatus::check_fast();
-        let providers = crate::provider_catalog::tui_login_providers();
-        let mut items = Vec::with_capacity(providers.len());
-        let mut summary = LoginPickerSummary::default();
-
-        for (index, provider) in providers.iter().enumerate() {
-            let auth_state = status.state_for_provider(*provider);
-            let method_detail = status.method_detail_for_provider(*provider);
-            match auth_state {
-                crate::auth::AuthState::Available => summary.ready_count += 1,
-                crate::auth::AuthState::Expired => summary.attention_count += 1,
-                crate::auth::AuthState::NotConfigured => summary.setup_count += 1,
-            }
-            if provider.recommended {
-                summary.recommended_count += 1;
-            }
-            items.push(LoginPickerItem::new(
-                index + 1,
-                *provider,
-                auth_state,
-                method_detail,
-            ));
-        }
-
-        self.login_picker_overlay = Some(std::cell::RefCell::new(LoginPicker::with_summary(
-            " Login ", items, summary,
-        )));
-        self.pending_login = None;
-    }
-
     pub(super) fn start_login_provider(
         &mut self,
         provider: crate::provider_catalog::LoginProviderDescriptor,
@@ -405,56 +353,6 @@ impl App {
         });
     }
 
-    fn start_claude_login_manual(&mut self) {
-        use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-        use sha2::{Digest, Sha256};
-
-        let verifier: String = {
-            use rand::Rng;
-            const CHARSET: &[u8] =
-                b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-            let mut rng = rand::rng();
-            (0..64)
-                .map(|_| {
-                    let idx = rng.random_range(0..CHARSET.len());
-                    CHARSET[idx] as char
-                })
-                .collect()
-        };
-
-        let mut hasher = Sha256::new();
-        hasher.update(verifier.as_bytes());
-        let hash = hasher.finalize();
-        let challenge = URL_SAFE_NO_PAD.encode(hash);
-
-        let auth_url = crate::auth::oauth::claude_auth_url(
-            crate::auth::oauth::claude::REDIRECT_URI,
-            &challenge,
-            &verifier,
-        );
-        let qr_section = crate::login_qr::markdown_section_for_tui(
-            &auth_url,
-            "Scan this on another device if this machine has no browser:",
-        )
-        .map(|section| format!("\n\n{section}"))
-        .unwrap_or_default();
-
-        let _ = open::that(&auth_url);
-
-        self.push_display_message(DisplayMessage::system(format!(
-            "**Claude OAuth Login**\n\n\
-             Opening browser for authentication...\n\n\
-             If the browser didn't open, visit:\n{}\n\n\
-             After logging in, copy the callback URL or authorization code and **paste it here**.{}",
-            auth_url, qr_section
-        )));
-        self.set_status_notice("Login: paste code...");
-        self.begin_pending_login(PendingLogin::Claude {
-            verifier,
-            redirect_uri: None,
-        });
-    }
-
     pub(super) fn start_claude_login_for_account(&mut self, label: &str) {
         use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
         use sha2::{Digest, Sha256};
@@ -504,14 +402,6 @@ impl App {
             label: label.to_string(),
             redirect_uri: None,
         });
-    }
-
-    pub(super) fn show_accounts(&mut self) {
-        self.open_account_center(None);
-    }
-
-    pub(super) fn show_openai_accounts(&mut self) {
-        self.open_account_center(Some("openai"));
     }
 
     pub(super) fn open_account_center(&mut self, provider_filter: Option<&str>) {
@@ -2390,30 +2280,6 @@ impl App {
         );
     }
 
-    fn start_opencode_login(&mut self) {
-        self.start_openai_compatible_profile_login(crate::provider_catalog::OPENCODE_PROFILE);
-    }
-
-    fn start_opencode_go_login(&mut self) {
-        self.start_openai_compatible_profile_login(crate::provider_catalog::OPENCODE_GO_PROFILE);
-    }
-
-    fn start_zai_login(&mut self) {
-        self.start_openai_compatible_profile_login(crate::provider_catalog::ZAI_PROFILE);
-    }
-
-    fn start_chutes_login(&mut self) {
-        self.start_openai_compatible_profile_login(crate::provider_catalog::CHUTES_PROFILE);
-    }
-
-    fn start_cerebras_login(&mut self) {
-        self.start_openai_compatible_profile_login(crate::provider_catalog::CEREBRAS_PROFILE);
-    }
-
-    fn start_openai_compatible_login(&mut self) {
-        self.start_openai_compatible_profile_login(crate::provider_catalog::OPENAI_COMPAT_PROFILE);
-    }
-
     fn start_openai_compatible_profile_login(
         &mut self,
         profile: crate::provider_catalog::OpenAiCompatibleProfile,
@@ -2860,7 +2726,7 @@ impl App {
         }
 
         match &pending {
-            PendingLogin::OpenAi { .. } | PendingLogin::OpenAiAccount { .. }
+            PendingLogin::OpenAiAccount { .. }
                 if !looks_like_oauth_callback_input(trimmed) =>
             {
                 self.push_display_message(DisplayMessage::system(
@@ -2890,42 +2756,6 @@ impl App {
         }
 
         match pending {
-            PendingLogin::Claude {
-                verifier,
-                redirect_uri,
-            } => {
-                self.set_status_notice("Login: exchanging...");
-                let input_owned = input.clone();
-                tokio::spawn(async move {
-                    match Self::claude_token_exchange(
-                        verifier,
-                        input_owned,
-                        &crate::auth::claude::login_target_label(None)
-                            .unwrap_or_else(|_| crate::auth::claude::primary_account_label()),
-                        redirect_uri,
-                    )
-                    .await
-                    {
-                        Ok(msg) => {
-                            Bus::global().publish(BusEvent::LoginCompleted(LoginCompleted {
-                                provider: "claude".to_string(),
-                                success: true,
-                                message: msg,
-                            }));
-                        }
-                        Err(e) => {
-                            Bus::global().publish(BusEvent::LoginCompleted(LoginCompleted {
-                                provider: "claude".to_string(),
-                                success: false,
-                                message: format!("Claude login failed: {}", e),
-                            }));
-                        }
-                    }
-                });
-                self.push_display_message(DisplayMessage::system(
-                    "Exchanging authorization code for tokens...".to_string(),
-                ));
-            }
             PendingLogin::ClaudeAccount {
                 verifier,
                 label,
@@ -2963,43 +2793,6 @@ impl App {
                     "Exchanging authorization code for account `{}`...",
                     label
                 )));
-            }
-            PendingLogin::OpenAi {
-                verifier,
-                expected_state,
-                redirect_uri,
-            } => {
-                self.set_status_notice("Login: exchanging...");
-                let input_owned = input.clone();
-                tokio::spawn(async move {
-                    match Self::openai_token_exchange(
-                        verifier,
-                        input_owned,
-                        None,
-                        Some(expected_state),
-                        &redirect_uri,
-                    )
-                    .await
-                    {
-                        Ok(msg) => {
-                            Bus::global().publish(BusEvent::LoginCompleted(LoginCompleted {
-                                provider: "openai".to_string(),
-                                success: true,
-                                message: msg,
-                            }));
-                        }
-                        Err(e) => {
-                            Bus::global().publish(BusEvent::LoginCompleted(LoginCompleted {
-                                provider: "openai".to_string(),
-                                success: false,
-                                message: format!("OpenAI login failed: {}", e),
-                            }));
-                        }
-                    }
-                });
-                self.push_display_message(DisplayMessage::system(
-                    "Exchanging OpenAI callback for tokens...".to_string(),
-                ));
             }
             PendingLogin::OpenAiAccount {
                 verifier,
@@ -3421,21 +3214,6 @@ impl App {
                     }
                 });
             }
-            PendingLogin::ProviderSelection => {
-                let providers = crate::provider_catalog::tui_login_providers();
-                if let Some(provider) =
-                    crate::provider_catalog::resolve_login_selection(&input, &providers)
-                {
-                    self.start_login_provider(provider);
-                } else {
-                    self.push_display_message(DisplayMessage::error(format!(
-                        "Unknown selection '{}'. Type 1-{} or a provider name.",
-                        input.trim(),
-                        providers.len()
-                    )));
-                    self.pending_login = Some(PendingLogin::ProviderSelection);
-                }
-            }
         }
     }
 
@@ -3563,6 +3341,7 @@ impl App {
     }
 }
 
+#[cfg(test)]
 fn save_tui_openai_compatible_api_base(
     api_base: &str,
 ) -> anyhow::Result<crate::provider_catalog::ResolvedOpenAiCompatibleProfile> {
@@ -3582,6 +3361,7 @@ fn save_tui_openai_compatible_api_base(
     ))
 }
 
+#[cfg(test)]
 fn save_tui_openai_compatible_key(
     profile: crate::provider_catalog::OpenAiCompatibleProfile,
     key: &str,

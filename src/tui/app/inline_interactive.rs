@@ -12,9 +12,6 @@ enum InlinePickerPreviewRequest {
     Login {
         filter: String,
     },
-    Usage {
-        filter: String,
-    },
     Account {
         provider_filter: Option<String>,
         filter: String,
@@ -26,7 +23,6 @@ impl InlinePickerPreviewRequest {
         match self {
             Self::Model { .. } => PickerKind::Model,
             Self::Login { .. } => PickerKind::Login,
-            Self::Usage { .. } => PickerKind::Usage,
             Self::Account { .. } => PickerKind::Account,
         }
     }
@@ -35,7 +31,6 @@ impl InlinePickerPreviewRequest {
         match self {
             Self::Model { filter }
             | Self::Login { filter }
-            | Self::Usage { filter }
             | Self::Account { filter, .. } => filter,
         }
     }
@@ -53,10 +48,6 @@ impl InlinePickerPreviewRequest {
     fn open(&self, app: &mut App) {
         match self {
             Self::Model { .. } => app.open_model_picker(),
-            Self::Usage { .. } => {
-                app.open_usage_inline_loading();
-                app.request_usage_report();
-            }
             Self::Login { .. } => app.open_login_picker_inline(),
             Self::Account {
                 provider_filter, ..
@@ -139,17 +130,6 @@ fn catchup_queue_position(current_session_id: &str, session_id: &str) -> Option<
         .iter()
         .position(|session| session.id == session_id)
         .map(|idx| (idx + 1, total))
-}
-
-fn parse_agent_model_target(input: &str) -> Option<AgentModelTarget> {
-    match input.trim().to_ascii_lowercase().as_str() {
-        "swarm" | "agent" | "agents" | "subagent" | "subagents" => Some(AgentModelTarget::Swarm),
-        "review" | "reviewer" | "code-review" | "codereview" => Some(AgentModelTarget::Review),
-        "judge" | "judging" | "execution-judge" | "autojudge" => Some(AgentModelTarget::Judge),
-        "memory" | "memories" | "sidecar" => Some(AgentModelTarget::Memory),
-        "ambient" => Some(AgentModelTarget::Ambient),
-        _ => None,
-    }
 }
 
 fn agent_model_target_label(target: AgentModelTarget) -> &'static str {
@@ -297,11 +277,6 @@ impl App {
 
     pub(super) fn login_picker_preview_filter(input: &str) -> Option<String> {
         slash_command_preview_filter(input, &["/login"])
-    }
-
-    pub(super) fn usage_picker_preview_filter(input: &str) -> Option<String> {
-        let _ = input;
-        None
     }
 
     fn account_picker_preview_request(&self, input: &str) -> Option<InlinePickerPreviewRequest> {
@@ -1944,34 +1919,6 @@ impl App {
             _ => {}
         }
         Ok(())
-    }
-
-    pub(super) fn picker_fuzzy_match_positions(pattern: &str, text: &str) -> Option<Vec<usize>> {
-        let pat: Vec<char> = pattern
-            .to_lowercase()
-            .chars()
-            .filter(|c| !c.is_whitespace())
-            .collect();
-        let txt: Vec<char> = text.to_lowercase().chars().collect();
-        if pat.is_empty() {
-            return Some(Vec::new());
-        }
-
-        let mut pi = 0;
-        let mut positions = Vec::new();
-
-        for (ti, &tc) in txt.iter().enumerate() {
-            if pi < pat.len() && tc == pat[pi] {
-                positions.push(ti);
-                pi += 1;
-            }
-        }
-
-        if pi == pat.len() {
-            Some(positions)
-        } else {
-            None
-        }
     }
 
     pub(super) fn picker_fuzzy_score(pattern: &str, text: &str) -> Option<i32> {

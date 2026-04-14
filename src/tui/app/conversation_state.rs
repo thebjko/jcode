@@ -213,32 +213,6 @@ impl App {
         self.tool_output_scan_index = 0;
     }
 
-    pub(super) fn rebuild_tool_result_index(&mut self) {
-        self.reset_tool_output_tracking();
-        if self.is_remote {
-            for msg in &self.messages {
-                if let Role::User = msg.role {
-                    for block in &msg.content {
-                        if let ContentBlock::ToolResult { tool_use_id, .. } = block {
-                            self.tool_result_ids.insert(tool_use_id.clone());
-                        }
-                    }
-                }
-            }
-        } else {
-            for msg in &self.session.messages {
-                if let Role::User = msg.role {
-                    for block in &msg.content {
-                        if let ContentBlock::ToolResult { tool_use_id, .. } = block {
-                            self.tool_result_ids.insert(tool_use_id.clone());
-                        }
-                    }
-                }
-            }
-        }
-        self.tool_output_scan_index = 0;
-    }
-
     pub(super) fn reseed_compaction_from_provider_messages(&mut self) {
         if self.is_remote || !self.provider.uses_jcode_compaction() {
             return;

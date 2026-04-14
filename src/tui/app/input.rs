@@ -1133,45 +1133,6 @@ pub(super) fn handle_basic_key(app: &mut App, code: KeyCode) -> bool {
     }
 }
 
-pub(super) fn normalize_shifted_printable_key(code: KeyCode, modifiers: KeyModifiers) -> KeyCode {
-    if !modifiers.contains(KeyModifiers::SHIFT) {
-        return code;
-    }
-
-    match code {
-        KeyCode::Char(c) => KeyCode::Char(normalize_shifted_ascii_char(c)),
-        _ => code,
-    }
-}
-
-fn normalize_shifted_ascii_char(c: char) -> char {
-    match c {
-        'a'..='z' => c.to_ascii_uppercase(),
-        '1' => '!',
-        '2' => '@',
-        '3' => '#',
-        '4' => '$',
-        '5' => '%',
-        '6' => '^',
-        '7' => '&',
-        '8' => '*',
-        '9' => '(',
-        '0' => ')',
-        '`' => '~',
-        '-' => '_',
-        '=' => '+',
-        '[' => '{',
-        ']' => '}',
-        '\\' => '|',
-        ';' => ':',
-        '\'' => '"',
-        ',' => '<',
-        '.' => '>',
-        '/' => '?',
-        _ => c,
-    }
-}
-
 pub(super) fn take_prepared_input(app: &mut App) -> PreparedInput {
     let raw_input = std::mem::take(&mut app.input);
     let expanded = expand_paste_placeholders(app, &raw_input);
@@ -1251,6 +1212,7 @@ impl App {
         )
     }
 
+    #[cfg(test)]
     pub(super) fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Result<()> {
         self.handle_key_core(code, modifiers, None)
     }
@@ -1484,6 +1446,7 @@ impl App {
     /// Try to paste an image from the clipboard. Checks native image data first,
     /// then falls back to HTML clipboard for <img> URLs, then arboard text.
     /// Used by Alt+V handlers in both local and remote mode.
+    #[cfg(test)]
     pub(super) fn paste_image_from_clipboard(&mut self) {
         paste_image_from_clipboard(self);
     }

@@ -23,15 +23,6 @@ impl App {
         self.streaming_total_output_tokens = 0;
     }
 
-    pub(super) fn open_usage_overlay_loading(&mut self) {
-        self.inline_view_state = None;
-        self.inline_interactive_state = None;
-        self.usage_overlay = Some(std::cell::RefCell::new(
-            crate::tui::usage_overlay::UsageOverlay::loading(),
-        ));
-        self.set_status_notice("Usage → refreshing");
-    }
-
     pub(super) fn open_usage_inline_loading(&mut self) {
         self.usage_overlay = None;
         self.inline_interactive_state = None;

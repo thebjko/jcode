@@ -670,28 +670,6 @@ pub(super) fn prepare_review_spawned_session(
     App::save_startup_message_for_session(session_id, startup_message);
 }
 
-pub(super) fn prepare_autoreview_spawned_session(session_id: &str, startup_message: String) {
-    prepare_review_spawned_session(
-        session_id,
-        startup_message,
-        current_autoreview_model_override(),
-        None,
-        Some("autoreview".to_string()),
-        None,
-    );
-}
-
-pub(super) fn prepare_autojudge_spawned_session(session_id: &str, startup_message: String) {
-    prepare_review_spawned_session(
-        session_id,
-        startup_message,
-        current_autojudge_model_override(),
-        None,
-        Some("autojudge".to_string()),
-        None,
-    );
-}
-
 pub(super) fn launch_prompt_in_new_session_local(
     app: &mut App,
     content: String,
@@ -838,24 +816,7 @@ pub(super) fn queue_review_spawn_remote(
     app.set_status_notice(format!("{} queued", label));
 }
 
-pub(super) fn queue_autoreview_remote(app: &mut App) {
-    if !app.autoreview_enabled
-        || app.pending_split_request
-        || app.pending_split_startup_message.is_some()
-    {
-        return;
-    }
-    let parent_session_id = current_feedback_target_session_id(app);
-    queue_review_spawn_remote(
-        app,
-        "Autoreview",
-        parent_session_id.clone(),
-        build_autoreview_startup_message(&parent_session_id),
-        current_autoreview_model_override(),
-        None,
-    );
-}
-
+#[cfg(test)]
 pub(super) fn queue_autojudge_remote(app: &mut App) {
     if !app.autojudge_enabled
         || app.pending_split_request
@@ -3401,14 +3362,6 @@ pub(super) fn handle_feedback_command(app: &mut App, trimmed: &str) -> bool {
     )));
     app.set_status_notice("Feedback recorded");
     true
-}
-
-pub(super) fn handle_info_command(app: &mut App, trimmed: &str) -> bool {
-    super::state_ui::handle_info_command(app, trimmed)
-}
-
-pub(super) fn handle_auth_command(app: &mut App, trimmed: &str) -> bool {
-    super::auth::handle_auth_command(app, trimmed)
 }
 
 pub(super) fn handle_dev_command(app: &mut App, trimmed: &str) -> bool {
