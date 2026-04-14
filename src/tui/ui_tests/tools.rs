@@ -545,6 +545,38 @@ fn test_tool_summary_browser_eval_truncates_script() {
 }
 
 #[test]
+fn test_tool_summary_agentgrep_smart_uses_terms_subject_relation() {
+    let tool = ToolCall {
+        id: "agentgrep-smart-terms".to_string(),
+        name: "agentgrep".to_string(),
+        input: serde_json::json!({
+            "mode": "smart",
+            "terms": ["subject:agentgrep", "relation:build_args", "path:src/tool"]
+        }),
+        intent: None,
+    };
+
+    let summary = tools_ui::get_tool_summary_with_budget(&tool, 50, Some(200));
+    assert_eq!(summary, "smart agentgrep:build_args");
+}
+
+#[test]
+fn test_tool_summary_agentgrep_smart_uses_query_subject_relation() {
+    let tool = ToolCall {
+        id: "agentgrep-smart-query".to_string(),
+        name: "agentgrep".to_string(),
+        input: serde_json::json!({
+            "mode": "smart",
+            "query": "subject:agentgrep relation:build_args path:src/tool"
+        }),
+        intent: None,
+    };
+
+    let summary = tools_ui::get_tool_summary_with_budget(&tool, 50, Some(200));
+    assert_eq!(summary, "smart agentgrep:build_args");
+}
+
+#[test]
 fn test_render_tool_message_batch_rows_do_not_soft_wrap_on_narrow_width() {
     let msg = DisplayMessage {
         role: "tool".to_string(),

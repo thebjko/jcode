@@ -207,6 +207,43 @@ pub(super) fn summarize_apply_patch_input(patch_text: &str) -> String {
     }
 }
 
+fn parse_agentgrep_smart_subject_relation(
+    input: &serde_json::Value,
+) -> (Option<&str>, Option<&str>) {
+    let mut subject = None;
+    let mut relation = None;
+
+    if let Some(terms) = input.get("terms").and_then(|v| v.as_array()) {
+        for term in terms {
+            if let Some(term) = term.as_str() {
+                if let Some(value) = term.strip_prefix("subject:") {
+                    subject = Some(value);
+                } else if let Some(value) = term.strip_prefix("relation:") {
+                    relation = Some(value);
+                }
+            }
+        }
+    }
+
+    if (subject.is_none() || relation.is_none())
+        && let Some(query) = input.get("query").and_then(|v| v.as_str())
+    {
+        for term in query.split_whitespace() {
+            if subject.is_none()
+                && let Some(value) = term.strip_prefix("subject:")
+            {
+                subject = Some(value);
+            } else if relation.is_none()
+                && let Some(value) = term.strip_prefix("relation:")
+            {
+                relation = Some(value);
+            }
+        }
+    }
+
+    (subject, relation)
+}
+
 pub(crate) fn extract_apply_patch_primary_file(patch_text: &str) -> Option<String> {
     for line in patch_text.lines() {
         let trimmed = line.trim();
@@ -940,20 +977,7 @@ pub(super) fn get_tool_summary_with_budget(
                     }
                 }
                 "smart" => {
-                    let terms = tool.input.get("terms").and_then(|v| v.as_array());
-                    let mut subject = None;
-                    let mut relation = None;
-                    if let Some(terms) = terms {
-                        for term in terms {
-                            if let Some(term) = term.as_str() {
-                                if let Some(value) = term.strip_prefix("subject:") {
-                                    subject = Some(value);
-                                } else if let Some(value) = term.strip_prefix("relation:") {
-                                    relation = Some(value);
-                                }
-                            }
-                        }
-                    }
+                    let (subject, relation) = parse_agentgrep_smart_subject_relation(&tool.input);
 
                     match (subject, relation) {
                         (Some(subject), Some(relation)) => format!(

@@ -167,7 +167,7 @@ impl Tool for AgentGrepTool {
             "properties": {
                 "mode": {
                     "type": "string",
-                    "enum": ["grep", "find", "outline", "trace", "smart"],
+                    "enum": ["grep", "find", "outline", "trace"],
                     "description": "Mode."
                 },
                 "query": {
@@ -341,11 +341,7 @@ fn build_agentgrep_args(
             args.push(OsString::from(file));
         }
         "trace" | "smart" => {
-            let terms = params
-                .terms
-                .as_ref()
-                .filter(|terms| !terms.is_empty())
-                .ok_or_else(|| anyhow::anyhow!("agentgrep trace requires non-empty 'terms'"))?;
+            let terms = trace_or_smart_terms(params)?;
             if let Some(max_files) = params.max_files {
                 args.push(OsString::from("--max-files"));
                 args.push(OsString::from(max_files.to_string()));
@@ -369,7 +365,7 @@ fn build_agentgrep_args(
                 args.push(OsString::from("--context-json"));
                 args.push(context_path.as_os_str().to_os_string());
             }
-            for term in terms {
+            for term in &terms {
                 args.push(OsString::from(term));
             }
         }
@@ -377,6 +373,36 @@ fn build_agentgrep_args(
     }
 
     Ok(args)
+}
+
+fn trace_or_smart_terms(params: &AgentGrepInput) -> Result<Vec<&str>> {
+    if let Some(terms) = params.terms.as_ref().filter(|terms| !terms.is_empty()) {
+        return Ok(terms.iter().map(String::as_str).collect());
+    }
+
+    if params.mode == "smart"
+        && let Some(query) = params.query.as_deref()
+    {
+        let split_terms: Vec<&str> = query
+            .split_whitespace()
+            .filter(|term| !term.is_empty())
+            .collect();
+        if !split_terms.is_empty() {
+            return Ok(split_terms);
+        }
+    }
+
+    let field_hint = if params.mode == "smart" {
+        "non-empty 'terms' or 'query'"
+    } else {
+        "non-empty 'terms'"
+    };
+
+    Err(anyhow::anyhow!(
+        "agentgrep {} requires {}",
+        params.mode,
+        field_hint
+    ))
 }
 
 fn maybe_write_context_json(params: &AgentGrepInput, ctx: &ToolContext) -> Result<Option<PathBuf>> {
@@ -1613,11 +1639,96 @@ mod tests {
     }
 
     #[test]
+    fn build_args_for_smart_falls_back_to_query_terms() {
+        let ctx = test_ctx(Path::new("/workspace"));
+        let params = AgentGrepInput {
+            mode: "smart".to_string(),
+            query: Some(
+                "subject:auth_status relation:rendered path:src/tui state:current".to_string(),
+            ),
+            file: None,
+            terms: None,
+            regex: None,
+            path: Some("repo".to_string()),
+            glob: None,
+            file_type: Some("rs".to_string()),
+            hidden: None,
+            no_ignore: None,
+            max_files: Some(3),
+            max_regions: Some(4),
+            full_region: Some("auto".to_string()),
+            debug_plan: Some(true),
+            debug_score: Some(true),
+            paths_only: None,
+        };
+
+        let args = build_agentgrep_args(&params, &ctx, None).unwrap();
+        let rendered: Vec<String> = args
+            .iter()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect();
+        assert_eq!(
+            rendered,
+            vec![
+                "trace",
+                "--max-files",
+                "3",
+                "--max-regions",
+                "4",
+                "--full-region",
+                "auto",
+                "--debug-plan",
+                "--debug-score",
+                "--type",
+                "rs",
+                "--path",
+                "/workspace/repo",
+                "subject:auth_status",
+                "relation:rendered",
+                "path:src/tui",
+                "state:current"
+            ]
+        );
+    }
+
+    #[test]
+    fn build_args_for_trace_still_requires_terms() {
+        let ctx = test_ctx(Path::new("/workspace"));
+        let params = AgentGrepInput {
+            mode: "trace".to_string(),
+            query: Some("subject:auth_status relation:rendered".to_string()),
+            file: None,
+            terms: None,
+            regex: None,
+            path: None,
+            glob: None,
+            file_type: None,
+            hidden: None,
+            no_ignore: None,
+            max_files: None,
+            max_regions: None,
+            full_region: None,
+            debug_plan: None,
+            debug_score: None,
+            paths_only: None,
+        };
+
+        let error = build_agentgrep_args(&params, &ctx, None).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "agentgrep trace requires non-empty 'terms'"
+        );
+    }
+
+    #[test]
     fn schema_only_advertises_common_public_fields() {
         let schema = AgentGrepTool::new().parameters_schema();
         let props = schema["properties"]
             .as_object()
             .expect("agentgrep schema should have properties");
+        let mode_enum = props["mode"]["enum"]
+            .as_array()
+            .expect("agentgrep mode should expose enum values");
 
         assert!(props.contains_key("mode"));
         assert!(props.contains_key("query"));
@@ -1630,6 +1741,15 @@ mod tests {
         assert!(props.contains_key("max_files"));
         assert!(props.contains_key("max_regions"));
         assert!(props.contains_key("paths_only"));
+        assert_eq!(
+            mode_enum,
+            &vec![
+                json!("grep"),
+                json!("find"),
+                json!("outline"),
+                json!("trace")
+            ]
+        );
         assert!(!props.contains_key("hidden"));
         assert!(!props.contains_key("no_ignore"));
         assert!(!props.contains_key("full_region"));
@@ -1725,6 +1845,47 @@ mod tests {
             output
                 .output
                 .contains("subject:lsp relation:implementation")
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn execute_smart_accepts_query_fallback() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let script = temp.path().join("fake-agentgrep");
+        fs::write(&script, "#!/usr/bin/env bash\nprintf 'args:%s\n' \"$*\"\n")
+            .expect("write script");
+        let mut perms = fs::metadata(&script).expect("metadata").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&script, perms).expect("chmod");
+
+        let tool = AgentGrepTool::with_binary_override(script);
+        let ctx = test_ctx(temp.path());
+        let output = tool
+            .execute(
+                json!({
+                    "mode": "smart",
+                    "query": "subject:lsp relation:implementation path:src/tool",
+                    "path": "repo",
+                    "max_files": 2,
+                    "max_regions": 3,
+                    "debug_plan": true
+                }),
+                ctx,
+            )
+            .await
+            .expect("agentgrep execution");
+        assert!(
+            output
+                .output
+                .contains("args:trace --max-files 2 --max-regions 3 --debug-plan --path")
+        );
+        assert!(
+            output
+                .output
+                .contains("subject:lsp relation:implementation path:src/tool")
         );
     }
 
