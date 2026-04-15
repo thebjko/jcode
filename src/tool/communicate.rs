@@ -932,8 +932,8 @@ impl Tool for CommunicateTool {
             }
 
             _ => Err(anyhow::anyhow!(
-                "Unknown action '{}'. Valid actions: share, read, message, broadcast, dm, channel, list, \
-                 approve_plan, reject_plan, spawn, stop, assign_role, summary, read_context, \
+                "Unknown action '{}'. Valid actions: share, share_append, read, message, broadcast, dm, channel, list, list_channels, channel_members, \
+                 propose_plan, approve_plan, reject_plan, spawn, stop, assign_role, summary, read_context, \
                  resync_plan, assign_task, subscribe_channel, unsubscribe_channel, await_members",
                 params.action
             )),
