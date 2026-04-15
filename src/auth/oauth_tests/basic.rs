@@ -1,4 +1,5 @@
 use super::*;
+use anyhow::{Result, anyhow};
 
 #[test]
 fn pkce_verifier_and_challenge_are_different() {
@@ -49,39 +50,41 @@ fn state_generates_unique_values() {
 }
 
 #[test]
-fn oauth_tokens_serialization_roundtrip() {
+fn oauth_tokens_serialization_roundtrip() -> Result<()> {
     let tokens = OAuthTokens {
         access_token: "at_abc".to_string(),
         refresh_token: "rt_def".to_string(),
         expires_at: 1234567890,
         id_token: Some("idt_ghi".to_string()),
     };
-    let json = serde_json::to_string(&tokens).unwrap();
-    let parsed: OAuthTokens = serde_json::from_str(&json).unwrap();
+    let json = serde_json::to_string(&tokens)?;
+    let parsed: OAuthTokens = serde_json::from_str(&json)?;
     assert_eq!(parsed.access_token, "at_abc");
     assert_eq!(parsed.refresh_token, "rt_def");
     assert_eq!(parsed.expires_at, 1234567890);
     assert_eq!(parsed.id_token, Some("idt_ghi".to_string()));
+    Ok(())
 }
 
 #[test]
-fn oauth_tokens_without_id_token() {
+fn oauth_tokens_without_id_token() -> Result<()> {
     let tokens = OAuthTokens {
         access_token: "at".to_string(),
         refresh_token: "rt".to_string(),
         expires_at: 0,
         id_token: None,
     };
-    let json = serde_json::to_string(&tokens).unwrap();
+    let json = serde_json::to_string(&tokens)?;
     assert!(!json.contains("id_token"));
-    let parsed: OAuthTokens = serde_json::from_str(&json).unwrap();
+    let parsed: OAuthTokens = serde_json::from_str(&json)?;
     assert!(parsed.id_token.is_none());
+    Ok(())
 }
 
 #[test]
-fn save_openai_tokens_uses_jcode_home_sandbox() {
+fn save_openai_tokens_uses_jcode_home_sandbox() -> Result<()> {
     let _lock = crate::storage::lock_test_env();
-    let temp = tempfile::TempDir::new().unwrap();
+    let temp = tempfile::TempDir::new().map_err(|e| anyhow!(e))?;
     let _home = EnvVarGuard::set("JCODE_HOME", temp.path());
 
     let tokens = OAuthTokens {
@@ -91,16 +94,17 @@ fn save_openai_tokens_uses_jcode_home_sandbox() {
         id_token: Some("id_sandbox".to_string()),
     };
 
-    save_openai_tokens(&tokens).unwrap();
+    save_openai_tokens(&tokens)?;
 
     let auth_path = temp.path().join("openai-auth.json");
     assert!(auth_path.exists(), "expected {}", auth_path.display());
 
-    let creds = crate::auth::codex::load_credentials().unwrap();
+    let creds = crate::auth::codex::load_credentials()?;
     assert_eq!(creds.access_token, "at_sandbox");
     assert_eq!(creds.refresh_token, "rt_sandbox");
     assert_eq!(creds.id_token.as_deref(), Some("id_sandbox"));
     assert_eq!(creds.expires_at, Some(1234567890));
+    Ok(())
 }
 
 #[test]
@@ -114,7 +118,7 @@ fn claude_oauth_constants() {
 }
 
 #[tokio::test]
-async fn fetch_claude_profile_email_reads_account_email() {
+async fn fetch_claude_profile_email_reads_account_email() -> Result<()> {
     let body = serde_json::json!({
         "account": {
             "email": "user@example.com"
@@ -124,15 +128,14 @@ async fn fetch_claude_profile_email_reads_account_email() {
     let (port, _handle) = mock_token_server(200, &body).await;
 
     let url = format!("http://127.0.0.1:{}/api/oauth/profile", port);
-    let email = fetch_claude_profile_email_at_url("token", &url)
-        .await
-        .unwrap();
+    let email = fetch_claude_profile_email_at_url("token", &url).await?;
 
     assert_eq!(email, Some("user@example.com".to_string()));
+    Ok(())
 }
 
 #[tokio::test]
-async fn fetch_claude_profile_email_handles_missing_email() {
+async fn fetch_claude_profile_email_handles_missing_email() -> Result<()> {
     let body = serde_json::json!({
         "account": {}
     })
@@ -140,15 +143,14 @@ async fn fetch_claude_profile_email_handles_missing_email() {
     let (port, _handle) = mock_token_server(200, &body).await;
 
     let url = format!("http://127.0.0.1:{}/api/oauth/profile", port);
-    let email = fetch_claude_profile_email_at_url("token", &url)
-        .await
-        .unwrap();
+    let email = fetch_claude_profile_email_at_url("token", &url).await?;
 
     assert!(email.is_none());
+    Ok(())
 }
 
 #[tokio::test]
-async fn fetch_claude_profile_email_propagates_http_error() {
+async fn fetch_claude_profile_email_propagates_http_error() -> Result<()> {
     let body = serde_json::json!({
         "error": "bad_token"
     })
@@ -158,10 +160,11 @@ async fn fetch_claude_profile_email_propagates_http_error() {
     let url = format!("http://127.0.0.1:{}/api/oauth/profile", port);
     let err = fetch_claude_profile_email_at_url("token", &url)
         .await
-        .unwrap_err()
+        .expect_err("Profile fetch should fail")
         .to_string();
 
     assert!(err.contains("Profile fetch failed"));
+    Ok(())
 }
 
 #[test]
@@ -174,10 +177,10 @@ fn openai_oauth_constants() {
 }
 
 #[tokio::test]
-async fn wait_for_callback_async_parses_code() {
+async fn wait_for_callback_async_parses_code() -> Result<()> {
     let state = "test_state_abc";
-    let listener = bind_callback_listener(0).unwrap();
-    let port = listener.local_addr().unwrap().port();
+    let listener = bind_callback_listener(0)?;
+    let port = listener.local_addr().map_err(|e| anyhow!(e))?.port();
 
     let state_clone = state.to_string();
     let handle =
@@ -187,7 +190,7 @@ async fn wait_for_callback_async_parses_code() {
 
     let mut stream = tokio::net::TcpStream::connect(format!("127.0.0.1:{}", port))
         .await
-        .unwrap();
+        .map_err(|e| anyhow!(e))?;
     use tokio::io::AsyncWriteExt;
     stream
         .write_all(
@@ -198,18 +201,19 @@ async fn wait_for_callback_async_parses_code() {
             .as_bytes(),
         )
         .await
-        .unwrap();
+        .map_err(|e| anyhow!(e))?;
 
-    let result = handle.await.unwrap();
+    let result = handle.await.map_err(|e| anyhow!(e))?;
     assert!(result.is_ok());
-    assert_eq!(result.unwrap(), "test_code_123");
+    assert_eq!(result?, "test_code_123");
+    Ok(())
 }
 
 #[tokio::test]
-async fn wait_for_callback_async_on_prebound_listener_parses_code() {
+async fn wait_for_callback_async_on_prebound_listener_parses_code() -> Result<()> {
     let state = "test_state_prebound";
-    let listener = bind_callback_listener(0).unwrap();
-    let port = listener.local_addr().unwrap().port();
+    let listener = bind_callback_listener(0)?;
+    let port = listener.local_addr().map_err(|e| anyhow!(e))?.port();
 
     let state_clone = state.to_string();
     let handle =
@@ -219,7 +223,7 @@ async fn wait_for_callback_async_on_prebound_listener_parses_code() {
 
     let mut stream = tokio::net::TcpStream::connect(format!("127.0.0.1:{}", port))
         .await
-        .unwrap();
+        .map_err(|e| anyhow!(e))?;
     use tokio::io::AsyncWriteExt;
     stream
         .write_all(
@@ -230,17 +234,18 @@ async fn wait_for_callback_async_on_prebound_listener_parses_code() {
             .as_bytes(),
         )
         .await
-        .unwrap();
+        .map_err(|e| anyhow!(e))?;
 
-    let result = handle.await.unwrap();
+    let result = handle.await.map_err(|e| anyhow!(e))?;
     assert!(result.is_ok());
-    assert_eq!(result.unwrap(), "prebound_code");
+    assert_eq!(result?, "prebound_code");
+    Ok(())
 }
 
 #[tokio::test]
-async fn wait_for_callback_async_ignores_wrong_state_until_valid_callback() {
-    let listener = bind_callback_listener(0).unwrap();
-    let port = listener.local_addr().unwrap().port();
+async fn wait_for_callback_async_ignores_wrong_state_until_valid_callback() -> Result<()> {
+    let listener = bind_callback_listener(0)?;
+    let port = listener.local_addr().map_err(|e| anyhow!(e))?.port();
 
     let handle = tokio::spawn(async move {
         wait_for_callback_async_on_listener(listener, "expected_state").await
@@ -248,35 +253,36 @@ async fn wait_for_callback_async_ignores_wrong_state_until_valid_callback() {
 
     let mut stream = tokio::net::TcpStream::connect(format!("127.0.0.1:{}", port))
         .await
-        .unwrap();
+        .map_err(|e| anyhow!(e))?;
     use tokio::io::AsyncWriteExt;
     stream
         .write_all(
             b"GET /callback?code=code123&state=wrong_state HTTP/1.1\r\nHost: localhost\r\n\r\n",
         )
         .await
-        .unwrap();
+        .map_err(|e| anyhow!(e))?;
     drop(stream);
 
     let mut valid_stream = tokio::net::TcpStream::connect(format!("127.0.0.1:{}", port))
         .await
-        .unwrap();
+        .map_err(|e| anyhow!(e))?;
     valid_stream
         .write_all(
             b"GET /callback?code=code123&state=expected_state HTTP/1.1\r\nHost: localhost\r\n\r\n",
         )
         .await
-        .unwrap();
+        .map_err(|e| anyhow!(e))?;
 
-    let result = handle.await.unwrap();
+    let result = handle.await.map_err(|e| anyhow!(e))?;
     assert!(result.is_ok());
-    assert_eq!(result.unwrap(), "code123");
+    assert_eq!(result?, "code123");
+    Ok(())
 }
 
 #[tokio::test]
-async fn wait_for_callback_async_ignores_missing_code_until_valid_callback() {
-    let listener = bind_callback_listener(0).unwrap();
-    let port = listener.local_addr().unwrap().port();
+async fn wait_for_callback_async_ignores_missing_code_until_valid_callback() -> Result<()> {
+    let listener = bind_callback_listener(0)?;
+    let port = listener.local_addr().map_err(|e| anyhow!(e))?.port();
 
     let handle =
         tokio::spawn(
@@ -285,33 +291,34 @@ async fn wait_for_callback_async_ignores_missing_code_until_valid_callback() {
 
     let mut stream = tokio::net::TcpStream::connect(format!("127.0.0.1:{}", port))
         .await
-        .unwrap();
+        .map_err(|e| anyhow!(e))?;
     use tokio::io::AsyncWriteExt;
     stream
         .write_all(b"GET /callback?state=state123 HTTP/1.1\r\nHost: localhost\r\n\r\n")
         .await
-        .unwrap();
+        .map_err(|e| anyhow!(e))?;
     drop(stream);
 
     let mut valid_stream = tokio::net::TcpStream::connect(format!("127.0.0.1:{}", port))
         .await
-        .unwrap();
+        .map_err(|e| anyhow!(e))?;
     valid_stream
         .write_all(
             b"GET /callback?code=valid_code&state=state123 HTTP/1.1\r\nHost: localhost\r\n\r\n",
         )
         .await
-        .unwrap();
+        .map_err(|e| anyhow!(e))?;
 
-    let result = handle.await.unwrap();
+    let result = handle.await.map_err(|e| anyhow!(e))?;
     assert!(result.is_ok());
-    assert_eq!(result.unwrap(), "valid_code");
+    assert_eq!(result?, "valid_code");
+    Ok(())
 }
 
 #[tokio::test]
-async fn wait_for_callback_async_surfaces_provider_error() {
-    let listener = bind_callback_listener(0).unwrap();
-    let port = listener.local_addr().unwrap().port();
+async fn wait_for_callback_async_surfaces_provider_error() -> Result<()> {
+    let listener = bind_callback_listener(0)?;
+    let port = listener.local_addr().map_err(|e| anyhow!(e))?.port();
 
     let handle = tokio::spawn(async move {
         wait_for_callback_async_on_listener(listener, "expected_state").await
@@ -319,16 +326,16 @@ async fn wait_for_callback_async_surfaces_provider_error() {
 
     let mut stream = tokio::net::TcpStream::connect(format!("127.0.0.1:{}", port))
         .await
-        .unwrap();
+        .map_err(|e| anyhow!(e))?;
     use tokio::io::AsyncWriteExt;
     stream
             .write_all(
                 b"GET /callback?error=access_denied&state=expected_state HTTP/1.1\r\nHost: localhost\r\n\r\n",
             )
             .await
-            .unwrap();
+            .map_err(|e| anyhow!(e))?;
 
-    let result = handle.await.unwrap();
+    let result = handle.await.map_err(|e| anyhow!(e))?;
     assert!(result.is_err());
     assert!(
         result
@@ -336,4 +343,5 @@ async fn wait_for_callback_async_surfaces_provider_error() {
             .to_string()
             .contains("OAuth provider returned error")
     );
+    Ok(())
 }
