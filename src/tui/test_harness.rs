@@ -11,6 +11,23 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock, RwLock};
 use std::time::Duration;
 
+fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn read_unpoisoned<T>(lock: &RwLock<T>) -> std::sync::RwLockReadGuard<'_, T> {
+    lock.read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+#[cfg(test)]
+fn write_unpoisoned<T>(lock: &RwLock<T>) -> std::sync::RwLockWriteGuard<'_, T> {
+    lock.write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 // ============================================================================
 // Deterministic Clock
 // ============================================================================
@@ -72,9 +89,7 @@ pub struct SimulatedInstant {
 
 impl SimulatedInstant {
     pub fn elapsed(&self) -> Duration {
-        let now = get_test_clock()
-            .map(|c| c.read().unwrap().now_ms())
-            .unwrap_or(0);
+        let now = get_test_clock().map(|c| read_unpoisoned(c).now_ms()).unwrap_or(0);
         Duration::from_millis(now.saturating_sub(self.offset_ms))
     }
 
@@ -111,14 +126,14 @@ pub fn get_test_clock() -> Option<&'static RwLock<TestClock>> {
 /// Advance the test clock by the given duration.
 pub fn advance_clock(duration: Duration) {
     if let Some(clock) = get_test_clock() {
-        clock.read().unwrap().advance(duration);
+        read_unpoisoned(clock).advance(duration);
     }
 }
 
 /// Get current time (uses test clock if enabled, otherwise system time).
 pub fn now_ms() -> u64 {
     if let Some(clock) = get_test_clock() {
-        clock.read().unwrap().now_ms()
+        read_unpoisoned(clock).now_ms()
     } else {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -243,22 +258,22 @@ pub fn get_event_recorder() -> &'static Mutex<EventRecorder> {
 
 /// Start global event recording.
 pub fn start_recording() {
-    get_event_recorder().lock().unwrap().start();
+    lock_unpoisoned(get_event_recorder()).start();
 }
 
 /// Stop global event recording.
 pub fn stop_recording() {
-    get_event_recorder().lock().unwrap().stop();
+    lock_unpoisoned(get_event_recorder()).stop();
 }
 
 /// Record an event globally.
 pub fn record_event(event: TestEvent) {
-    get_event_recorder().lock().unwrap().record(event);
+    lock_unpoisoned(get_event_recorder()).record(event);
 }
 
 /// Get recorded events as JSON.
 pub fn get_recorded_events_json() -> String {
-    get_event_recorder().lock().unwrap().to_json()
+    lock_unpoisoned(get_event_recorder()).to_json()
 }
 
 /// Event player for replaying recorded sequences.
@@ -841,7 +856,7 @@ mod tests {
     fn test_clock_advance() {
         enable_test_clock();
         let clock = get_test_clock().unwrap();
-        clock.write().unwrap().set(0);
+        write_unpoisoned(clock).set(0);
 
         assert_eq!(now_ms(), 0);
         advance_clock(Duration::from_secs(1));
