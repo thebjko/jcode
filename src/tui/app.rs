@@ -35,6 +35,7 @@ use tokio::sync::RwLock;
 use tokio::time::interval;
 
 mod auth;
+mod auth_account_picker_saved_accounts;
 mod catchup;
 mod commands;
 mod commands_improve;
@@ -62,6 +63,7 @@ mod state_ui;
 mod state_ui_input_helpers;
 mod state_ui_maintenance;
 mod state_ui_messages;
+mod state_ui_runtime;
 mod state_ui_storage;
 mod tui_lifecycle;
 mod tui_state;
