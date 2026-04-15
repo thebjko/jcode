@@ -92,6 +92,7 @@ pub(super) async fn await_reload_signal(
             &swarm_members,
             &shutdown_signals,
             &swarm_event_tx,
+            signal.triggering_session.as_deref(),
         )
         .await;
         crate::logging::info(&format!(
@@ -153,6 +154,7 @@ pub(super) async fn graceful_shutdown_sessions(
     swarm_members: &Arc<RwLock<HashMap<String, SwarmMember>>>,
     shutdown_signals: &Arc<RwLock<HashMap<String, InterruptSignal>>>,
     swarm_event_tx: &broadcast::Sender<SwarmEvent>,
+    triggering_session: Option<&str>,
 ) {
     graceful_shutdown_sessions_with_timeout(
         _sessions,
@@ -160,6 +162,7 @@ pub(super) async fn graceful_shutdown_sessions(
         shutdown_signals,
         swarm_event_tx,
         RELOAD_GRACEFUL_SHUTDOWN_TIMEOUT,
+        triggering_session,
     )
     .await;
 }
@@ -170,6 +173,7 @@ async fn graceful_shutdown_sessions_with_timeout(
     shutdown_signals: &Arc<RwLock<HashMap<String, InterruptSignal>>>,
     swarm_event_tx: &broadcast::Sender<SwarmEvent>,
     timeout: Duration,
+    triggering_session: Option<&str>,
 ) {
     let actively_generating: Vec<String> = {
         let members = swarm_members.read().await;
@@ -226,7 +230,25 @@ async fn graceful_shutdown_sessions_with_timeout(
         }
     }
 
-    let watched: std::collections::HashSet<String> = signalable_sessions.into_iter().collect();
+    let watched: std::collections::HashSet<String> = signalable_sessions
+        .into_iter()
+        .filter(|session_id| Some(session_id.as_str()) != triggering_session)
+        .collect();
+
+    if let Some(triggering_session) = triggering_session {
+        crate::logging::info(&format!(
+            "Server: excluding triggering session {} from reload checkpoint wait set",
+            triggering_session
+        ));
+    }
+
+    if watched.is_empty() {
+        crate::logging::info(
+            "Server: no non-triggering running sessions remain to checkpoint, proceeding with reload",
+        );
+        return;
+    }
+
     let mut event_rx = swarm_event_tx.subscribe();
     let deadline = Instant::now() + timeout;
 
@@ -429,6 +451,7 @@ mod tests {
             &swarm_members,
             &shutdown_signals,
             &swarm_event_tx,
+            None,
         )
         .await;
         checkpoint_task.await.expect("checkpoint task");
@@ -440,6 +463,77 @@ mod tests {
         assert!(
             peer_signal.is_set(),
             "other running sessions should be interrupted too"
+        );
+    }
+
+    #[tokio::test]
+    async fn graceful_shutdown_sessions_does_not_wait_for_triggering_session_checkpoint() {
+        let sessions = Arc::new(RwLock::new(HashMap::new()));
+        let swarm_members = Arc::new(RwLock::new(HashMap::from([
+            ("initiator".to_string(), member("initiator", "running")),
+            ("peer".to_string(), member("peer", "running")),
+        ])));
+        let initiator_signal = InterruptSignal::new();
+        let peer_signal = InterruptSignal::new();
+        let shutdown_signals = Arc::new(RwLock::new(HashMap::from([
+            ("initiator".to_string(), initiator_signal.clone()),
+            ("peer".to_string(), peer_signal.clone()),
+        ])));
+        let (swarm_event_tx, _) = broadcast::channel(8);
+        let swarm_members_for_task = swarm_members.clone();
+        let swarm_event_tx_for_task = swarm_event_tx.clone();
+
+        let checkpoint_task = tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            {
+                let mut members = swarm_members_for_task.write().await;
+                members.get_mut("peer").expect("peer").status = "ready".to_string();
+            }
+            let _ = swarm_event_tx_for_task.send(SwarmEvent {
+                id: 1,
+                session_id: "peer".to_string(),
+                session_name: None,
+                swarm_id: None,
+                event: SwarmEventType::StatusChange {
+                    old_status: "running".to_string(),
+                    new_status: "ready".to_string(),
+                },
+                timestamp: Instant::now(),
+                absolute_time: std::time::SystemTime::now(),
+            });
+        });
+
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            graceful_shutdown_sessions(
+                &sessions,
+                &swarm_members,
+                &shutdown_signals,
+                &swarm_event_tx,
+                Some("initiator"),
+            ),
+        )
+        .await
+        .expect("reload shutdown should not wait for triggering session");
+        checkpoint_task.await.expect("checkpoint task");
+
+        assert!(
+            initiator_signal.is_set(),
+            "triggering session should still receive graceful shutdown signal"
+        );
+        assert!(
+            peer_signal.is_set(),
+            "peer session should still receive graceful shutdown signal"
+        );
+        assert_eq!(
+            swarm_members
+                .read()
+                .await
+                .get("initiator")
+                .expect("initiator")
+                .status,
+            "running",
+            "initiator may remain running without blocking reload"
         );
     }
 
@@ -462,6 +556,7 @@ mod tests {
             &swarm_members,
             &shutdown_signals,
             &swarm_event_tx,
+            None,
         )
         .await;
 
@@ -487,6 +582,7 @@ mod tests {
             &swarm_members,
             &shutdown_signals,
             &swarm_event_tx,
+            None,
         )
         .await;
 
@@ -521,6 +617,7 @@ mod tests {
                     &swarm_members,
                     &shutdown_signals,
                     &swarm_event_tx,
+                    None,
                 )
                 .await;
             }
@@ -584,6 +681,7 @@ mod tests {
                     &swarm_members,
                     &shutdown_signals,
                     &swarm_event_tx,
+                    None,
                 )
                 .await;
             }
@@ -660,6 +758,7 @@ mod tests {
                     &swarm_members,
                     &shutdown_signals,
                     &swarm_event_tx,
+                    None,
                 )
                 .await;
             }
@@ -709,6 +808,7 @@ mod tests {
             &shutdown_signals,
             &swarm_event_tx,
             std::time::Duration::from_millis(50),
+            None,
         )
         .await;
 
