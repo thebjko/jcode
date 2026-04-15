@@ -6,39 +6,34 @@ use crate::protocol::{
     AgentInfo, AwaitedMemberStatus, CommDeliveryMode, ContextEntry, HistoryMessage, Request,
     ServerEvent, SwarmChannelInfo, ToolCallSummary,
 };
-use crate::transport::SyncStream;
 use anyhow::Result;
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::io::{BufRead, BufReader, Write};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 const REQUEST_ID: u64 = 1;
 
-fn socket_path() -> std::path::PathBuf {
-    crate::storage::runtime_dir().join("jcode.sock")
+async fn send_request(request: Request) -> Result<ServerEvent> {
+    send_request_with_timeout(request, None).await
 }
 
-fn send_request(request: Request) -> Result<ServerEvent> {
-    send_request_with_timeout(request, None)
-}
-
-fn send_request_with_timeout(
+async fn send_request_with_timeout(
     request: Request,
     timeout: Option<std::time::Duration>,
 ) -> Result<ServerEvent> {
-    let path = socket_path();
-    let mut stream = SyncStream::connect(&path)?;
-
-    let read_timeout = timeout.unwrap_or(std::time::Duration::from_secs(30));
-    stream.set_read_timeout(Some(read_timeout))?;
+    let path = crate::server::socket_path();
+    let stream = crate::server::connect_socket(&path).await?;
+    let (reader, mut writer) = stream.into_split();
 
     let request_id = request.id();
+    let deadline = tokio::time::Instant::now()
+        + timeout.unwrap_or(std::time::Duration::from_secs(30));
 
     let json = serde_json::to_string(&request)? + "\n";
-    stream.write_all(json.as_bytes())?;
+    writer.write_all(json.as_bytes()).await?;
 
-    let mut reader = BufReader::new(stream);
+    let mut reader = BufReader::new(reader);
     let mut line = String::new();
 
     // Read lines until we find the terminal response for our request ID.
@@ -47,7 +42,11 @@ fn send_request_with_timeout(
     //                  and any other typed response with matching id.
     loop {
         line.clear();
-        let n = reader.read_line(&mut line)?;
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            anyhow::bail!("Timed out waiting for response")
+        }
+        let n = tokio::time::timeout(remaining, reader.read_line(&mut line)).await??;
         if n == 0 {
             return Err(anyhow::anyhow!(
                 "Connection closed before receiving response"
@@ -58,6 +57,10 @@ fn send_request_with_timeout(
 
         let event_type = value.get("type").and_then(|t| t.as_str()).unwrap_or("");
         let event_id = value.get("id").and_then(|v| v.as_u64());
+
+        if event_type != "ack" && event_id != Some(request_id) {
+            continue;
+        }
 
         match event_type {
             // Skip ack — not a response
@@ -77,25 +80,16 @@ fn send_request_with_timeout(
             | "compaction"
             | "connection_type"
             | "connection_phase"
+            | "status_detail"
             | "upstream_provider"
             | "reloading"
             | "reload_progress"
+            | "available_models_updated"
+            | "side_panel_state"
+            | "transcript"
             | "interrupted" => continue,
-            // Terminal responses: match on our request id if present
-            "done" | "error" => {
-                if event_id == Some(request_id) || event_id.is_none() {
-                    return Ok(serde_json::from_value(value)?);
-                }
-                // Wrong id — skip
-                continue;
-            }
-            // All other typed responses (comm_spawn_response, etc.) — return them
-            _ => {
-                if event_id == Some(request_id) || event_id.is_none() {
-                    return Ok(serde_json::from_value(value)?);
-                }
-                continue;
-            }
+            // Terminal responses and typed request responses with matching ids.
+            _ => return Ok(serde_json::from_value(value)?),
         }
     }
 }
@@ -322,7 +316,7 @@ impl Tool for CommunicateTool {
     }
 
     fn description(&self) -> &str {
-        "Coordinate agents."
+        "Coordinate agents. For spawn, prefer providing a prompt so the new agent starts with a concrete task instead of idling."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -336,7 +330,7 @@ impl Tool for CommunicateTool {
                              "propose_plan", "approve_plan", "reject_plan", "spawn", "stop", "assign_role",
                              "summary", "read_context", "resync_plan", "assign_task",
                              "subscribe_channel", "unsubscribe_channel", "await_members"],
-                    "description": "Action."
+                    "description": "Action. For spawn, prefer including prompt with the initial task so the new agent starts useful work immediately."
                 },
                 "key": {
                     "type": "string"
@@ -356,7 +350,10 @@ impl Tool for CommunicateTool {
                     "type": "string",
                     "enum": ["agent", "coordinator", "worktree_manager"]
                 },
-                "prompt": { "type": "string" },
+                "prompt": {
+                    "type": "string",
+                    "description": "Preferred for spawn. Initial task/instructions for the new agent. Spawning without prompt usually creates an idle agent that needs follow-up assignment."
+                },
                 "task_id": { "type": "string" },
                 "session_ids": {
                     "type": "array",
@@ -393,7 +390,7 @@ impl Tool for CommunicateTool {
                     append: params.action == "share_append",
                 };
 
-                match send_request(request) {
+                match send_request(request).await {
                     Ok(response) => {
                         ensure_success(&response)?;
                         let verb = if params.action == "share_append" {
@@ -414,7 +411,7 @@ impl Tool for CommunicateTool {
                     key: params.key.clone(),
                 };
 
-                match send_request(request) {
+                match send_request(request).await {
                     Ok(ServerEvent::CommContext { entries, .. }) => {
                         Ok(format_context_entries(&entries))
                     }
@@ -441,7 +438,7 @@ impl Tool for CommunicateTool {
                     delivery: None,
                 };
 
-                match send_request(request) {
+                match send_request(request).await {
                     Ok(response) => {
                         ensure_success(&response)?;
                         Ok(ToolOutput::new(format!(
@@ -471,7 +468,7 @@ impl Tool for CommunicateTool {
                     wake: params.wake,
                 };
 
-                match send_request(request) {
+                match send_request(request).await {
                     Ok(response) => {
                         ensure_success(&response)?;
                         Ok(ToolOutput::new(format!(
@@ -501,7 +498,7 @@ impl Tool for CommunicateTool {
                     wake: params.wake,
                 };
 
-                match send_request(request) {
+                match send_request(request).await {
                     Ok(response) => {
                         ensure_success(&response)?;
                         Ok(ToolOutput::new(format!(
@@ -519,7 +516,7 @@ impl Tool for CommunicateTool {
                     session_id: ctx.session_id.clone(),
                 };
 
-                match send_request(request) {
+                match send_request(request).await {
                     Ok(ServerEvent::CommMembers { members, .. }) => {
                         Ok(format_members(&ctx, &members))
                     }
@@ -537,7 +534,7 @@ impl Tool for CommunicateTool {
                     session_id: ctx.session_id.clone(),
                 };
 
-                match send_request(request) {
+                match send_request(request).await {
                     Ok(ServerEvent::CommChannels { channels, .. }) => {
                         Ok(format_channels(&channels))
                     }
@@ -559,7 +556,7 @@ impl Tool for CommunicateTool {
                     channel: channel.clone(),
                 };
 
-                match send_request(request) {
+                match send_request(request).await {
                     Ok(ServerEvent::CommMembers { members, .. }) => {
                         let mut output = format!("Members subscribed to #{}:\n\n", channel);
                         if members.is_empty() {
@@ -598,7 +595,7 @@ impl Tool for CommunicateTool {
                     items,
                 };
 
-                match send_request(request) {
+                match send_request(request).await {
                     Ok(response) => {
                         ensure_success(&response)?;
                         Ok(ToolOutput::new(format!(
@@ -621,7 +618,7 @@ impl Tool for CommunicateTool {
                     proposer_session: proposer.clone(),
                 };
 
-                match send_request(request) {
+                match send_request(request).await {
                     Ok(response) => {
                         ensure_success(&response)?;
                         Ok(ToolOutput::new(format!(
@@ -646,7 +643,7 @@ impl Tool for CommunicateTool {
                     reason: reason.clone(),
                 };
 
-                match send_request(request) {
+                match send_request(request).await {
                     Ok(response) => {
                         ensure_success(&response)?;
                         let reason_msg = reason
@@ -670,7 +667,7 @@ impl Tool for CommunicateTool {
                     initial_message: params.spawn_initial_message(),
                 };
 
-                match send_request(request) {
+                match send_request(request).await {
                     Ok(ServerEvent::CommSpawnResponse { new_session_id, .. })
                         if !new_session_id.is_empty() =>
                     {
@@ -700,7 +697,7 @@ impl Tool for CommunicateTool {
                     target_session: target.clone(),
                 };
 
-                match send_request(request) {
+                match send_request(request).await {
                     Ok(response) => {
                         ensure_success(&response)?;
                         Ok(ToolOutput::new(format!("Stopped agent: {}", target)))
@@ -731,7 +728,7 @@ impl Tool for CommunicateTool {
                     role: role.clone(),
                 };
 
-                match send_request(request) {
+                match send_request(request).await {
                     Ok(response) => {
                         ensure_success(&response)?;
                         Ok(ToolOutput::new(format!(
@@ -755,7 +752,7 @@ impl Tool for CommunicateTool {
                     limit: params.limit,
                 };
 
-                match send_request(request) {
+                match send_request(request).await {
                     Ok(ServerEvent::CommSummaryResponse { tool_calls, .. }) => {
                         Ok(format_tool_summary(&target, &tool_calls))
                     }
@@ -778,7 +775,7 @@ impl Tool for CommunicateTool {
                     target_session: target.clone(),
                 };
 
-                match send_request(request) {
+                match send_request(request).await {
                     Ok(ServerEvent::CommContextHistory { messages, .. }) => {
                         Ok(format_context_history(&target, &messages))
                     }
@@ -796,7 +793,7 @@ impl Tool for CommunicateTool {
                     session_id: ctx.session_id.clone(),
                 };
 
-                match send_request(request) {
+                match send_request(request).await {
                     Ok(response) => {
                         ensure_success(&response)?;
                         Ok(ToolOutput::new("Swarm plan re-synced to your session."))
@@ -821,7 +818,7 @@ impl Tool for CommunicateTool {
                     message: params.message.clone(),
                 };
 
-                match send_request(request) {
+                match send_request(request).await {
                     Ok(response) => {
                         ensure_success(&response)?;
                         Ok(ToolOutput::new(format!(
@@ -844,7 +841,7 @@ impl Tool for CommunicateTool {
                     channel: channel.clone(),
                 };
 
-                match send_request(request) {
+                match send_request(request).await {
                     Ok(response) => {
                         ensure_success(&response)?;
                         Ok(ToolOutput::new(format!("Subscribed to #{}", channel)))
@@ -864,7 +861,7 @@ impl Tool for CommunicateTool {
                     channel: channel.clone(),
                 };
 
-                match send_request(request) {
+                match send_request(request).await {
                     Ok(response) => {
                         ensure_success(&response)?;
                         Ok(ToolOutput::new(format!("Unsubscribed from #{}", channel)))
@@ -891,7 +888,7 @@ impl Tool for CommunicateTool {
 
                 let socket_timeout = std::time::Duration::from_secs(timeout_secs + 30);
 
-                match send_request_with_timeout(request, Some(socket_timeout)) {
+                match send_request_with_timeout(request, Some(socket_timeout)).await {
                     Ok(ServerEvent::CommAwaitMembersResponse {
                         completed,
                         members,
@@ -1233,6 +1230,24 @@ mod tests {
         }
     }
 
+    async fn wait_for_member_presence(
+        client: &mut RawClient,
+        requester_session: &str,
+        target_session: &str,
+    ) -> Result<Vec<AgentInfo>> {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let members = client.comm_list(requester_session).await?;
+            if members.iter().any(|member| member.session_id == target_session) {
+                return Ok(members);
+            }
+            if tokio::time::Instant::now() >= deadline {
+                anyhow::bail!("timed out waiting for member {} to appear", target_session);
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    }
+
     #[test]
     fn default_await_members_targets_include_ready() {
         assert_eq!(
@@ -1416,6 +1431,82 @@ mod tests {
             .find(|member| member.session_id == peer_session)
             .expect("peer should still be listed when ready");
         assert_eq!(ready_peer.status.as_deref(), Some("ready"));
+
+        server_task.abort();
+    }
+
+    #[tokio::test]
+    async fn communicate_spawn_with_prompt_and_summary_work_end_to_end() {
+        let _env_lock = crate::storage::lock_test_env();
+        let runtime_dir = tempfile::TempDir::new().expect("runtime tempdir");
+        let repo_dir = std::env::current_dir().expect("repo cwd");
+        let _runtime = EnvGuard::set("JCODE_RUNTIME_DIR", runtime_dir.path());
+        let _debug = EnvGuard::set("JCODE_DEBUG_CONTROL", "1");
+
+        let provider: Arc<dyn Provider> = Arc::new(DelayedTestProvider {
+            delay: Duration::from_millis(100),
+        });
+        let server = Arc::new(Server::new(provider));
+        let mut server_task = {
+            let server = Arc::clone(&server);
+            tokio::spawn(async move { server.run().await })
+        };
+
+        let socket_path = runtime_dir.path().join("jcode.sock");
+        wait_for_server_socket(&socket_path, &mut server_task)
+            .await
+            .expect("server socket should be ready");
+
+        let mut watcher = RawClient::connect(&socket_path)
+            .await
+            .expect("watcher should connect");
+        watcher
+            .subscribe(&repo_dir)
+            .await
+            .expect("watcher subscribe");
+
+        let watcher_session = watcher.session_id().await.expect("watcher session id");
+        let tool = CommunicateTool::new();
+        let ctx = test_ctx(&watcher_session, &repo_dir);
+
+        let spawn_output = tool
+            .execute(
+                json!({
+                    "action": "spawn",
+                    "prompt": "Reply with a short acknowledgement."
+                }),
+                ctx.clone(),
+            )
+            .await
+            .expect("spawn with prompt should succeed");
+        let spawned_session = spawn_output
+            .output
+            .strip_prefix("Spawned new agent: ")
+            .expect("spawn output should include session id")
+            .trim()
+            .to_string();
+        assert!(!spawned_session.is_empty(), "spawned session id should not be empty");
+
+        wait_for_member_presence(&mut watcher, &watcher_session, &spawned_session)
+            .await
+            .expect("spawned member should appear in swarm list");
+
+        let summary_output = tool
+            .execute(
+                json!({
+                    "action": "summary",
+                    "target_session": spawned_session
+                }),
+                ctx,
+            )
+            .await
+            .expect("summary for spawned agent should succeed");
+        assert!(
+            summary_output.output.contains("Tool call summary for")
+                || summary_output.output.contains("No tool calls found for"),
+            "unexpected summary output: {}",
+            summary_output.output
+        );
 
         server_task.abort();
     }
