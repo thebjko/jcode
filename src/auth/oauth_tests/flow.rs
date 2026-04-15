@@ -77,7 +77,10 @@ fn claude_exchange_request_contains_required_fields() -> Result<()> {
     assert_eq!(require_param(&pairs, "client_id")?, claude::CLIENT_ID);
     assert_eq!(require_param(&pairs, "code")?, "auth_code_xyz");
     assert_eq!(require_param(&pairs, "code_verifier")?, "verifier_abc");
-    assert_eq!(require_param(&pairs, "redirect_uri")?, "https://example.com/callback");
+    assert_eq!(
+        require_param(&pairs, "redirect_uri")?,
+        "https://example.com/callback"
+    );
     assert_eq!(require_param(&pairs, "state")?, "verifier_abc");
     Ok(())
 }
@@ -111,7 +114,10 @@ fn claude_refresh_request_contains_required_fields() -> Result<()> {
     let (_url, _ct, body) = build_claude_refresh_request("rt_refresh_token_value");
     let pairs = form_pairs(body)?;
     assert_eq!(require_param(&pairs, "grant_type")?, "refresh_token");
-    assert_eq!(require_param(&pairs, "refresh_token")?, "rt_refresh_token_value");
+    assert_eq!(
+        require_param(&pairs, "refresh_token")?,
+        "rt_refresh_token_value"
+    );
     assert_eq!(require_param(&pairs, "client_id")?, claude::CLIENT_ID);
     Ok(())
 }
@@ -210,7 +216,10 @@ fn claude_auth_url_contains_required_params() -> Result<()> {
     assert_eq!(require_param(&params, "code")?, "true");
     assert_eq!(require_param(&params, "client_id")?, claude::CLIENT_ID);
     assert_eq!(require_param(&params, "response_type")?, "code");
-    assert_eq!(require_param(&params, "redirect_uri")?, claude::REDIRECT_URI);
+    assert_eq!(
+        require_param(&params, "redirect_uri")?,
+        claude::REDIRECT_URI
+    );
     assert_eq!(require_param(&params, "scope")?, claude::SCOPES);
     assert_eq!(require_param(&params, "code_challenge")?, challenge);
     assert_eq!(require_param(&params, "code_challenge_method")?, "S256");
@@ -399,9 +408,8 @@ async fn claude_exchange_mock_server_receives_form_urlencoded() -> Result<()> {
     let (port, handle) = mock_token_server(200, &success_body).await;
 
     let url = format!("http://127.0.0.1:{}/v1/oauth/token", port);
-    let result = exchange_code_at_url(&url, "code123", "verifier456", "https://redir", None)
-        .await
-        ?;
+    let result =
+        exchange_code_at_url(&url, "code123", "verifier456", "https://redir", None).await?;
 
     assert_eq!(result.access_token, "at_mock");
     assert_eq!(result.refresh_token, "rt_mock");
@@ -441,9 +449,7 @@ async fn claude_exchange_mock_server_with_state() -> Result<()> {
     let (port, handle) = mock_token_server(200, &success_body).await;
 
     let url = format!("http://127.0.0.1:{}/v1/oauth/token", port);
-    let _ = exchange_code_at_url(&url, "c", "v", "https://r", Some("my_state"))
-        .await
-        ?;
+    let _ = exchange_code_at_url(&url, "c", "v", "https://r", Some("my_state")).await?;
 
     let (_method, _path, _headers, body) = handle.await.map_err(|e| anyhow!(e))?;
     let pairs: HashMap<String, String> = url::form_urlencoded::parse(body.as_bytes())
@@ -470,8 +476,7 @@ async fn claude_exchange_uses_state_from_url_query_when_present() -> Result<()> 
         "https://example.com/callback?code=test_code&state=query_state",
         "https://r",
     )
-    .await
-    ?;
+    .await?;
 
     let (_method, _path, _headers, body) = handle.await.map_err(|e| anyhow!(e))?;
     let pairs: HashMap<String, String> = url::form_urlencoded::parse(body.as_bytes())
@@ -543,9 +548,7 @@ async fn claude_exchange_falls_back_to_verifier_when_input_has_no_state() -> Res
     let (port, handle) = mock_token_server(200, &success_body).await;
 
     let url = format!("http://127.0.0.1:{}/v1/oauth/token", port);
-    let _ = exchange_claude_code_at_url(&url, "verifier_only", "plain_code", "https://r")
-        .await
-        ?;
+    let _ = exchange_claude_code_at_url(&url, "verifier_only", "plain_code", "https://r").await?;
 
     let (_method, _path, _headers, body) = handle.await.map_err(|e| anyhow!(e))?;
     let pairs: HashMap<String, String> = url::form_urlencoded::parse(body.as_bytes())
@@ -567,9 +570,7 @@ async fn claude_exchange_uses_verifier_when_input_state_is_empty() -> Result<()>
     let (port, handle) = mock_token_server(200, &success_body).await;
 
     let url = format!("http://127.0.0.1:{}/v1/oauth/token", port);
-    let _ = exchange_claude_code_at_url(&url, "verifier_only", "plain_code#", "https://r")
-        .await
-        ?;
+    let _ = exchange_claude_code_at_url(&url, "verifier_only", "plain_code#", "https://r").await?;
 
     let (_method, _path, _headers, body) = handle.await.map_err(|e| anyhow!(e))?;
     let pairs: HashMap<String, String> = url::form_urlencoded::parse(body.as_bytes())
@@ -608,9 +609,7 @@ async fn claude_refresh_mock_server_receives_form_urlencoded() -> Result<()> {
     let (port, handle) = mock_token_server(200, &success_body).await;
 
     let url = format!("http://127.0.0.1:{}/v1/oauth/token", port);
-    let result = refresh_tokens_at_url(&url, "old_refresh_token")
-        .await
-        ?;
+    let result = refresh_tokens_at_url(&url, "old_refresh_token").await?;
 
     assert_eq!(result.access_token, "at_refreshed");
     assert_eq!(result.refresh_token, "rt_refreshed");
@@ -759,9 +758,7 @@ async fn exchange_parses_optional_id_token() -> Result<()> {
     .to_string();
     let (port, _handle) = mock_token_server(200, &body_with).await;
     let url = format!("http://127.0.0.1:{}/token", port);
-    let result = exchange_code_at_url(&url, "c", "v", "r", None)
-        .await
-        ?;
+    let result = exchange_code_at_url(&url, "c", "v", "r", None).await?;
     assert_eq!(result.id_token, Some("idt_value".to_string()));
     Ok(())
 }
@@ -776,9 +773,7 @@ async fn exchange_handles_missing_id_token() -> Result<()> {
     .to_string();
     let (port, _handle) = mock_token_server(200, &body_without).await;
     let url = format!("http://127.0.0.1:{}/token", port);
-    let result = exchange_code_at_url(&url, "c", "v", "r", None)
-        .await
-        ?;
+    let result = exchange_code_at_url(&url, "c", "v", "r", None).await?;
     assert!(result.id_token.is_none());
     Ok(())
 }
@@ -794,9 +789,7 @@ async fn exchange_sets_expires_at_in_future() -> Result<()> {
     let (port, _handle) = mock_token_server(200, &body).await;
     let url = format!("http://127.0.0.1:{}/token", port);
     let before = chrono::Utc::now().timestamp_millis();
-    let result = exchange_code_at_url(&url, "c", "v", "r", None)
-        .await
-        ?;
+    let result = exchange_code_at_url(&url, "c", "v", "r", None).await?;
     let after = chrono::Utc::now().timestamp_millis();
     assert!(result.expires_at >= before + 3600 * 1000);
     assert!(result.expires_at <= after + 3600 * 1000);
@@ -816,7 +809,10 @@ fn claude_exchange_handles_special_chars_in_code() -> Result<()> {
         None,
     );
     let pairs = form_pairs(body)?;
-    assert_eq!(require_param(&pairs, "code")?, "code+with/special=chars&more");
+    assert_eq!(
+        require_param(&pairs, "code")?,
+        "code+with/special=chars&more"
+    );
     Ok(())
 }
 
