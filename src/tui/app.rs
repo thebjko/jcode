@@ -66,6 +66,7 @@ mod state_ui_messages;
 mod state_ui_runtime;
 mod state_ui_storage;
 mod tui_lifecycle;
+mod tui_lifecycle_runtime;
 mod tui_state;
 mod turn;
 

@@ -185,7 +185,7 @@ fn disconnected_redraw_interval(initial_connect: bool) -> tokio::time::Interval 
 }
 
 pub(in crate::tui::app) fn reload_handoff_active(state: &RemoteRunState) -> bool {
-    state.server_reload_in_progress || super::reload_marker_active()
+    state.server_reload_in_progress || super::session_persistence::reload_marker_active()
 }
 
 async fn wait_for_reload_handoff_before_reconnect(

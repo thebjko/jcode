@@ -14,9 +14,12 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, Mou
 use ratatui::{DefaultTerminal, Terminal, backend::Backend};
 use std::time::{Duration, Instant};
 
+mod queue_recovery;
 mod reconnect;
+mod session_persistence;
 mod workspace;
 
+use queue_recovery::{recover_local_interleave_to_queue, recover_stranded_soft_interrupts};
 #[allow(unused_imports)]
 pub(super) use reconnect::{
     ConnectOutcome, PostConnectOutcome, ReloadReconnectHints, RemoteRunState, connect_with_retry,
@@ -24,165 +27,18 @@ pub(super) use reconnect::{
     should_allow_reconnect_takeover,
 };
 use reconnect::{format_disconnect_reason, reconnect_status_message};
+use session_persistence::{
+    persist_remote_session_metadata, persist_replay_display_message, persist_swarm_plan_snapshot,
+    persist_swarm_status_snapshot,
+};
 use workspace::{handle_workspace_command, handle_workspace_navigation_key};
 
 const CONNECTION_MESSAGE_TITLE: &str = "Connection";
 const RELOAD_MARKER_MAX_AGE: Duration = Duration::from_secs(30);
 
-impl App {
-    fn track_pending_soft_interrupt(&mut self, request_id: u64, content: String) {
-        self.pending_soft_interrupt_requests
-            .push((request_id, content.clone()));
-        self.pending_soft_interrupts.push(content);
-    }
-
-    fn acknowledge_pending_soft_interrupt(&mut self, request_id: u64) -> bool {
-        if let Some(index) = self
-            .pending_soft_interrupt_requests
-            .iter()
-            .position(|(id, _)| *id == request_id)
-        {
-            self.pending_soft_interrupt_requests.remove(index);
-            true
-        } else {
-            false
-        }
-    }
-
-    fn clear_pending_soft_interrupt_tracking(&mut self) {
-        self.pending_soft_interrupts.clear();
-        self.pending_soft_interrupt_requests.clear();
-    }
-
-    fn mark_soft_interrupt_injected(&mut self, content: &str) {
-        if let Some(index) = self
-            .pending_soft_interrupts
-            .iter()
-            .position(|pending| pending == content)
-        {
-            self.pending_soft_interrupts.remove(index);
-        }
-
-        if let Some(index) = self
-            .pending_soft_interrupt_requests
-            .iter()
-            .position(|(_, pending)| pending == content)
-        {
-            self.pending_soft_interrupt_requests.remove(index);
-        }
-    }
-}
-
-fn recover_local_interleave_to_queue(app: &mut App, reason: &str) -> bool {
-    let Some(interleave) = app.interleave_message.take() else {
-        return false;
-    };
-    if interleave.trim().is_empty() {
-        return false;
-    }
-
-    crate::logging::info(&format!(
-        "Recovering unsent interleave into queued follow-ups after {}",
-        reason
-    ));
-    app.queued_messages.insert(0, interleave);
-    true
-}
-
-async fn recover_stranded_soft_interrupts(app: &mut App, remote: &mut RemoteConnection) -> bool {
-    if app.is_processing || app.pending_soft_interrupts.is_empty() {
-        return false;
-    }
-
-    let recovered_interrupts = std::mem::take(&mut app.pending_soft_interrupts);
-    if recovered_interrupts.is_empty() {
-        return false;
-    }
-
-    if let Err(err) = remote.cancel_soft_interrupts().await {
-        app.pending_soft_interrupts = recovered_interrupts;
-        app.push_display_message(DisplayMessage::error(format!(
-            "Failed to recover queued interleave message: {}",
-            err
-        )));
-        app.set_status_notice("Queued interleave recovery failed");
-        return false;
-    }
-
-    crate::logging::info(&format!(
-        "Recovering {} stranded soft interrupt(s) into queued follow-ups after turn boundary",
-        recovered_interrupts.len()
-    ));
-    app.pending_soft_interrupt_requests.clear();
-
-    let mut recovered_queue = recovered_interrupts;
-    recovered_queue.append(&mut app.queued_messages);
-    app.queued_messages = recovered_queue;
-    app.set_status_notice("Recovered queued interleave after turn finished");
-    true
-}
-
 pub(super) enum RemoteEventOutcome {
     Continue,
     Reconnect,
-}
-
-fn persist_replay_display_message(app: &mut App, role: &str, title: Option<String>, content: &str) {
-    if app.is_remote {
-        // In remote mode, the server owns authoritative session history. Persisting the
-        // client's stale shadow copy can roll back newer turns after reconnect/reload.
-        return;
-    }
-    app.session
-        .record_replay_display_message(role.to_string(), title, content.to_string());
-    let _ = app.session.save();
-}
-
-fn persist_swarm_status_snapshot(app: &mut App) {
-    if app.is_remote {
-        // Avoid clobbering the server-owned session file from a remote client's shadow copy.
-        return;
-    }
-    app.session
-        .record_swarm_status_event(app.remote_swarm_members.clone());
-    let _ = app.session.save();
-}
-
-fn persist_swarm_plan_snapshot(
-    app: &mut App,
-    swarm_id: String,
-    version: u64,
-    items: Vec<crate::plan::PlanItem>,
-    participants: Vec<String>,
-    reason: Option<String>,
-) {
-    if app.is_remote {
-        // Avoid clobbering the server-owned session file from a remote client's shadow copy.
-        return;
-    }
-    app.session
-        .record_swarm_plan_event(swarm_id, version, items, participants, reason);
-    let _ = app.session.save();
-}
-
-fn persist_remote_session_metadata<F>(app: &mut App, update: F) -> Result<()>
-where
-    F: FnOnce(&mut crate::session::Session),
-{
-    let session_id = app
-        .remote_session_id
-        .as_deref()
-        .or(app.resume_session_id.as_deref())
-        .unwrap_or(app.session.id.as_str());
-    let mut session = crate::session::Session::load(session_id)?;
-    update(&mut session);
-    session.save()?;
-    app.session = session;
-    Ok(())
-}
-
-fn reload_marker_active() -> bool {
-    crate::server::reload_marker_active(RELOAD_MARKER_MAX_AGE)
 }
 
 pub(super) async fn handle_tick(app: &mut App, remote: &mut RemoteConnection) -> bool {

@@ -1590,7 +1590,7 @@ pub(super) fn handle_feedback_command(app: &mut App, trimmed: &str) -> bool {
 }
 
 pub(super) fn handle_dev_command(app: &mut App, trimmed: &str) -> bool {
-    super::tui_lifecycle::handle_dev_command(app, trimmed)
+    super::tui_lifecycle_runtime::handle_dev_command(app, trimmed)
 }
 
 #[cfg(test)]

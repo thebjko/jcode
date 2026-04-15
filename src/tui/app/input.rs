@@ -1748,7 +1748,7 @@ impl App {
             || super::commands::handle_feedback_command(self, trimmed)
             || super::state_ui::handle_info_command(self, trimmed)
             || super::auth::handle_auth_command(self, trimmed)
-            || super::tui_lifecycle::handle_dev_command(self, trimmed);
+            || super::tui_lifecycle_runtime::handle_dev_command(self, trimmed);
         if handled {
             if trimmed.starts_with('/') {
                 crate::telemetry::record_command_family(trimmed);
