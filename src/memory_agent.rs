@@ -21,8 +21,8 @@ use tokio::sync::mpsc;
 use crate::embedding;
 use crate::memory::{self, MemoryEntry, MemoryManager};
 use crate::memory_graph::{ClusterEntry, EdgeKind, MemoryGraph};
+use crate::memory_types::{MemoryEventKind, MemoryState, StepResult, StepStatus};
 use crate::sidecar::Sidecar;
-use crate::tui::info_widget::{MemoryEventKind, MemoryState};
 
 /// Context from a retrieval operation for post-retrieval maintenance
 #[derive(Debug, Clone)]
@@ -992,7 +992,6 @@ impl MemoryAgent {
             rejected: ctx.rejected_ids.len(),
         });
         memory::pipeline_update(|p| {
-            use crate::tui::info_widget::StepStatus;
             p.maintain = StepStatus::Running;
         });
 
@@ -1099,7 +1098,6 @@ impl MemoryAgent {
             record_maintenance_stat(latency_ms);
             memory::add_event(MemoryEventKind::MaintenanceComplete { latency_ms });
             memory::pipeline_update(|p| {
-                use crate::tui::info_widget::{StepResult, StepStatus};
                 p.maintain = StepStatus::Done;
                 p.maintain_result = Some(StepResult {
                     summary: format!("{}L {}↑ {}↓ {}P", links, boosted, decayed, pruned),

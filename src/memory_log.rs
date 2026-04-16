@@ -9,7 +9,7 @@
 //!
 //! Logs are kept for 14 days (separate from general log rotation).
 
-use crate::tui::info_widget::MemoryEventKind;
+use crate::memory_types::MemoryEventKind;
 use chrono::Local;
 use serde::Serialize;
 use std::fs::{self, File, OpenOptions};

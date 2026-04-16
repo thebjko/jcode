@@ -7,12 +7,12 @@
 //! Integrates with the Haiku sidecar for relevance verification and extraction.
 
 use crate::memory_graph::{GRAPH_VERSION, MemoryGraph};
-use crate::sidecar::Sidecar;
-use crate::storage;
-use crate::tui::info_widget::{
+use crate::memory_types::{
     InjectedMemoryItem, MemoryActivity, MemoryEvent, MemoryEventKind, MemoryState, StepResult,
     StepStatus,
 };
+use crate::sidecar::Sidecar;
+use crate::storage;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

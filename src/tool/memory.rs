@@ -115,7 +115,7 @@ impl Tool for MemoryTool {
 
     async fn execute(&self, input: Value, ctx: ToolContext) -> Result<ToolOutput> {
         use crate::memory;
-        use crate::tui::info_widget::{MemoryEventKind, MemoryState};
+        use crate::memory_types::{MemoryEventKind, MemoryState};
 
         let input: MemoryInput = serde_json::from_value(input)?;
 

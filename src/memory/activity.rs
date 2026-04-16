@@ -1,4 +1,5 @@
 use super::*;
+use crate::memory_types::PipelineState;
 use std::time::Duration;
 
 /// Global memory activity state - updated by sidecar, read by info widget
@@ -83,7 +84,6 @@ pub fn add_event(kind: MemoryEventKind) {
 
 /// Start a new pipeline run (called at the beginning of each memory check)
 pub fn pipeline_start() {
-    use crate::tui::info_widget::PipelineState;
     if let Ok(mut guard) = MEMORY_ACTIVITY.lock() {
         if let Some(activity) = guard.as_mut() {
             activity.pipeline = Some(PipelineState::new());
@@ -103,7 +103,7 @@ pub fn pipeline_start() {
     clippy::collapsible_if,
     reason = "Memory activity updates keep optional state transitions explicit"
 )]
-pub fn pipeline_update(f: impl FnOnce(&mut crate::tui::info_widget::PipelineState)) {
+pub fn pipeline_update(f: impl FnOnce(&mut PipelineState)) {
     if let Ok(mut guard) = MEMORY_ACTIVITY.lock() {
         if let Some(activity) = guard.as_mut() {
             if let Some(pipeline) = activity.pipeline.as_mut() {
@@ -297,9 +297,7 @@ fn snapshot_state(state: &MemoryState) -> crate::protocol::MemoryStateSnapshot {
     }
 }
 
-fn snapshot_pipeline(
-    pipeline: &crate::tui::info_widget::PipelineState,
-) -> crate::protocol::MemoryPipelineSnapshot {
+fn snapshot_pipeline(pipeline: &PipelineState) -> crate::protocol::MemoryPipelineSnapshot {
     crate::protocol::MemoryPipelineSnapshot {
         search: snapshot_step_status(&pipeline.search),
         search_result: pipeline.search_result.as_ref().map(snapshot_step_result),
@@ -355,10 +353,8 @@ fn from_snapshot_state(snapshot: &crate::protocol::MemoryStateSnapshot) -> Memor
     }
 }
 
-fn from_snapshot_pipeline(
-    snapshot: &crate::protocol::MemoryPipelineSnapshot,
-) -> crate::tui::info_widget::PipelineState {
-    crate::tui::info_widget::PipelineState {
+fn from_snapshot_pipeline(snapshot: &crate::protocol::MemoryPipelineSnapshot) -> PipelineState {
+    PipelineState {
         search: from_snapshot_step_status(&snapshot.search),
         search_result: snapshot
             .search_result
