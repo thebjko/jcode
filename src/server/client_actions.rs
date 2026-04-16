@@ -1137,15 +1137,15 @@ pub(super) fn handle_compact(
                             .force_attribution(),
                         );
                         ServerEvent::CompactResult {
-                        id,
-                        message: format!(
-                            "{}\n\n📦 **Compacting context** (manual) — summarizing older messages in the background to stay within the context window.\n\
+                            id,
+                            message: format!(
+                                "{}\n\n📦 **Compacting context** (manual) — summarizing older messages in the background to stay within the context window.\n\
                             The summary will be applied automatically when ready.",
-                            status_msg
-                        ),
-                        success: true,
+                                status_msg
+                            ),
+                            success: true,
+                        }
                     }
-                    },
                     Err(reason) => ServerEvent::CompactResult {
                         id,
                         message: format!("{status_msg}\n\n⚠ **Cannot compact:** {reason}"),

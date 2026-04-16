@@ -72,7 +72,9 @@ impl Agent {
                 "context_limit_auto_compaction",
             )
             .with_session_id(self.session.id.clone())
-            .with_detail(format!("dropped_messages={dropped},usage_pct={usage_pct:.1}"))
+            .with_detail(format!(
+                "dropped_messages={dropped},usage_pct={usage_pct:.1}"
+            ))
             .force_attribution(),
         );
 

@@ -89,7 +89,9 @@ pub struct SimulatedInstant {
 
 impl SimulatedInstant {
     pub fn elapsed(&self) -> Duration {
-        let now = get_test_clock().map(|c| read_unpoisoned(c).now_ms()).unwrap_or(0);
+        let now = get_test_clock()
+            .map(|c| read_unpoisoned(c).now_ms())
+            .unwrap_or(0);
         Duration::from_millis(now.saturating_sub(self.offset_ms))
     }
 

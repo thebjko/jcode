@@ -1,7 +1,9 @@
 use super::*;
 
 impl Agent {
-    pub fn session_memory_profile_snapshot(&mut self) -> crate::session::SessionMemoryProfileSnapshot {
+    pub fn session_memory_profile_snapshot(
+        &mut self,
+    ) -> crate::session::SessionMemoryProfileSnapshot {
         self.session.memory_profile_snapshot()
     }
 

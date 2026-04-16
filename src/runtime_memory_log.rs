@@ -214,11 +214,17 @@ impl RuntimeMemoryLogController {
         &self.config
     }
 
-    pub fn should_write_process_for_event(&self, now: Instant, event: &RuntimeMemoryLogEvent) -> bool {
+    pub fn should_write_process_for_event(
+        &self,
+        now: Instant,
+        event: &RuntimeMemoryLogEvent,
+    ) -> bool {
         event.force_attribution
             || self
                 .last_process_sample_at
-                .map(|last| now.saturating_duration_since(last) >= self.config.event_process_min_spacing)
+                .map(|last| {
+                    now.saturating_duration_since(last) >= self.config.event_process_min_spacing
+                })
                 .unwrap_or(true)
     }
 
@@ -249,7 +255,11 @@ impl RuntimeMemoryLogController {
         event: Option<&RuntimeMemoryLogEvent>,
     ) -> RuntimeMemoryLogSampling {
         let mut pending_categories = pending_categories(&self.pending_events);
-        if let Some(event) = event && !pending_categories.iter().any(|value| value == &event.category) {
+        if let Some(event) = event
+            && !pending_categories
+                .iter()
+                .any(|value| value == &event.category)
+        {
             if pending_categories.len() < MAX_PENDING_CATEGORIES {
                 pending_categories.push(event.category.clone());
             }
@@ -275,13 +285,19 @@ impl RuntimeMemoryLogController {
 
         let mut threshold_reasons = Vec::new();
         let mut forced = false;
-        if let Some(event) = event && event.force_attribution {
+        if let Some(event) = event
+            && event.force_attribution
+        {
             forced = true;
             threshold_reasons.push(format!("event:{}", event.category));
         }
         if !self.pending_events.is_empty() {
             threshold_reasons.push("pending_events".to_string());
-            if self.pending_events.iter().any(|value| value.force_attribution) {
+            if self
+                .pending_events
+                .iter()
+                .any(|value| value.force_attribution)
+            {
                 forced = true;
             }
         }
@@ -370,12 +386,14 @@ pub fn server_logging_config() -> RuntimeMemoryLogConfig {
         .or_else(|| legacy_interval_secs.map(|value| value.saturating_mul(3)))
         .filter(|value| *value >= MIN_ATTRIBUTION_INTERVAL_SECS)
         .unwrap_or(DEFAULT_ATTRIBUTION_INTERVAL_SECS);
-    let attribution_min_spacing_secs = env_u64("JCODE_RUNTIME_MEMORY_LOG_ATTRIBUTION_MIN_SPACING_SECS")
-        .filter(|value| *value >= MIN_ATTRIBUTION_MIN_SPACING_SECS)
-        .unwrap_or(DEFAULT_ATTRIBUTION_MIN_SPACING_SECS);
-    let event_process_min_spacing_secs = env_u64("JCODE_RUNTIME_MEMORY_LOG_EVENT_PROCESS_MIN_SPACING_SECS")
-        .filter(|value| *value >= MIN_EVENT_PROCESS_MIN_SPACING_SECS)
-        .unwrap_or(DEFAULT_EVENT_PROCESS_MIN_SPACING_SECS);
+    let attribution_min_spacing_secs =
+        env_u64("JCODE_RUNTIME_MEMORY_LOG_ATTRIBUTION_MIN_SPACING_SECS")
+            .filter(|value| *value >= MIN_ATTRIBUTION_MIN_SPACING_SECS)
+            .unwrap_or(DEFAULT_ATTRIBUTION_MIN_SPACING_SECS);
+    let event_process_min_spacing_secs =
+        env_u64("JCODE_RUNTIME_MEMORY_LOG_EVENT_PROCESS_MIN_SPACING_SECS")
+            .filter(|value| *value >= MIN_EVENT_PROCESS_MIN_SPACING_SECS)
+            .unwrap_or(DEFAULT_EVENT_PROCESS_MIN_SPACING_SECS);
     let pss_delta_threshold_bytes = env_u64("JCODE_RUNTIME_MEMORY_LOG_PSS_DELTA_THRESHOLD_MB")
         .unwrap_or(DEFAULT_PSS_DELTA_THRESHOLD_MB)
         .saturating_mul(1024 * 1024);
@@ -401,7 +419,9 @@ pub fn install_event_sink(sender: mpsc::UnboundedSender<RuntimeMemoryLogEvent>) 
 }
 
 pub fn emit_event(event: RuntimeMemoryLogEvent) {
-    if let Ok(guard) = event_sink().lock() && let Some(sender) = guard.as_ref() {
+    if let Ok(guard) = event_sink().lock()
+        && let Some(sender) = guard.as_ref()
+    {
         let _ = sender.send(event);
     }
 }
@@ -503,7 +523,9 @@ fn bytes_to_mb_string(bytes: u64) -> String {
 fn server_log_path_for(now: chrono::DateTime<Utc>) -> Result<PathBuf> {
     let dir = server_logs_dir()?;
     let date = now.format("%Y-%m-%d");
-    Ok(dir.join(format!("{SERVER_LOG_FILE_PREFIX}{date}{SERVER_LOG_FILE_SUFFIX}")))
+    Ok(dir.join(format!(
+        "{SERVER_LOG_FILE_PREFIX}{date}{SERVER_LOG_FILE_SUFFIX}"
+    )))
 }
 
 fn is_server_log_file(path: &Path) -> bool {
@@ -646,21 +668,25 @@ mod tests {
             },
         );
         let process = crate::process_memory::ProcessMemorySnapshot::default();
-        assert!(controller
-            .build_sampling_for_attribution(
-                now + Duration::from_secs(10),
-                &process,
-                Some(&RuntimeMemoryLogEvent::new("turn_completed", "turn").force_attribution()),
-                None,
-            )
-            .is_none());
-        assert!(controller
-            .build_sampling_for_attribution(
-                now + Duration::from_secs(31),
-                &process,
-                Some(&RuntimeMemoryLogEvent::new("turn_completed", "turn").force_attribution()),
-                None,
-            )
-            .is_some());
+        assert!(
+            controller
+                .build_sampling_for_attribution(
+                    now + Duration::from_secs(10),
+                    &process,
+                    Some(&RuntimeMemoryLogEvent::new("turn_completed", "turn").force_attribution()),
+                    None,
+                )
+                .is_none()
+        );
+        assert!(
+            controller
+                .build_sampling_for_attribution(
+                    now + Duration::from_secs(31),
+                    &process,
+                    Some(&RuntimeMemoryLogEvent::new("turn_completed", "turn").force_attribution()),
+                    None,
+                )
+                .is_some()
+        );
     }
 }

@@ -916,7 +916,8 @@ impl Session {
     }
 
     fn rebuild_memory_profile_cache(&mut self) {
-        let message_stats = summarize_message_content(self.messages.iter().map(|message| &message.content));
+        let message_stats =
+            summarize_message_content(self.messages.iter().map(|message| &message.content));
         let provider_cache_stats = summarize_message_content(
             self.provider_messages_cache
                 .iter()
@@ -930,11 +931,19 @@ impl Session {
             env_snapshots_count: self.env_snapshots.len(),
             env_snapshots_json_bytes: self.env_snapshots.iter().map(estimate_json_bytes).sum(),
             memory_injections_count: self.memory_injections.len(),
-            memory_injections_json_bytes: self.memory_injections.iter().map(estimate_json_bytes).sum(),
+            memory_injections_json_bytes: self
+                .memory_injections
+                .iter()
+                .map(estimate_json_bytes)
+                .sum(),
             replay_events_count: self.replay_events.len(),
             replay_events_json_bytes: self.replay_events.iter().map(estimate_json_bytes).sum(),
             provider_cache_count: self.provider_messages_cache.len(),
-            provider_cache_json_bytes: self.provider_messages_cache.iter().map(estimate_json_bytes).sum(),
+            provider_cache_json_bytes: self
+                .provider_messages_cache
+                .iter()
+                .map(estimate_json_bytes)
+                .sum(),
             provider_cache_stats,
         };
         self.memory_profile_dirty = false;
@@ -969,9 +978,15 @@ impl Session {
                 + compaction_json_bytes,
             provider_cache_json_bytes: self.memory_profile_cache.provider_cache_json_bytes,
             canonical_tool_result_bytes: self.memory_profile_cache.message_stats.tool_result_bytes,
-            provider_cache_tool_result_bytes: self.memory_profile_cache.provider_cache_stats.tool_result_bytes,
+            provider_cache_tool_result_bytes: self
+                .memory_profile_cache
+                .provider_cache_stats
+                .tool_result_bytes,
             canonical_large_blob_bytes: self.memory_profile_cache.message_stats.large_block_bytes,
-            provider_cache_large_blob_bytes: self.memory_profile_cache.provider_cache_stats.large_block_bytes,
+            provider_cache_large_blob_bytes: self
+                .memory_profile_cache
+                .provider_cache_stats
+                .large_block_bytes,
         }
     }
 

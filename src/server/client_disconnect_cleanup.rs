@@ -138,18 +138,24 @@ pub(super) async fn cleanup_client_connection(
                     let working_dir = agent.working_dir().map(|dir| dir.to_string());
                     drop(agent);
                     let event = match disposition {
-                        DisconnectDisposition::Closed => crate::runtime_memory_log::RuntimeMemoryLogEvent::new(
-                            "session_closed",
-                            "client_disconnected",
-                        ),
-                        DisconnectDisposition::Crashed => crate::runtime_memory_log::RuntimeMemoryLogEvent::new(
-                            "session_crashed",
-                            "client_disconnected_while_processing",
-                        ),
-                        DisconnectDisposition::Reloading => crate::runtime_memory_log::RuntimeMemoryLogEvent::new(
-                            "session_reloading",
-                            "server_reload_disconnect",
-                        ),
+                        DisconnectDisposition::Closed => {
+                            crate::runtime_memory_log::RuntimeMemoryLogEvent::new(
+                                "session_closed",
+                                "client_disconnected",
+                            )
+                        }
+                        DisconnectDisposition::Crashed => {
+                            crate::runtime_memory_log::RuntimeMemoryLogEvent::new(
+                                "session_crashed",
+                                "client_disconnected_while_processing",
+                            )
+                        }
+                        DisconnectDisposition::Reloading => {
+                            crate::runtime_memory_log::RuntimeMemoryLogEvent::new(
+                                "session_reloading",
+                                "server_reload_disconnect",
+                            )
+                        }
                     }
                     .with_session_id(sid.clone())
                     .force_attribution();
