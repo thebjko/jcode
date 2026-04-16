@@ -742,15 +742,9 @@ pub(super) async fn handle_client(
                                 &swarm_event_tx,
                             )
                             .await;
-                            let snapshot = {
-                                let agent_guard = agent.lock().await;
-                                let models = agent_guard.available_models_display();
-                                let routes_json =
-                                    serde_json::to_string(&agent_guard.model_routes())
-                                        .unwrap_or_default();
-                                (models, routes_json)
-                            };
-                            last_available_models_snapshot = Some(snapshot);
+                            if let Some(snapshot) = try_available_models_snapshot(&agent) {
+                                last_available_models_snapshot = Some(snapshot);
+                            }
                         } else {
                             crate::logging::warn(&format!(
                                 "Target-aware subscribe failed to bind {} from temporary {}; closing temporary client connection {}",
@@ -811,14 +805,9 @@ pub(super) async fn handle_client(
                         &swarm_event_tx,
                     )
                     .await;
-                    let snapshot = {
-                        let agent_guard = agent.lock().await;
-                        let models = agent_guard.available_models_display();
-                        let routes_json =
-                            serde_json::to_string(&agent_guard.model_routes()).unwrap_or_default();
-                        (models, routes_json)
-                    };
-                    last_available_models_snapshot = Some(snapshot);
+                    if let Some(snapshot) = try_available_models_snapshot(&agent) {
+                        last_available_models_snapshot = Some(snapshot);
+                    }
                 }
                 client_subscribed = true;
             }
@@ -842,14 +831,9 @@ pub(super) async fn handle_client(
                 {
                     break;
                 }
-                let snapshot = {
-                    let agent_guard = agent.lock().await;
-                    let models = agent_guard.available_models_display();
-                    let routes_json =
-                        serde_json::to_string(&agent_guard.model_routes()).unwrap_or_default();
-                    (models, routes_json)
-                };
-                last_available_models_snapshot = Some(snapshot);
+                if let Some(snapshot) = try_available_models_snapshot(&agent) {
+                    last_available_models_snapshot = Some(snapshot);
+                }
             }
 
             Request::DebugCommand { id, .. } => {
@@ -915,14 +899,9 @@ pub(super) async fn handle_client(
                 .await?;
                 (soft_interrupt_queue, background_tool_signal, cancel_signal) =
                     refresh_runtime_handles(&agent).await;
-                let snapshot = {
-                    let agent_guard = agent.lock().await;
-                    let models = agent_guard.available_models_display();
-                    let routes_json =
-                        serde_json::to_string(&agent_guard.model_routes()).unwrap_or_default();
-                    (models, routes_json)
-                };
-                last_available_models_snapshot = Some(snapshot);
+                if let Some(snapshot) = try_available_models_snapshot(&agent) {
+                    last_available_models_snapshot = Some(snapshot);
+                }
             }
 
             Request::CycleModel { id, direction } => {
@@ -1706,6 +1685,15 @@ async fn cancel_processing_message(
             let _ = client_event_tx.send(ServerEvent::Done { id: message_id });
         }
     }
+}
+
+fn try_available_models_snapshot(agent: &Arc<Mutex<Agent>>) -> Option<(Vec<String>, String)> {
+    let Ok(agent_guard) = agent.try_lock() else {
+        return None;
+    };
+    let models = agent_guard.available_models_display();
+    let routes_json = serde_json::to_string(&agent_guard.model_routes()).unwrap_or_default();
+    Some((models, routes_json))
 }
 
 fn queue_soft_interrupt(

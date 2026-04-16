@@ -1,8 +1,6 @@
 #![cfg_attr(test, allow(clippy::await_holding_lock))]
 
-use super::client_state::{
-    HistoryPayloadMode, send_history, session_activity_snapshot, spawn_model_prefetch_update,
-};
+use super::client_state::{handle_get_history, spawn_model_prefetch_update};
 use super::{
     ClientConnectionInfo, ClientDebugState, FileAccess, SessionInterruptQueues, SwarmEvent,
     SwarmMember, VersionedPlan, broadcast_swarm_status, fanout_live_client_event,
@@ -781,25 +779,18 @@ pub(super) async fn handle_resume_session(
 
         *client_session_id = session_id.clone();
 
-        let activity = session_activity_snapshot(client_connections, &session_id, false).await;
-
-        send_history(
+        handle_get_history(
             id,
             &session_id,
+            false,
             live_target_agent,
+            provider,
             sessions,
+            client_connections,
             client_count,
             writer,
             server_name,
             server_icon,
-            None,
-            activity,
-            if client_has_local_history {
-                HistoryPayloadMode::MetadataOnly
-            } else {
-                HistoryPayloadMode::Full
-            },
-            true,
         )
         .await?;
         let _ = client_event_tx.send(ServerEvent::Done { id });
@@ -936,7 +927,7 @@ pub(super) async fn handle_resume_session(
         (result, is_canary)
     };
 
-    let was_interrupted = match &result {
+    let _was_interrupted = match &result {
         Ok(status) => {
             let agent_guard = agent.lock().await;
             restored_session_was_interrupted(&session_id, status, &agent_guard)
@@ -1050,25 +1041,18 @@ pub(super) async fn handle_resume_session(
             )
             .await;
 
-            let activity = session_activity_snapshot(client_connections, &session_id, false).await;
-
-            send_history(
+            handle_get_history(
                 id,
                 &session_id,
+                false,
                 agent,
+                provider,
                 sessions,
+                client_connections,
                 client_count,
                 writer,
                 server_name,
                 server_icon,
-                if was_interrupted { Some(true) } else { None },
-                activity,
-                if client_has_local_history {
-                    HistoryPayloadMode::MetadataOnly
-                } else {
-                    HistoryPayloadMode::Full
-                },
-                true,
             )
             .await?;
             let _ = client_event_tx.send(ServerEvent::Done { id });
