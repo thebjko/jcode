@@ -1,10 +1,10 @@
 use super::client_lifecycle::process_message_streaming_mpsc;
 use super::{
     SessionInterruptQueues, SwarmEvent, SwarmEventType, SwarmMember, VersionedPlan,
-    broadcast_swarm_plan, broadcast_swarm_status, create_headless_session,
-    persist_swarm_state_for, record_swarm_event, record_swarm_event_for_session,
-    remove_session_channel_subscriptions, remove_session_from_swarm,
-    remove_session_interrupt_queue, truncate_detail, update_member_status,
+    broadcast_swarm_plan, broadcast_swarm_status, create_headless_session, persist_swarm_state_for,
+    record_swarm_event, record_swarm_event_for_session, remove_session_channel_subscriptions,
+    remove_session_from_swarm, remove_session_interrupt_queue, truncate_detail,
+    update_member_status,
 };
 use crate::agent::Agent;
 use crate::protocol::{NotificationType, ServerEvent};
@@ -376,15 +376,16 @@ pub(super) async fn handle_comm_spawn(
                             Some(&swarm_event_tx2),
                         )
                         .await;
-                        let (drain_tx, mut drain_rx) =
-                            tokio::sync::mpsc::unbounded_channel::<ServerEvent>();
-                        tokio::spawn(async move { while drain_rx.recv().await.is_some() {} });
+                        let event_tx = super::session_event_fanout_sender(
+                            sid_clone.clone(),
+                            Arc::clone(&swarm_members2),
+                        );
                         let result = process_message_streaming_mpsc(
                             Arc::clone(&agent_arc),
                             &initial_msg,
                             vec![],
                             None,
-                            drain_tx,
+                            event_tx,
                         )
                         .await;
                         let (new_status, new_detail) = match result {

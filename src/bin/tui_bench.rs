@@ -16,6 +16,22 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+fn is_edit_tool_name(name: &str) -> bool {
+    matches!(
+        name,
+        "write"
+            | "edit"
+            | "multiedit"
+            | "patch"
+            | "apply_patch"
+            | "Write"
+            | "Edit"
+            | "MultiEdit"
+            | "Patch"
+            | "ApplyPatch"
+    )
+}
+
 fn percentile_ms(samples_ms: &[f64], percentile: f64) -> f64 {
     if samples_ms.is_empty() {
         return 0.0;
@@ -859,6 +875,23 @@ fn reconstruct_side_panel_snapshot_from_session(session: &Session) -> SidePanelS
 impl TuiState for BenchState {
     fn display_messages(&self) -> &[DisplayMessage] {
         &self.messages
+    }
+
+    fn display_user_message_count(&self) -> usize {
+        self.messages
+            .iter()
+            .filter(|message| message.role == "user")
+            .count()
+    }
+
+    fn has_display_edit_tool_messages(&self) -> bool {
+        self.messages.iter().any(|message| {
+            message
+                .tool_data
+                .as_ref()
+                .map(|tool| is_edit_tool_name(&tool.name))
+                .unwrap_or(false)
+        })
     }
 
     fn side_pane_images(&self) -> Vec<jcode::session::RenderedImage> {

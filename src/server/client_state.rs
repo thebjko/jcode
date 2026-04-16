@@ -85,6 +85,32 @@ pub(super) async fn handle_get_history(
     let activity =
         session_activity_snapshot(client_connections, client_session_id, client_is_processing)
             .await;
+
+    if agent.try_lock().is_err() {
+        crate::logging::info(&format!(
+            "handle_get_history: session {} busy, falling back to persisted remote-startup snapshot",
+            client_session_id
+        ));
+        send_history_from_persisted_session(
+            id,
+            client_session_id,
+            provider,
+            sessions,
+            client_count,
+            writer,
+            server_name,
+            server_icon,
+            activity,
+        )
+        .await?;
+        crate::logging::info(&format!(
+            "[TIMING] handle_get_history: session={}, persisted_fallback total={}ms",
+            client_session_id,
+            history_start.elapsed().as_millis(),
+        ));
+        return Ok(());
+    }
+
     send_history(
         id,
         client_session_id,
@@ -112,6 +138,87 @@ pub(super) async fn handle_get_history(
         history_start.elapsed().as_millis(),
     ));
     Ok(())
+}
+
+fn render_history_messages_from_session(session: &crate::session::Session) -> Vec<crate::protocol::HistoryMessage> {
+    crate::session::render_messages(session)
+        .into_iter()
+        .map(|msg| crate::protocol::HistoryMessage {
+            role: msg.role,
+            content: msg.content,
+            tool_calls: if msg.tool_calls.is_empty() {
+                None
+            } else {
+                Some(msg.tool_calls)
+            },
+            tool_data: msg.tool_data,
+        })
+        .collect()
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "persisted history fallback still needs session/client/server metadata for a usable bootstrap payload"
+)]
+async fn send_history_from_persisted_session(
+    id: u64,
+    session_id: &str,
+    provider: &Arc<dyn Provider>,
+    sessions: &SessionAgents,
+    client_count: &Arc<RwLock<usize>>,
+    writer: &Arc<Mutex<WriteHalf>>,
+    server_name: &str,
+    server_icon: &str,
+    activity: Option<SessionActivitySnapshot>,
+) -> Result<()> {
+    let session = crate::session::Session::load_for_remote_startup(session_id)
+        .or_else(|_| crate::session::Session::load_startup_stub(session_id))?;
+    let messages = render_history_messages_from_session(&session);
+    let images = crate::session::render_images(&session);
+    let side_panel = crate::side_panel::snapshot_for_session(session_id).unwrap_or_default();
+
+    let (all_sessions, current_client_count) = {
+        let sessions_guard = sessions.read().await;
+        let mut all: Vec<String> = sessions_guard.keys().cloned().collect();
+        all.sort();
+        let count = *client_count.read().await;
+        (all, count)
+    };
+
+    let history_event = ServerEvent::History {
+        id,
+        session_id: session_id.to_string(),
+        messages,
+        images,
+        provider_name: Some(provider.name().to_string()),
+        provider_model: session.model.clone().or_else(|| Some(provider.model())),
+        subagent_model: session.subagent_model.clone(),
+        autoreview_enabled: session.autoreview_enabled,
+        autojudge_enabled: session.autojudge_enabled,
+        available_models: Vec::new(),
+        available_model_routes: Vec::new(),
+        mcp_servers: Vec::new(),
+        skills: Vec::new(),
+        total_tokens: None,
+        all_sessions,
+        client_count: Some(current_client_count),
+        is_canary: Some(session.is_canary),
+        server_version: Some(env!("JCODE_VERSION").to_string()),
+        server_name: Some(server_name.to_string()),
+        server_icon: Some(server_icon.to_string()),
+        server_has_update: Some(server_has_newer_binary()),
+        was_interrupted: None,
+        connection_type: None,
+        status_detail: None,
+        upstream_provider: None,
+        reasoning_effort: None,
+        service_tier: None,
+        compaction_mode: crate::config::config().compaction.mode.clone(),
+        activity,
+        side_panel,
+    };
+
+    write_event(writer, &history_event).await
 }
 
 #[expect(
@@ -445,12 +552,48 @@ pub(super) fn spawn_model_prefetch_update(provider: Arc<dyn Provider>, agent: Ar
 
 #[cfg(test)]
 mod tests {
+    use super::handle_get_history;
     use super::session_activity_snapshot;
+    use crate::agent::Agent;
+    use crate::message::{Message, ToolDefinition};
+    use crate::provider::{EventStream, Provider};
     use crate::server::ClientConnectionInfo;
+    use crate::tool::Registry;
+    use anyhow::Result;
+    use async_trait::async_trait;
+    use std::io::BufRead as _;
     use std::collections::HashMap;
     use std::sync::Arc;
     use std::time::Instant;
-    use tokio::sync::{RwLock, mpsc};
+    use tokio::io::AsyncReadExt;
+    use tokio::sync::{Mutex, RwLock, mpsc};
+
+    struct MockProvider;
+
+    #[async_trait]
+    impl Provider for MockProvider {
+        async fn complete(
+            &self,
+            _messages: &[Message],
+            _tools: &[ToolDefinition],
+            _system: &str,
+            _resume_session_id: Option<&str>,
+        ) -> Result<EventStream> {
+            unimplemented!("mock provider complete should not be called in client_state tests")
+        }
+
+        fn name(&self) -> &str {
+            "mock"
+        }
+
+        fn fork(&self) -> Arc<dyn Provider> {
+            Arc::new(Self)
+        }
+
+        fn model(&self) -> String {
+            "mock-model".to_string()
+        }
+    }
 
     #[tokio::test]
     async fn session_activity_snapshot_prefers_live_tool_name_for_target_session() {
@@ -505,5 +648,113 @@ mod tests {
 
         assert!(snapshot.is_processing);
         assert_eq!(snapshot.current_tool_name, None);
+    }
+
+    #[tokio::test]
+    async fn handle_get_history_falls_back_to_persisted_snapshot_when_agent_is_busy() {
+        let _guard = crate::storage::lock_test_env();
+        let temp_home = tempfile::TempDir::new().expect("create temp home");
+        let prev_home = std::env::var_os("JCODE_HOME");
+        crate::env::set_var("JCODE_HOME", temp_home.path());
+
+        let session_id = "session_busy_history_fallback";
+        let mut session = crate::session::Session::create_with_id(
+            session_id.to_string(),
+            None,
+            Some("busy fallback".to_string()),
+        );
+        session.model = Some("mock-model".to_string());
+        session.append_stored_message(crate::session::StoredMessage {
+            id: "msg-busy-fallback".to_string(),
+            role: crate::message::Role::User,
+            content: vec![crate::message::ContentBlock::Text {
+                text: "persisted fallback history".to_string(),
+                cache_control: None,
+            }],
+            display_role: None,
+            timestamp: None,
+            tool_duration_ms: None,
+            token_usage: None,
+        });
+        session.save().expect("save session");
+
+        let provider: Arc<dyn Provider> = Arc::new(MockProvider);
+        let registry = Registry::empty();
+        let agent = Arc::new(Mutex::new(Agent::new_with_session(
+            provider.clone(),
+            registry,
+            crate::session::Session::create_with_id(
+                session_id.to_string(),
+                None,
+                Some("live agent".to_string()),
+            ),
+            None,
+        )));
+        let busy_guard = agent.lock().await;
+
+        let sessions = Arc::new(RwLock::new(HashMap::from([(
+            session_id.to_string(),
+            Arc::clone(&agent),
+        )])));
+        let client_connections = Arc::new(RwLock::new(HashMap::<String, ClientConnectionInfo>::new()));
+        let client_count = Arc::new(RwLock::new(1usize));
+
+        let (stream_a, mut stream_b) = crate::transport::stream_pair().expect("stream pair");
+        let (_reader_a, writer_a) = stream_a.into_split();
+        let writer = Arc::new(Mutex::new(writer_a));
+
+        handle_get_history(
+            42,
+            session_id,
+            true,
+            &agent,
+            &provider,
+            &sessions,
+            &client_connections,
+            &client_count,
+            &writer,
+            "server-name",
+            "🔥",
+        )
+        .await
+        .expect("history should be written from persisted fallback");
+
+        drop(busy_guard);
+        drop(writer);
+
+        let mut bytes = Vec::new();
+        stream_b
+            .read_to_end(&mut bytes)
+            .await
+            .expect("read history event bytes");
+        let mut cursor = std::io::Cursor::new(bytes);
+        let mut line = String::new();
+        cursor.read_line(&mut line).expect("read first line");
+        let event: crate::protocol::ServerEvent =
+            serde_json::from_str(line.trim()).expect("decode history event");
+
+        match event {
+            crate::protocol::ServerEvent::History {
+                id,
+                session_id: returned_session_id,
+                messages,
+                activity,
+                ..
+            } => {
+                assert_eq!(id, 42);
+                assert_eq!(returned_session_id, session_id);
+                assert_eq!(messages.len(), 1);
+                assert_eq!(messages[0].content, "persisted fallback history");
+                let activity = activity.expect("fallback activity snapshot");
+                assert!(activity.is_processing);
+            }
+            other => panic!("expected history event, got {:?}", other),
+        }
+
+        if let Some(prev_home) = prev_home {
+            crate::env::set_var("JCODE_HOME", prev_home);
+        } else {
+            crate::env::remove_var("JCODE_HOME");
+        }
     }
 }

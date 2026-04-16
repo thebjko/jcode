@@ -1,5 +1,6 @@
 use super::*;
 use crate::tui::session_picker;
+use crate::tui::ui::tools_ui;
 use std::sync::{Mutex, OnceLock};
 
 fn viewport_snapshot_test_lock() -> std::sync::MutexGuard<'static, ()> {
@@ -134,6 +135,21 @@ struct TestState {
 impl crate::tui::TuiState for TestState {
     fn display_messages(&self) -> &[DisplayMessage] {
         &self.display_messages
+    }
+    fn display_user_message_count(&self) -> usize {
+        self.display_messages
+            .iter()
+            .filter(|message| message.role == "user")
+            .count()
+    }
+    fn has_display_edit_tool_messages(&self) -> bool {
+        self.display_messages.iter().any(|message| {
+            message
+                .tool_data
+                .as_ref()
+                .map(|tool| tools_ui::is_edit_tool_name(&tool.name))
+                .unwrap_or(false)
+        })
     }
     fn side_pane_images(&self) -> Vec<crate::session::RenderedImage> {
         Vec::new()

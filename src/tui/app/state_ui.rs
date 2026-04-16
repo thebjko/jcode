@@ -1,5 +1,6 @@
 use super::state_ui_storage::infer_spawned_session_startup_hints;
 use super::*;
+use crate::tui::ui::tools_ui;
 use crate::tui::{TuiState, backend};
 
 pub(super) struct RestoredReloadInput {
@@ -23,6 +24,25 @@ pub(super) struct RestoredReloadInput {
 }
 
 impl App {
+    fn recompute_display_message_stats(&mut self) {
+        self.display_user_message_count = self
+            .display_messages
+            .iter()
+            .filter(|message| message.role == "user")
+            .count();
+        self.display_edit_tool_message_count = self
+            .display_messages
+            .iter()
+            .filter(|message| {
+                message
+                    .tool_data
+                    .as_ref()
+                    .map(|tool| tools_ui::is_edit_tool_name(&tool.name))
+                    .unwrap_or(false)
+            })
+            .count();
+    }
+
     pub(super) fn active_client_session_id(&self) -> Option<&str> {
         if self.is_remote {
             self.remote_session_id.as_deref()
@@ -63,6 +83,7 @@ impl App {
     }
 
     pub(super) fn bump_display_messages_version(&mut self) {
+        self.recompute_display_message_stats();
         self.display_messages_version = self.display_messages_version.wrapping_add(1);
         self.refresh_split_view_if_needed();
     }

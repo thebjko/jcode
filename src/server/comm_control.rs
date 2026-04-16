@@ -7,8 +7,7 @@ use super::await_members_state::{
 use super::{
     AwaitMembersRuntime, ClientConnectionInfo, SwarmEvent, SwarmEventType, SwarmMember,
     VersionedPlan, broadcast_swarm_plan, broadcast_swarm_status, persist_swarm_state_for,
-    queue_soft_interrupt_for_session, record_swarm_event, truncate_detail,
-    update_member_status,
+    queue_soft_interrupt_for_session, record_swarm_event, truncate_detail, update_member_status,
 };
 use crate::agent::Agent;
 use crate::protocol::{AwaitedMemberStatus, NotificationType, ServerEvent};
@@ -520,10 +519,18 @@ pub(super) async fn handle_comm_assign_task(
             )
             .await;
 
-            let result = {
-                let mut agent = agent_arc.lock().await;
-                agent.run_once_capture(&assignment_text).await
-            };
+            let event_tx = crate::server::session_event_fanout_sender(
+                target_session_for_run.clone(),
+                Arc::clone(&swarm_members_for_run),
+            );
+            let result = super::client_lifecycle::process_message_streaming_mpsc(
+                Arc::clone(&agent_arc),
+                &assignment_text,
+                vec![],
+                None,
+                event_tx,
+            )
+            .await;
 
             match result {
                 Ok(_) => {
