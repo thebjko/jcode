@@ -747,13 +747,15 @@ impl AnthropicProvider {
             return vec![
                 ApiTool {
                     name: "Agent".to_string(),
-                    description: "Launch a new agent to handle complex, multi-step tasks.".to_string(),
+                    description: "Launch a new agent to handle complex, multi-step tasks."
+                        .to_string(),
                     input_schema: json!({"type":"object","properties":{"description":{"type":"string"},"prompt":{"type":"string"},"subagent_type":{"type":"string"},"run_in_background":{"type":"boolean"}},"required":["description","prompt"],"additionalProperties":false}),
                     cache_control: None,
                 },
                 ApiTool {
                     name: "Bash".to_string(),
-                    description: "Executes a given bash command and returns its output.".to_string(),
+                    description: "Executes a given bash command and returns its output."
+                        .to_string(),
                     input_schema: json!({"type":"object","properties":{"command":{"type":"string"},"timeout":{"type":"integer"},"run_in_background":{"type":"boolean"}},"required":["command"],"additionalProperties":false}),
                     cache_control: None,
                 },
@@ -795,7 +797,9 @@ impl AnthropicProvider {
                 },
                 ApiTool {
                     name: "ToolSearch".to_string(),
-                    description: "Fetches full schema definitions for deferred tools so they can be called.".to_string(),
+                    description:
+                        "Fetches full schema definitions for deferred tools so they can be called."
+                            .to_string(),
                     input_schema: json!({"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"number","default":5}},"required":["query","max_results"],"additionalProperties":false}),
                     cache_control: None,
                 },

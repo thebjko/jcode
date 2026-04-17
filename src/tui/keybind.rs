@@ -256,9 +256,7 @@ fn parse_keybinding(raw: &str) -> Option<KeyBinding> {
             None => {
                 if key.len() == 1 {
                     let mut chars = key.chars();
-                    let Some(ch) = chars.next() else {
-                        return None;
-                    };
+                    let ch = chars.next()?;
                     KeyCode::Char(ch)
                 } else {
                     return None;

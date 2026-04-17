@@ -1354,7 +1354,6 @@ pub fn debug_stats_json() -> Option<serde_json::Value> {
 }
 
 /// Render markdown with optional width constraint for tables
-
 pub(crate) fn wrap_line(line: Line<'static>, width: usize) -> Vec<Line<'static>> {
     wrap::wrap_line(line, width, repeated_gutter_prefix)
 }

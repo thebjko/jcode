@@ -706,6 +706,7 @@ fn populate_anthropic_models_for_scope(scope: &str, slugs: Vec<String>) {
     crate::bus::Bus::global().publish(crate::bus::BusEvent::ModelsUpdated);
 }
 
+#[cfg(test)]
 pub(crate) fn merge_openai_model_ids(dynamic_models: Vec<String>) -> Vec<String> {
     let mut models = openai_static_model_ids();
     let mut seen: HashSet<String> = models
@@ -733,6 +734,7 @@ pub(crate) fn merge_openai_model_ids(dynamic_models: Vec<String>) -> Vec<String>
     models
 }
 
+#[cfg(test)]
 pub(crate) fn merge_anthropic_model_ids(dynamic_models: Vec<String>) -> Vec<String> {
     let mut models = anthropic_static_model_ids();
     let mut seen: HashSet<String> = models
