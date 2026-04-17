@@ -88,13 +88,18 @@ async fn resolve_transcript_target_session(
     requested_session: Option<String>,
     client_connections: &Arc<RwLock<HashMap<String, ClientConnectionInfo>>>,
     client_debug_state: &Arc<RwLock<ClientDebugState>>,
+    swarm_members: &Arc<RwLock<HashMap<String, SwarmMember>>>,
 ) -> Result<String> {
+    let live_sessions: std::collections::HashSet<String> = swarm_members
+        .read()
+        .await
+        .iter()
+        .filter(|(_, member)| !member.is_headless && !member.event_txs.is_empty())
+        .map(|(session_id, _)| session_id.clone())
+        .collect();
+
     if let Some(session_id) = requested_session.filter(|value| !value.trim().is_empty()) {
-        let has_connected_tui =
-            client_connections.read().await.values().any(|info| {
-                info.session_id == session_id && info.debug_client_id.as_deref().is_some()
-            });
-        if !has_connected_tui {
+        if !live_sessions.contains(&session_id) {
             anyhow::bail!(
                 "Session '{}' does not have a connected TUI client for transcript injection",
                 session_id
@@ -103,32 +108,24 @@ async fn resolve_transcript_target_session(
         return Ok(session_id);
     }
 
-    let has_connected_tui =
-        |session_id: &str, connections: &HashMap<String, ClientConnectionInfo>| {
-            connections.values().any(|info| {
-                info.session_id == session_id && info.debug_client_id.as_deref().is_some()
-            })
-        };
-
-    let connections = client_connections.read().await;
-
     if let Ok(Some(session_id)) = crate::dictation::last_focused_session()
-        && has_connected_tui(&session_id, &connections)
+        && live_sessions.contains(&session_id)
     {
         return Ok(session_id);
     }
 
     if let Ok(Some(session_id)) = crate::dictation::focused_jcode_session()
-        && has_connected_tui(&session_id, &connections)
+        && live_sessions.contains(&session_id)
     {
         return Ok(session_id);
     }
 
     let active_debug_id = client_debug_state.read().await.active_id.clone();
+    let connections = client_connections.read().await;
 
     connections
         .values()
-        .filter(|info| info.debug_client_id.is_some())
+        .filter(|info| live_sessions.contains(&info.session_id))
         .max_by(|left, right| {
             left.last_seen
                 .cmp(&right.last_seen)
@@ -148,7 +145,7 @@ async fn resolve_transcript_target_session(
         })
 }
 
-async fn inject_transcript(
+pub(super) async fn inject_transcript(
     id: u64,
     text: String,
     mode: TranscriptMode,
@@ -161,13 +158,10 @@ async fn inject_transcript(
         requested_session,
         client_connections,
         client_debug_state,
+        swarm_members,
     )
     .await?;
 
-    let has_member = { swarm_members.read().await.contains_key(&session_id) };
-    if !has_member {
-        anyhow::bail!("Session '{}' is not live", session_id);
-    }
     let delivered = fanout_session_event(
         swarm_members,
         &session_id,
@@ -596,29 +590,74 @@ mod tests {
             ("server", "state")
         );
     }
+}
+
+#[cfg(test)]
+mod transcript_routing_tests {
+    use super::{ClientConnectionInfo, ClientDebugState, resolve_transcript_target_session};
+    use crate::protocol::ServerEvent;
+    use crate::server::SwarmMember;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use std::time::Instant;
+    use tokio::sync::{RwLock, mpsc};
+
+    fn live_member(session_id: &str, connection_id: &str) -> SwarmMember {
+        let (event_tx, _event_rx) = mpsc::unbounded_channel::<ServerEvent>();
+        let now = Instant::now();
+        SwarmMember {
+            session_id: session_id.to_string(),
+            event_tx: event_tx.clone(),
+            event_txs: HashMap::from([(connection_id.to_string(), event_tx)]),
+            working_dir: None,
+            swarm_id: None,
+            swarm_enabled: false,
+            status: "ready".to_string(),
+            detail: None,
+            friendly_name: None,
+            report_back_to_session_id: None,
+            role: "agent".to_string(),
+            joined_at: now,
+            last_status_change: now,
+            is_headless: false,
+        }
+    }
+
+    fn connection(
+        session_id: &str,
+        debug_client_id: &str,
+        last_seen: Instant,
+    ) -> ClientConnectionInfo {
+        ClientConnectionInfo {
+            client_id: format!("conn-{session_id}"),
+            session_id: session_id.to_string(),
+            client_instance_id: None,
+            debug_client_id: Some(debug_client_id.to_string()),
+            connected_at: last_seen,
+            last_seen,
+            is_processing: false,
+            current_tool_name: None,
+            disconnect_tx: mpsc::unbounded_channel().0,
+        }
+    }
 
     #[tokio::test]
     async fn resolve_transcript_target_session_uses_requested_connected_session() {
         let client_connections = Arc::new(RwLock::new(HashMap::from([(
             "conn-1".to_string(),
-            ClientConnectionInfo {
-                client_id: "conn-1".to_string(),
-                session_id: "session_abc".to_string(),
-                client_instance_id: None,
-                debug_client_id: Some("debug-1".to_string()),
-                connected_at: Instant::now(),
-                last_seen: Instant::now(),
-                is_processing: false,
-                current_tool_name: None,
-                disconnect_tx: mpsc::unbounded_channel().0,
-            },
+            connection("session_abc", "debug-1", Instant::now()),
         )])));
         let client_debug_state = Arc::new(RwLock::new(ClientDebugState::default()));
+        let swarm_members = Arc::new(RwLock::new(HashMap::from([(
+            "session_abc".to_string(),
+            live_member("session_abc", "conn-1"),
+        )])));
 
         let resolved = resolve_transcript_target_session(
             Some("session_abc".to_string()),
             &client_connections,
             &client_debug_state,
+            &swarm_members,
         )
         .await
         .expect("resolve connected requested session");
@@ -638,24 +677,22 @@ mod tests {
 
         let client_connections = Arc::new(RwLock::new(HashMap::from([(
             "conn-1".to_string(),
-            ClientConnectionInfo {
-                client_id: "conn-1".to_string(),
-                session_id: "session_focus".to_string(),
-                client_instance_id: None,
-                debug_client_id: Some("debug-1".to_string()),
-                connected_at: Instant::now(),
-                last_seen: Instant::now(),
-                is_processing: false,
-                current_tool_name: None,
-                disconnect_tx: mpsc::unbounded_channel().0,
-            },
+            connection("session_focus", "debug-1", Instant::now()),
         )])));
         let client_debug_state = Arc::new(RwLock::new(ClientDebugState::default()));
+        let swarm_members = Arc::new(RwLock::new(HashMap::from([(
+            "session_focus".to_string(),
+            live_member("session_focus", "conn-1"),
+        )])));
 
-        let resolved =
-            resolve_transcript_target_session(None, &client_connections, &client_debug_state)
-                .await
-                .expect("resolve last-focused session");
+        let resolved = resolve_transcript_target_session(
+            None,
+            &client_connections,
+            &client_debug_state,
+            &swarm_members,
+        )
+        .await
+        .expect("resolve last-focused session");
 
         assert_eq!(resolved, "session_focus");
     }
@@ -664,24 +701,16 @@ mod tests {
     async fn resolve_transcript_target_session_rejects_requested_session_without_connected_tui() {
         let client_connections = Arc::new(RwLock::new(HashMap::from([(
             "conn-1".to_string(),
-            ClientConnectionInfo {
-                client_id: "conn-1".to_string(),
-                session_id: "session_abc".to_string(),
-                client_instance_id: None,
-                debug_client_id: None,
-                connected_at: Instant::now(),
-                last_seen: Instant::now(),
-                is_processing: false,
-                current_tool_name: None,
-                disconnect_tx: mpsc::unbounded_channel().0,
-            },
+            connection("session_abc", "debug-1", Instant::now()),
         )])));
         let client_debug_state = Arc::new(RwLock::new(ClientDebugState::default()));
+        let swarm_members = Arc::new(RwLock::new(HashMap::new()));
 
         let err = resolve_transcript_target_session(
             Some("session_abc".to_string()),
             &client_connections,
             &client_debug_state,
+            &swarm_members,
         )
         .await
         .expect_err("requested session without connected tui should error");
@@ -704,48 +733,77 @@ mod tests {
             .expect("remember last focused session");
 
         let now = Instant::now();
-
         let client_connections = Arc::new(RwLock::new(HashMap::from([
             (
                 "conn-1".to_string(),
-                ClientConnectionInfo {
-                    client_id: "conn-1".to_string(),
-                    session_id: "session_stale_debug".to_string(),
-                    client_instance_id: None,
-                    debug_client_id: Some("debug-1".to_string()),
-                    connected_at: now,
-                    last_seen: now - std::time::Duration::from_secs(60),
-                    is_processing: false,
-                    current_tool_name: None,
-                    disconnect_tx: mpsc::unbounded_channel().0,
-                },
+                connection(
+                    "session_stale_debug",
+                    "debug-1",
+                    now - std::time::Duration::from_secs(60),
+                ),
             ),
             (
                 "conn-2".to_string(),
-                ClientConnectionInfo {
-                    client_id: "conn-2".to_string(),
-                    session_id: "session_recent".to_string(),
-                    client_instance_id: None,
-                    debug_client_id: Some("debug-2".to_string()),
-                    connected_at: now,
-                    last_seen: now,
-                    is_processing: false,
-                    current_tool_name: None,
-                    disconnect_tx: mpsc::unbounded_channel().0,
-                },
+                connection("session_recent", "debug-2", now),
             ),
         ])));
         let client_debug_state = Arc::new(RwLock::new(ClientDebugState {
             active_id: Some("debug-1".to_string()),
             clients: HashMap::new(),
         }));
+        let swarm_members = Arc::new(RwLock::new(HashMap::from([(
+            "session_recent".to_string(),
+            live_member("session_recent", "conn-2"),
+        )])));
 
-        let resolved =
-            resolve_transcript_target_session(None, &client_connections, &client_debug_state)
-                .await
-                .expect("resolve recent live tui fallback");
+        let resolved = resolve_transcript_target_session(
+            None,
+            &client_connections,
+            &client_debug_state,
+            &swarm_members,
+        )
+        .await
+        .expect("resolve fallback live session");
 
         assert_eq!(resolved, "session_recent");
+    }
+
+    #[tokio::test]
+    async fn resolve_transcript_target_session_ignores_non_live_requesting_clients() {
+        let now = Instant::now();
+        let client_connections = Arc::new(RwLock::new(HashMap::from([
+            (
+                "conn-cli".to_string(),
+                connection("session_cli", "debug-cli", now),
+            ),
+            (
+                "conn-tui".to_string(),
+                connection(
+                    "session_tui",
+                    "debug-tui",
+                    now - std::time::Duration::from_secs(30),
+                ),
+            ),
+        ])));
+        let client_debug_state = Arc::new(RwLock::new(ClientDebugState {
+            active_id: Some("debug-cli".to_string()),
+            clients: HashMap::new(),
+        }));
+        let swarm_members = Arc::new(RwLock::new(HashMap::from([(
+            "session_tui".to_string(),
+            live_member("session_tui", "conn-tui"),
+        )])));
+
+        let resolved = resolve_transcript_target_session(
+            None,
+            &client_connections,
+            &client_debug_state,
+            &swarm_members,
+        )
+        .await
+        .expect("resolve live tui session");
+
+        assert_eq!(resolved, "session_tui");
     }
 }
 

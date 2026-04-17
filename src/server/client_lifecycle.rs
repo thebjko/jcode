@@ -1068,24 +1068,27 @@ pub(super) async fn handle_client(
                 mode,
                 session_id,
             } => {
-                let target_matches = session_id
-                    .as_deref()
-                    .map(|target| target == client_session_id.as_str())
-                    .unwrap_or(true);
-
-                if target_matches {
-                    let _ = client_event_tx.send(ServerEvent::Transcript { text, mode });
-                    let _ = client_event_tx.send(ServerEvent::Done { id });
-                } else {
-                    let _ = client_event_tx.send(ServerEvent::Error {
-                        id,
-                        message: format!(
-                            "Transcript target '{}' does not match current client session '{}'.",
-                            session_id.unwrap_or_default(),
-                            client_session_id
-                        ),
-                        retry_after_secs: None,
-                    });
+                match super::debug::inject_transcript(
+                    id,
+                    text,
+                    mode,
+                    session_id,
+                    &client_connections,
+                    &client_debug_state,
+                    &swarm_members,
+                )
+                .await
+                {
+                    Ok(event) => {
+                        let _ = client_event_tx.send(event);
+                    }
+                    Err(error) => {
+                        let _ = client_event_tx.send(ServerEvent::Error {
+                            id,
+                            message: error.to_string(),
+                            retry_after_secs: None,
+                        });
+                    }
                 }
             }
 
