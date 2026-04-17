@@ -406,7 +406,7 @@ fn test_comm_assign_task_roundtrip_without_explicit_task_id() -> Result<()> {
     let req = Request::CommAssignTask {
         id: 57,
         session_id: "sess_coord".to_string(),
-        target_session: "sess_worker".to_string(),
+        target_session: None,
         task_id: None,
         message: Some("Take the next highest-priority runnable task.".to_string()),
     };
@@ -426,7 +426,7 @@ fn test_comm_assign_task_roundtrip_without_explicit_task_id() -> Result<()> {
         return Err(anyhow!("expected CommAssignTask"));
     };
     assert_eq!(session_id, "sess_coord");
-    assert_eq!(target_session, "sess_worker");
+    assert_eq!(target_session, None);
     assert_eq!(task_id, None);
     assert_eq!(
         message.as_deref(),

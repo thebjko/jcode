@@ -178,6 +178,57 @@ async fn task_agent_session(
     guard.get(session_id).cloned()
 }
 
+async fn resolve_assignment_target_session(
+    req_session_id: &str,
+    swarm_id: &str,
+    requested_target: Option<&str>,
+    swarm_members: &Arc<RwLock<HashMap<String, SwarmMember>>>,
+) -> Result<String, String> {
+    let members = swarm_members.read().await;
+
+    if let Some(target) = requested_target {
+        if target == req_session_id {
+            return Err("Coordinator cannot assign a swarm task to itself.".to_string());
+        }
+        let Some(member) = members.get(target) else {
+            return Err(format!("Unknown session '{target}'"));
+        };
+        if member.swarm_id.as_deref() != Some(swarm_id) {
+            return Err(format!(
+                "Session '{}' is not in swarm '{}' and cannot receive this task.",
+                target, swarm_id
+            ));
+        }
+        return Ok(target.to_string());
+    }
+
+    let mut candidates: Vec<&SwarmMember> = members
+        .values()
+        .filter(|member| {
+            member.session_id != req_session_id
+                && member.swarm_id.as_deref() == Some(swarm_id)
+                && member.role == "agent"
+                && matches!(member.status.as_str(), "ready" | "completed")
+        })
+        .collect();
+
+    candidates.sort_by(|left, right| {
+        let left_rank = if left.status == "ready" { 0 } else { 1 };
+        let right_rank = if right.status == "ready" { 0 } else { 1 };
+        left_rank
+            .cmp(&right_rank)
+            .then_with(|| left.session_id.cmp(&right.session_id))
+    });
+
+    candidates
+        .first()
+        .map(|member| member.session_id.clone())
+        .ok_or_else(|| {
+            "No ready or completed swarm agents are available for automatic task assignment."
+                .to_string()
+        })
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "task execution restart needs session state, plan state, and event sinks together"
@@ -958,7 +1009,7 @@ pub(super) async fn handle_comm_assign_role(
 pub(super) async fn handle_comm_assign_task(
     id: u64,
     req_session_id: String,
-    target_session: String,
+    target_session: Option<String>,
     task_id: Option<String>,
     message: Option<String>,
     client_event_tx: &mpsc::UnboundedSender<ServerEvent>,
@@ -974,6 +1025,10 @@ pub(super) async fn handle_comm_assign_task(
     swarm_event_tx: &broadcast::Sender<SwarmEvent>,
     swarm_mutation_runtime: &SwarmMutationRuntime,
 ) {
+    let requested_target_session = target_session.and_then(|target| {
+        let trimmed = target.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    });
     let requested_task_id = task_id.and_then(|task_id| {
         let trimmed = task_id.trim();
         (!trimmed.is_empty()).then(|| trimmed.to_string())
@@ -998,7 +1053,9 @@ pub(super) async fn handle_comm_assign_task(
         "assign_task",
         &[
             swarm_id.clone(),
-            target_session.clone(),
+            requested_target_session
+                .clone()
+                .unwrap_or_else(|| "__next_available__".to_string()),
             requested_task_id
                 .clone()
                 .unwrap_or_else(|| "__next_runnable__".to_string()),
@@ -1016,6 +1073,29 @@ pub(super) async fn handle_comm_assign_task(
     .await
     else {
         return;
+    };
+
+    let target_session = match resolve_assignment_target_session(
+        &req_session_id,
+        &swarm_id,
+        requested_target_session.as_deref(),
+        swarm_members,
+    )
+    .await
+    {
+        Ok(target_session) => target_session,
+        Err(message) => {
+            finish_swarm_mutation_request(
+                swarm_mutation_runtime,
+                &mutation_state,
+                PersistedSwarmMutationResponse::Error {
+                    message,
+                    retry_after_secs: None,
+                },
+            )
+            .await;
+            return;
+        }
     };
 
     let (selected_task_id, task_content, participant_ids, plan_item_count, blocked_reason) =
@@ -1496,7 +1576,7 @@ pub(super) async fn handle_comm_task_control(
             handle_comm_assign_task(
                 id,
                 req_session_id,
-                assignee,
+                Some(assignee),
                 Some(task_id),
                 Some(retry_note),
                 client_event_tx,
@@ -1609,7 +1689,7 @@ pub(super) async fn handle_comm_task_control(
             handle_comm_assign_task(
                 id,
                 req_session_id,
-                new_target,
+                Some(new_target),
                 Some(task_id),
                 forwarded_message,
                 client_event_tx,
@@ -1892,7 +1972,7 @@ mod tests {
         handle_comm_assign_task(
             77,
             requester.to_string(),
-            worker.to_string(),
+            Some(worker.to_string()),
             None,
             Some("Pick the next task".to_string()),
             &client_tx,
@@ -1991,7 +2071,7 @@ mod tests {
         handle_comm_assign_task(
             88,
             requester.to_string(),
-            worker.to_string(),
+            Some(worker.to_string()),
             Some("blocked".to_string()),
             None,
             &client_tx,
@@ -2026,6 +2106,104 @@ mod tests {
             blocked.assigned_to.is_none(),
             "blocked task should stay unassigned"
         );
+    }
+
+    #[tokio::test]
+    async fn assign_task_without_target_picks_ready_agent() {
+        let (_env, _runtime) = RuntimeEnvGuard::new();
+        let swarm_id = "swarm-auto-target";
+        let requester = "coord";
+        let ready_worker = "worker-ready";
+        let completed_worker = "worker-completed";
+        let running_worker = "worker-running";
+        let (client_tx, mut client_rx) = mpsc::unbounded_channel();
+        let sessions = Arc::new(RwLock::new(HashMap::new()));
+        let soft_interrupt_queues = Arc::new(RwLock::new(HashMap::new()));
+        let client_connections = Arc::new(RwLock::new(HashMap::new()));
+        let swarm_members = Arc::new(RwLock::new(HashMap::from([
+            (
+                requester.to_string(),
+                {
+                    let mut member = member(requester, swarm_id, "ready");
+                    member.role = "coordinator".to_string();
+                    member
+                },
+            ),
+            (ready_worker.to_string(), member(ready_worker, swarm_id, "ready")),
+            (
+                completed_worker.to_string(),
+                member(completed_worker, swarm_id, "completed"),
+            ),
+            (
+                running_worker.to_string(),
+                member(running_worker, swarm_id, "running"),
+            ),
+        ])));
+        let swarms_by_id = Arc::new(RwLock::new(HashMap::from([(
+            swarm_id.to_string(),
+            HashSet::from([
+                requester.to_string(),
+                ready_worker.to_string(),
+                completed_worker.to_string(),
+                running_worker.to_string(),
+            ]),
+        )])));
+        let swarm_plans = Arc::new(RwLock::new(HashMap::from([(
+            swarm_id.to_string(),
+            VersionedPlan {
+                items: vec![plan_item("setup", "completed", "high", &[]), plan_item("next", "queued", "high", &["setup"])],
+                version: 1,
+                participants: HashSet::from([
+                    requester.to_string(),
+                    ready_worker.to_string(),
+                    completed_worker.to_string(),
+                    running_worker.to_string(),
+                ]),
+                task_progress: HashMap::new(),
+            },
+        )])));
+        let swarm_coordinators = Arc::new(RwLock::new(HashMap::from([(
+            swarm_id.to_string(),
+            requester.to_string(),
+        )])));
+        let event_history = Arc::new(RwLock::new(VecDeque::new()));
+        let event_counter = Arc::new(AtomicU64::new(1));
+        let (swarm_event_tx, _swarm_event_rx) = broadcast::channel(32);
+        let mutation_runtime = SwarmMutationRuntime::default();
+
+        handle_comm_assign_task(
+            99,
+            requester.to_string(),
+            None,
+            None,
+            Some("Pick a task and worker".to_string()),
+            &client_tx,
+            &sessions,
+            &soft_interrupt_queues,
+            &client_connections,
+            &swarm_members,
+            &swarms_by_id,
+            &swarm_plans,
+            &swarm_coordinators,
+            &event_history,
+            &event_counter,
+            &swarm_event_tx,
+            &mutation_runtime,
+        )
+        .await;
+
+        match client_rx.recv().await.expect("response") {
+            ServerEvent::CommAssignTaskResponse {
+                id,
+                task_id,
+                target_session,
+            } => {
+                assert_eq!(id, 99);
+                assert_eq!(task_id, "next");
+                assert_eq!(target_session, ready_worker);
+            }
+            other => panic!("expected CommAssignTaskResponse, got {other:?}"),
+        }
     }
 
     #[tokio::test]

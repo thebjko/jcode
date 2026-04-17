@@ -1067,14 +1067,15 @@ impl Tool for CommunicateTool {
             }
 
             "assign_task" => {
-                let target = params.target_session.ok_or_else(|| {
-                    anyhow::anyhow!("'target_session' is required for assign_task action")
-                })?;
+                let target = params
+                    .target_session
+                    .clone()
+                    .unwrap_or_else(|| "next available agent".to_string());
 
                 let request = Request::CommAssignTask {
                     id: REQUEST_ID,
                     session_id: ctx.session_id.clone(),
-                    target_session: target.clone(),
+                    target_session: params.target_session.clone(),
                     task_id: params.task_id.clone(),
                     message: params.message.clone(),
                 };

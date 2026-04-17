@@ -464,7 +464,8 @@ pub enum Request {
     CommAssignTask {
         id: u64,
         session_id: String,
-        target_session: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target_session: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         task_id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
