@@ -1,8 +1,9 @@
 #![cfg_attr(test, allow(clippy::await_holding_lock))]
 
+use super::socket::sibling_socket_path;
+#[cfg(unix)]
 use super::socket::{
-    daemon_lock_path, server_start_matches_existing_server, sibling_socket_path,
-    try_acquire_daemon_lock,
+    daemon_lock_path, server_start_matches_existing_server, try_acquire_daemon_lock,
 };
 use super::{
     ReloadPhase, ReloadState, ReloadWaitStatus, await_reload_handoff, cleanup_socket_pair,
