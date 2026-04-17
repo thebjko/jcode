@@ -364,6 +364,63 @@ fn test_comm_await_members_response_roundtrip() -> Result<()> {
 }
 
 #[test]
+fn test_comm_task_control_roundtrip() -> Result<()> {
+    let req = Request::CommTaskControl {
+        id: 58,
+        session_id: "sess_coord".to_string(),
+        action: "salvage".to_string(),
+        task_id: "task_42".to_string(),
+        target_session: Some("sess_replacement".to_string()),
+        message: Some("Recover partial progress first.".to_string()),
+    };
+    let json = serde_json::to_string(&req)?;
+    assert!(json.contains("\"type\":\"comm_task_control\""));
+    let decoded = parse_request_json(&json)?;
+    assert_eq!(decoded.id(), 58);
+    let Request::CommTaskControl {
+        session_id,
+        action,
+        task_id,
+        target_session,
+        message,
+        ..
+    } = decoded
+    else {
+        return Err(anyhow!("expected CommTaskControl"));
+    };
+    assert_eq!(session_id, "sess_coord");
+    assert_eq!(action, "salvage");
+    assert_eq!(task_id, "task_42");
+    assert_eq!(target_session.as_deref(), Some("sess_replacement"));
+    assert_eq!(message.as_deref(), Some("Recover partial progress first."));
+    Ok(())
+}
+
+#[test]
+fn test_comm_status_roundtrip() -> Result<()> {
+    let req = Request::CommStatus {
+        id: 56,
+        session_id: "sess_watcher".to_string(),
+        target_session: "sess_peer".to_string(),
+    };
+    let json = serde_json::to_string(&req)?;
+    assert!(json.contains("\"type\":\"comm_status\""));
+    let decoded = parse_request_json(&json)?;
+    assert_eq!(decoded.id(), 56);
+    let Request::CommStatus {
+        session_id,
+        target_session,
+        ..
+    } = decoded
+    else {
+        return Err(anyhow!("expected CommStatus"));
+    };
+    assert_eq!(session_id, "sess_watcher");
+    assert_eq!(target_session, "sess_peer");
+    Ok(())
+}
+
+#[test]
 fn test_comm_members_roundtrip_includes_status() -> Result<()> {
     let event = ServerEvent::CommMembers {
         id: 9,
@@ -374,6 +431,9 @@ fn test_comm_members_roundtrip_includes_status() -> Result<()> {
             status: Some("running".to_string()),
             detail: Some("working on tests".to_string()),
             role: Some("agent".to_string()),
+            is_headless: Some(true),
+            live_attachments: Some(0),
+            status_age_secs: Some(12),
         }],
     };
 
@@ -390,6 +450,52 @@ fn test_comm_members_roundtrip_includes_status() -> Result<()> {
     assert_eq!(members[0].friendly_name.as_deref(), Some("bear"));
     assert_eq!(members[0].status.as_deref(), Some("running"));
     assert_eq!(members[0].detail.as_deref(), Some("working on tests"));
+    assert_eq!(members[0].is_headless, Some(true));
+    assert_eq!(members[0].live_attachments, Some(0));
+    assert_eq!(members[0].status_age_secs, Some(12));
+    Ok(())
+}
+
+#[test]
+fn test_comm_status_response_roundtrip() -> Result<()> {
+    let event = ServerEvent::CommStatusResponse {
+        id: 57,
+        snapshot: AgentStatusSnapshot {
+            session_id: "sess-peer".to_string(),
+            friendly_name: Some("bear".to_string()),
+            swarm_id: Some("swarm-test".to_string()),
+            status: Some("running".to_string()),
+            detail: Some("working on tests".to_string()),
+            role: Some("agent".to_string()),
+            is_headless: Some(true),
+            live_attachments: Some(0),
+            status_age_secs: Some(5),
+            joined_age_secs: Some(30),
+            files_touched: vec!["src/main.rs".to_string()],
+            activity: Some(SessionActivitySnapshot {
+                is_processing: true,
+                current_tool_name: Some("bash".to_string()),
+            }),
+            provider_name: None,
+            provider_model: None,
+        },
+    };
+
+    let json = encode_event(&event);
+    assert!(json.contains("\"type\":\"comm_status_response\""));
+    let decoded = parse_event_json(json.trim())?;
+    let ServerEvent::CommStatusResponse { id, snapshot } = decoded else {
+        return Err(anyhow!("expected CommStatusResponse"));
+    };
+    assert_eq!(id, 57);
+    assert_eq!(snapshot.session_id, "sess-peer");
+    assert_eq!(snapshot.friendly_name.as_deref(), Some("bear"));
+    assert_eq!(
+        snapshot
+            .activity
+            .and_then(|activity| activity.current_tool_name),
+        Some("bash".to_string())
+    );
     Ok(())
 }
 

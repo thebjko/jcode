@@ -630,6 +630,9 @@ fn swarm_widget_renders_member_roles_and_details() {
                     status: "running".to_string(),
                     detail: Some("orchestrating patch".to_string()),
                     role: Some("coordinator".to_string()),
+                    is_headless: None,
+                    live_attachments: None,
+                    status_age_secs: None,
                 },
                 SwarmMemberStatus {
                     session_id: "tree-12345678".to_string(),
@@ -637,6 +640,9 @@ fn swarm_widget_renders_member_roles_and_details() {
                     status: "ready".to_string(),
                     detail: Some("worktree synced".to_string()),
                     role: Some("worktree_manager".to_string()),
+                    is_headless: None,
+                    live_attachments: None,
+                    status_age_secs: None,
                 },
             ],
             ..Default::default()

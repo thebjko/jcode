@@ -3,8 +3,8 @@
 use super::{Tool, ToolContext, ToolOutput};
 use crate::plan::PlanItem;
 use crate::protocol::{
-    AgentInfo, AwaitedMemberStatus, CommDeliveryMode, ContextEntry, HistoryMessage, Request,
-    ServerEvent, SwarmChannelInfo, ToolCallSummary,
+    AgentInfo, AgentStatusSnapshot, AwaitedMemberStatus, CommDeliveryMode, ContextEntry,
+    HistoryMessage, Request, ServerEvent, SwarmChannelInfo, ToolCallSummary,
 };
 use anyhow::Result;
 use async_trait::async_trait;
@@ -185,8 +185,23 @@ fn format_members(ctx: &ToolContext, members: &[AgentInfo]) -> ToolOutput {
             } else {
                 String::new()
             };
+            let mut extra_meta = Vec::new();
+            if member.is_headless == Some(true) {
+                extra_meta.push("headless".to_string());
+            }
+            if let Some(attachments) = member.live_attachments {
+                extra_meta.push(format!("attachments={attachments}"));
+            }
+            if let Some(age_secs) = member.status_age_secs {
+                extra_meta.push(format!("status_age={}s", age_secs));
+            }
+            let meta_suffix = if extra_meta.is_empty() {
+                String::new()
+            } else {
+                format!("\n    Meta: {}", extra_meta.join(" · "))
+            };
             output.push_str(&format!(
-                "  {}{} ({})\n    Status: {}{}{}\n",
+                "  {}{} ({})\n    Status: {}{}{}{}\n",
                 name,
                 role_label,
                 if is_me { "you" } else { session },
@@ -200,7 +215,8 @@ fn format_members(ctx: &ToolContext, members: &[AgentInfo]) -> ToolOutput {
                     String::new()
                 } else {
                     format!("\n    Files: {}", files)
-                }
+                },
+                meta_suffix
             ));
         }
         ToolOutput::new(output)
@@ -223,6 +239,72 @@ fn format_tool_summary(target: &str, calls: &[ToolCallSummary]) -> ToolOutput {
         }
         ToolOutput::new(output)
     }
+}
+
+fn format_status_snapshot(snapshot: &AgentStatusSnapshot) -> ToolOutput {
+    let target = snapshot
+        .friendly_name
+        .as_deref()
+        .unwrap_or(&snapshot.session_id);
+    let status = snapshot.status.as_deref().unwrap_or("unknown");
+    let mut output = format!(
+        "Status snapshot for {} ({})\n\n",
+        target, snapshot.session_id
+    );
+    output.push_str(&format!("  Lifecycle: {}", status));
+    if let Some(detail) = snapshot.detail.as_deref() {
+        output.push_str(&format!(" — {}", detail));
+    }
+    output.push('\n');
+
+    let activity = snapshot
+        .activity
+        .as_ref()
+        .map(|activity| match activity.current_tool_name.as_deref() {
+            Some(tool_name) => format!("busy ({tool_name})"),
+            None if activity.is_processing => "busy".to_string(),
+            _ => "idle".to_string(),
+        })
+        .unwrap_or_else(|| "idle".to_string());
+    output.push_str(&format!("  Activity: {}\n", activity));
+
+    if let Some(role) = snapshot.role.as_deref() {
+        output.push_str(&format!("  Role: {}\n", role));
+    }
+    if let Some(swarm_id) = snapshot.swarm_id.as_deref() {
+        output.push_str(&format!("  Swarm: {}\n", swarm_id));
+    }
+
+    let mut meta = Vec::new();
+    if snapshot.is_headless == Some(true) {
+        meta.push("headless".to_string());
+    }
+    if let Some(attachments) = snapshot.live_attachments {
+        meta.push(format!("attachments={attachments}"));
+    }
+    if let Some(age_secs) = snapshot.status_age_secs {
+        meta.push(format!("status_age={}s", age_secs));
+    }
+    if let Some(age_secs) = snapshot.joined_age_secs {
+        meta.push(format!("joined={}s", age_secs));
+    }
+    if !meta.is_empty() {
+        output.push_str(&format!("  Meta: {}\n", meta.join(" · ")));
+    }
+
+    if snapshot.provider_name.is_some() || snapshot.provider_model.is_some() {
+        let provider = snapshot.provider_name.as_deref().unwrap_or("unknown");
+        let model = snapshot.provider_model.as_deref().unwrap_or("unknown");
+        output.push_str(&format!("  Provider: {} / {}\n", provider, model));
+    }
+
+    if snapshot.files_touched.is_empty() {
+        output.push_str("  Files: (none)\n");
+    } else {
+        output.push_str(&format!("  Files: {}\n", snapshot.files_touched.join(", ")));
+    }
+
+    ToolOutput::new(output)
 }
 
 fn format_context_history(target: &str, messages: &[HistoryMessage]) -> ToolOutput {
@@ -379,7 +461,8 @@ impl Tool for CommunicateTool {
                     "type": "string",
                     "enum": ["share", "share_append", "read", "message", "broadcast", "dm", "channel", "list", "list_channels", "channel_members",
                              "propose_plan", "approve_plan", "reject_plan", "spawn", "stop", "assign_role",
-                             "summary", "read_context", "resync_plan", "assign_task",
+                             "status", "summary", "read_context", "resync_plan", "assign_task",
+                             "start", "wake", "resume", "retry", "reassign", "replace", "salvage",
                              "subscribe_channel", "unsubscribe_channel", "await_members"],
                     "description": "Action. For spawn, prefer including prompt with the initial task so the new agent starts useful work immediately."
                 },
@@ -822,6 +905,29 @@ impl Tool for CommunicateTool {
                 }
             }
 
+            "status" => {
+                let target = params.target_session.ok_or_else(|| {
+                    anyhow::anyhow!("'target_session' is required for status action")
+                })?;
+
+                let request = Request::CommStatus {
+                    id: REQUEST_ID,
+                    session_id: ctx.session_id.clone(),
+                    target_session: target.clone(),
+                };
+
+                match send_request(request).await {
+                    Ok(ServerEvent::CommStatusResponse { snapshot, .. }) => {
+                        Ok(format_status_snapshot(&snapshot))
+                    }
+                    Ok(response) => {
+                        ensure_success(&response)?;
+                        Ok(ToolOutput::new("No status snapshot returned."))
+                    }
+                    Err(e) => Err(anyhow::anyhow!("Failed to get status snapshot: {}", e)),
+                }
+            }
+
             "summary" => {
                 let target = params.target_session.ok_or_else(|| {
                     anyhow::anyhow!("'target_session' is required for summary action")
@@ -912,6 +1018,45 @@ impl Tool for CommunicateTool {
                 }
             }
 
+            "start" | "wake" | "resume" | "retry" | "reassign" | "replace" | "salvage" => {
+                let task_id = params.task_id.ok_or_else(|| {
+                    anyhow::anyhow!("'task_id' is required for {} action", params.action)
+                })?;
+                if matches!(params.action.as_str(), "reassign" | "replace" | "salvage")
+                    && params.target_session.is_none()
+                {
+                    return Err(anyhow::anyhow!(
+                        "'target_session' is required for {} action",
+                        params.action
+                    ));
+                }
+
+                let request = Request::CommTaskControl {
+                    id: REQUEST_ID,
+                    session_id: ctx.session_id.clone(),
+                    action: params.action.clone(),
+                    task_id: task_id.clone(),
+                    target_session: params.target_session.clone(),
+                    message: params.message.clone(),
+                };
+
+                match send_request(request).await {
+                    Ok(response) => {
+                        ensure_success(&response)?;
+                        let target_suffix = params
+                            .target_session
+                            .as_deref()
+                            .map(|target| format!(" -> {}", target))
+                            .unwrap_or_default();
+                        Ok(ToolOutput::new(format!(
+                            "Task '{}' {}{}",
+                            task_id, params.action, target_suffix
+                        )))
+                    }
+                    Err(e) => Err(anyhow::anyhow!("Failed to {} task: {}", params.action, e)),
+                }
+            }
+
             "subscribe_channel" => {
                 let channel = params.channel.ok_or_else(|| {
                     anyhow::anyhow!("'channel' is required for subscribe_channel action")
@@ -987,8 +1132,8 @@ impl Tool for CommunicateTool {
 
             _ => Err(anyhow::anyhow!(
                 "Unknown action '{}'. Valid actions: share, share_append, read, message, broadcast, dm, channel, list, list_channels, channel_members, \
-                 propose_plan, approve_plan, reject_plan, spawn, stop, assign_role, summary, read_context, \
-                 resync_plan, assign_task, subscribe_channel, unsubscribe_channel, await_members",
+                 propose_plan, approve_plan, reject_plan, spawn, stop, assign_role, status, summary, read_context, \
+                 resync_plan, assign_task, start, wake, resume, retry, reassign, replace, salvage, subscribe_channel, unsubscribe_channel, await_members",
                 params.action
             )),
         }
@@ -1002,7 +1147,10 @@ mod tests {
         format_members,
     };
     use crate::message::{Message, StreamEvent, ToolDefinition};
-    use crate::protocol::{AgentInfo, AwaitedMemberStatus, Request, ServerEvent, ToolCallSummary};
+    use crate::protocol::{
+        AgentInfo, AgentStatusSnapshot, AwaitedMemberStatus, Request, ServerEvent,
+        SessionActivitySnapshot, ToolCallSummary,
+    };
     use crate::provider::{EventStream, Provider};
     use crate::server::Server;
     use crate::tool::{Tool, ToolContext, ToolExecutionMode};
@@ -1068,6 +1216,24 @@ mod tests {
         assert_eq!(
             props["plan_items"]["items"]["additionalProperties"],
             json!(true)
+        );
+        assert!(
+            schema["properties"]["action"]["enum"]
+                .as_array()
+                .expect("action enum")
+                .contains(&json!("status"))
+        );
+        assert!(
+            schema["properties"]["action"]["enum"]
+                .as_array()
+                .expect("action enum")
+                .contains(&json!("start"))
+        );
+        assert!(
+            schema["properties"]["action"]["enum"]
+                .as_array()
+                .expect("action enum")
+                .contains(&json!("salvage"))
         );
     }
 
@@ -1251,6 +1417,30 @@ mod tests {
             {
                 ServerEvent::CommMembers { members, .. } => Ok(members),
                 other => anyhow::bail!("unexpected comm_list response: {other:?}"),
+            }
+        }
+
+        async fn comm_status(
+            &mut self,
+            session_id: &str,
+            target_session: &str,
+        ) -> Result<AgentStatusSnapshot> {
+            let id = self.next_id;
+            self.next_id += 1;
+            self.send_request(Request::CommStatus {
+                id,
+                session_id: session_id.to_string(),
+                target_session: target_session.to_string(),
+            })
+            .await?;
+            match self
+                .read_until(Duration::from_secs(5), |event| {
+                    matches!(event, ServerEvent::CommStatusResponse { id: event_id, .. } if *event_id == id)
+                })
+                .await?
+            {
+                ServerEvent::CommStatusResponse { snapshot, .. } => Ok(snapshot),
+                other => anyhow::bail!("unexpected comm_status response: {other:?}"),
             }
         }
     }
@@ -1447,11 +1637,19 @@ mod tests {
                 status: Some("running".to_string()),
                 detail: Some("working on tests".to_string()),
                 role: Some("agent".to_string()),
+                is_headless: Some(true),
+                live_attachments: Some(0),
+                status_age_secs: Some(12),
             }],
         );
 
         assert!(output.output.contains("Status: running — working on tests"));
         assert!(output.output.contains("Files: src/main.rs"));
+        assert!(
+            output
+                .output
+                .contains("Meta: headless · attachments=0 · status_age=12s")
+        );
     }
 
     #[test]
@@ -1470,6 +1668,9 @@ mod tests {
                     status: Some("ready".to_string()),
                     detail: None,
                     role: Some("agent".to_string()),
+                    is_headless: None,
+                    live_attachments: None,
+                    status_age_secs: None,
                 },
                 AgentInfo {
                     session_id: "session_shark_1234567890_bbbbbbbbbbbb0002".to_string(),
@@ -1478,6 +1679,9 @@ mod tests {
                     status: Some("ready".to_string()),
                     detail: None,
                     role: Some("agent".to_string()),
+                    is_headless: None,
+                    live_attachments: None,
+                    status_age_secs: None,
                 },
             ],
         );
@@ -1509,6 +1713,48 @@ mod tests {
 
         assert!(output.output.contains("✓ shark [aa0001] (ready)"));
         assert!(output.output.contains("✓ shark [bb0002] (ready)"));
+    }
+
+    #[test]
+    fn format_status_snapshot_includes_activity_and_metadata() {
+        let output = super::format_status_snapshot(&AgentStatusSnapshot {
+            session_id: "sess-peer".to_string(),
+            friendly_name: Some("bear".to_string()),
+            swarm_id: Some("swarm-test".to_string()),
+            status: Some("running".to_string()),
+            detail: Some("working on observability".to_string()),
+            role: Some("agent".to_string()),
+            is_headless: Some(true),
+            live_attachments: Some(0),
+            status_age_secs: Some(7),
+            joined_age_secs: Some(42),
+            files_touched: vec!["src/server/comm_sync.rs".to_string()],
+            activity: Some(SessionActivitySnapshot {
+                is_processing: true,
+                current_tool_name: Some("bash".to_string()),
+            }),
+            provider_name: None,
+            provider_model: None,
+        });
+
+        assert!(
+            output
+                .output
+                .contains("Status snapshot for bear (sess-peer)")
+        );
+        assert!(
+            output
+                .output
+                .contains("Lifecycle: running — working on observability")
+        );
+        assert!(output.output.contains("Activity: busy (bash)"));
+        assert!(output.output.contains("Swarm: swarm-test"));
+        assert!(
+            output
+                .output
+                .contains("Meta: headless · attachments=0 · status_age=7s · joined=42s")
+        );
+        assert!(output.output.contains("Files: src/server/comm_sync.rs"));
     }
 
     #[tokio::test]
@@ -1613,6 +1859,88 @@ mod tests {
             .find(|member| member.session_id == peer_session)
             .expect("peer should still be listed when ready");
         assert_eq!(ready_peer.status.as_deref(), Some("ready"));
+
+        server_task.abort();
+    }
+
+    #[tokio::test]
+    async fn communicate_status_returns_busy_snapshot_for_running_member() {
+        let _env_lock = crate::storage::lock_test_env();
+        let runtime_dir = tempfile::TempDir::new().expect("runtime tempdir");
+        let repo_dir = std::env::current_dir().expect("repo cwd");
+        let socket_path = runtime_dir.path().join("jcode.sock");
+        let _runtime = EnvGuard::set("JCODE_RUNTIME_DIR", runtime_dir.path());
+        let _socket = EnvGuard::set("JCODE_SOCKET", &socket_path);
+        let _debug = EnvGuard::set("JCODE_DEBUG_CONTROL", "1");
+
+        let provider: Arc<dyn Provider> = Arc::new(DelayedTestProvider {
+            delay: Duration::from_millis(300),
+        });
+        let server = Arc::new(Server::new(provider));
+        let mut server_task = {
+            let server = Arc::clone(&server);
+            tokio::spawn(async move { server.run().await })
+        };
+
+        wait_for_server_socket(&socket_path, &mut server_task)
+            .await
+            .expect("server socket should be ready");
+
+        let mut watcher = RawClient::connect(&socket_path)
+            .await
+            .expect("watcher should connect");
+        let mut peer = RawClient::connect(&socket_path)
+            .await
+            .expect("peer should connect");
+        watcher
+            .subscribe(&repo_dir)
+            .await
+            .expect("watcher subscribe");
+        peer.subscribe(&repo_dir).await.expect("peer subscribe");
+
+        let watcher_session = watcher.session_id().await.expect("watcher session id");
+        let peer_session = peer.session_id().await.expect("peer session id");
+        let tool = CommunicateTool::new();
+        let ctx = test_ctx(&watcher_session, &repo_dir);
+
+        let peer_message_id = peer
+            .send_message("Reply with a short acknowledgement.")
+            .await
+            .expect("peer message request should send");
+
+        wait_for_member_status(&mut watcher, &watcher_session, &peer_session, "running")
+            .await
+            .expect("peer should enter running state");
+
+        let snapshot = watcher
+            .comm_status(&watcher_session, &peer_session)
+            .await
+            .expect("comm_status should succeed while peer is busy");
+        assert_eq!(snapshot.session_id, peer_session);
+        assert_eq!(snapshot.status.as_deref(), Some("running"));
+        assert!(
+            snapshot
+                .activity
+                .as_ref()
+                .is_some_and(|activity| activity.is_processing)
+        );
+
+        let output = tool
+            .execute(
+                json!({
+                    "action": "status",
+                    "target_session": peer_session.clone()
+                }),
+                ctx,
+            )
+            .await
+            .expect("status action should succeed");
+        assert!(output.output.contains("Lifecycle: running"));
+        assert!(output.output.contains("Activity: busy"));
+
+        peer.wait_for_done(peer_message_id)
+            .await
+            .expect("peer message should finish");
 
         server_task.abort();
     }

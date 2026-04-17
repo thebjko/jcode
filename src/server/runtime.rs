@@ -4,7 +4,7 @@ use super::debug_jobs::DebugJob;
 use super::util::get_shared_mcp_pool;
 use super::{
     AwaitMembersRuntime, FileAccess, ServerIdentity, SessionInterruptQueues, SharedContext,
-    SwarmEvent, SwarmMember, VersionedPlan,
+    SwarmEvent, SwarmMember, SwarmMutationRuntime, VersionedPlan,
 };
 use crate::agent::Agent;
 use crate::ambient_runner::AmbientRunnerHandle;
@@ -54,6 +54,7 @@ pub(super) struct ServerRuntime {
     shutdown_signals: Arc<RwLock<HashMap<String, InterruptSignal>>>,
     soft_interrupt_queues: SessionInterruptQueues,
     await_members_runtime: AwaitMembersRuntime,
+    swarm_mutation_runtime: SwarmMutationRuntime,
 }
 
 impl ServerRuntime {
@@ -89,12 +90,13 @@ impl ServerRuntime {
             shutdown_signals: Arc::clone(&server.shutdown_signals),
             soft_interrupt_queues: Arc::clone(&server.soft_interrupt_queues),
             await_members_runtime: server.await_members_runtime.clone(),
+            swarm_mutation_runtime: server.swarm_mutation_runtime.clone(),
         }
     }
 
     pub(super) fn spawn_main_accept_loop(
         &self,
-        mut listener: Listener,
+        listener: Listener,
     ) -> tokio::task::JoinHandle<()> {
         let runtime = self.clone();
         tokio::spawn(async move {
@@ -114,7 +116,7 @@ impl ServerRuntime {
 
     pub(super) fn spawn_debug_accept_loop(
         &self,
-        mut listener: Listener,
+        listener: Listener,
         server_start_time: Instant,
     ) -> tokio::task::JoinHandle<()> {
         let runtime = self.clone();
@@ -233,6 +235,7 @@ impl ServerRuntime {
             Arc::clone(&self.shutdown_signals),
             Arc::clone(&self.soft_interrupt_queues),
             self.await_members_runtime.clone(),
+            self.swarm_mutation_runtime.clone(),
         )
         .await;
 

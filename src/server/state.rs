@@ -82,12 +82,42 @@ pub struct SwarmMember {
 }
 
 /// A versioned plan for a swarm.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SwarmTaskProgress {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assigned_session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignment_summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assigned_at_unix_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at_unix_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_heartbeat_unix_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_detail: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_checkpoint_unix_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkpoint_summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_at_unix_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stale_since_unix_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heartbeat_count: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkpoint_count: Option<u64>,
+}
+
 #[derive(Clone, Debug)]
 pub struct VersionedPlan {
     pub items: Vec<PlanItem>,
     pub version: u64,
     /// Session ids that should receive this plan's updates.
     pub participants: HashSet<String>,
+    /// Durable runtime task progress keyed by plan item id.
+    pub task_progress: HashMap<String, SwarmTaskProgress>,
 }
 
 impl VersionedPlan {
@@ -96,6 +126,7 @@ impl VersionedPlan {
             items: Vec::new(),
             version: 0,
             participants: HashSet::new(),
+            task_progress: HashMap::new(),
         }
     }
 }

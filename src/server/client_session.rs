@@ -475,7 +475,8 @@ pub(super) async fn handle_subscribe(
         if let Some(old_id) = old_swarm_id.clone() {
             if updated_swarm_id.as_ref() != Some(&old_id) {
                 remove_plan_participant(&old_id, client_session_id, swarm_plans).await;
-                persist_swarm_state_for(&old_id, swarm_plans, swarm_coordinators).await;
+                persist_swarm_state_for(&old_id, swarm_plans, swarm_coordinators, swarm_members)
+                    .await;
             }
             broadcast_swarm_status(&old_id, swarm_members, swarms_by_id).await;
         }
@@ -1025,7 +1026,8 @@ pub(super) async fn handle_resume_session(
                     .and_then(|member| member.swarm_id.clone())
             } {
                 rename_plan_participant(&swarm_id, &old_session_id, &session_id, swarm_plans).await;
-                persist_swarm_state_for(&swarm_id, swarm_plans, swarm_coordinators).await;
+                persist_swarm_state_for(&swarm_id, swarm_plans, swarm_coordinators, swarm_members)
+                    .await;
             }
 
             register_session_event_sender(

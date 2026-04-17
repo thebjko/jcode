@@ -541,6 +541,9 @@ fn test_redacted_for_export_redacts_replay_events() -> Result<()> {
         status: "running".to_string(),
         detail: Some("ANTHROPIC_API_KEY=sk-ant-secret-value".to_string()),
         role: Some("agent".to_string()),
+        is_headless: None,
+        live_attachments: None,
+        status_age_secs: None,
     }]);
     session.record_swarm_plan_event(
         "swarm_test".to_string(),

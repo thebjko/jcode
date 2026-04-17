@@ -392,6 +392,9 @@ pub(super) async fn handle_comm_list(
                         status: Some(member.status.clone()),
                         detail: member.detail.clone(),
                         role: Some(member.role.clone()),
+                        is_headless: Some(member.is_headless),
+                        live_attachments: Some(member.event_txs.len()),
+                        status_age_secs: Some(member.last_status_change.elapsed().as_secs()),
                     }
                 })
             })
@@ -482,6 +485,9 @@ pub(super) async fn handle_comm_channel_members(
                     status: Some(member.status.clone()),
                     detail: member.detail.clone(),
                     role: Some(member.role.clone()),
+                    is_headless: Some(member.is_headless),
+                    live_attachments: Some(member.event_txs.len()),
+                    status_age_secs: Some(member.last_status_change.elapsed().as_secs()),
                 })
             })
             .collect();

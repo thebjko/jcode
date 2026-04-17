@@ -435,6 +435,14 @@ pub enum Request {
         limit: Option<usize>,
     },
 
+    /// Get a lightweight status snapshot for an agent, even while it is busy
+    #[serde(rename = "comm_status")]
+    CommStatus {
+        id: u64,
+        session_id: String,
+        target_session: String,
+    },
+
     /// Read another agent's full conversation context
     #[serde(rename = "comm_read_context")]
     CommReadContext {
@@ -454,6 +462,19 @@ pub enum Request {
         session_id: String,
         target_session: String,
         task_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
+    },
+
+    /// Control an existing assigned task lifecycle (coordinator only)
+    #[serde(rename = "comm_task_control")]
+    CommTaskControl {
+        id: u64,
+        session_id: String,
+        action: String,
+        task_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target_session: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         message: Option<String>,
     },
@@ -939,6 +960,13 @@ pub enum ServerEvent {
         tool_calls: Vec<ToolCallSummary>,
     },
 
+    /// Response to comm_status request
+    #[serde(rename = "comm_status_response")]
+    CommStatusResponse {
+        id: u64,
+        snapshot: AgentStatusSnapshot,
+    },
+
     /// Response to comm_read_context request
     #[serde(rename = "comm_context_history")]
     CommContextHistory {
@@ -1042,6 +1070,47 @@ pub struct AgentInfo {
     /// Role: "agent", "coordinator", "worktree_manager"
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
+    /// Whether this member is a headless spawned session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_headless: Option<bool>,
+    /// Number of currently attached live client connections.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live_attachments: Option<usize>,
+    /// Seconds since the last status change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_age_secs: Option<u64>,
+}
+
+/// Lightweight status snapshot for a swarm member.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentStatusSnapshot {
+    pub session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub friendly_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub swarm_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_headless: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live_attachments: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_age_secs: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub joined_age_secs: Option<u64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files_touched: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity: Option<SessionActivitySnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_model: Option<String>,
 }
 
 /// Swarm member status for lifecycle updates
@@ -1058,6 +1127,15 @@ pub struct SwarmMemberStatus {
     /// Role: "agent", "coordinator", "worktree_manager"
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
+    /// Whether this member is a headless spawned session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_headless: Option<bool>,
+    /// Number of currently attached live client connections.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live_attachments: Option<usize>,
+    /// Seconds since the last status change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_age_secs: Option<u64>,
 }
 
 /// Status of a member being awaited by comm_await_members
@@ -1167,9 +1245,11 @@ impl Request {
             Request::CommStop { id, .. } => *id,
             Request::CommAssignRole { id, .. } => *id,
             Request::CommSummary { id, .. } => *id,
+            Request::CommStatus { id, .. } => *id,
             Request::CommReadContext { id, .. } => *id,
             Request::CommResyncPlan { id, .. } => *id,
             Request::CommAssignTask { id, .. } => *id,
+            Request::CommTaskControl { id, .. } => *id,
             Request::CommSubscribeChannel { id, .. } => *id,
             Request::CommUnsubscribeChannel { id, .. } => *id,
             Request::CommAwaitMembers { id, .. } => *id,

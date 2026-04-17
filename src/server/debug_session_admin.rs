@@ -1,6 +1,6 @@
 use super::{
     SessionInterruptQueues, SwarmEvent, SwarmEventType, SwarmMember, VersionedPlan,
-    broadcast_swarm_status, create_headless_session, record_swarm_event,
+    broadcast_swarm_status, create_headless_session, persist_swarm_state_for, record_swarm_event,
     remove_session_interrupt_queue,
 };
 use crate::agent::Agent;
@@ -72,24 +72,28 @@ pub(super) async fn maybe_handle_session_admin_command(
             Some(dir) => format!("create_session:{dir}"),
             None => "create_session".to_string(),
         };
-        return Ok(Some(
-            create_headless_session(
-                sessions,
-                session_id,
-                provider,
-                &create_command,
-                swarm_members,
-                swarms_by_id,
-                swarm_coordinators,
-                swarm_plans,
-                soft_interrupt_queues,
-                selfdev_requested,
-                None,
-                mcp_pool,
-                None,
-            )
-            .await?,
-        ));
+        let created = create_headless_session(
+            sessions,
+            session_id,
+            provider,
+            &create_command,
+            swarm_members,
+            swarms_by_id,
+            swarm_coordinators,
+            swarm_plans,
+            soft_interrupt_queues,
+            selfdev_requested,
+            None,
+            mcp_pool,
+            None,
+        )
+        .await?;
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&created)
+            && let Some(swarm_id) = value.get("swarm_id").and_then(|value| value.as_str())
+        {
+            persist_swarm_state_for(swarm_id, swarm_plans, swarm_coordinators, swarm_members).await;
+        }
+        return Ok(Some(created));
     }
 
     if cmd.starts_with("destroy_session:") {
@@ -192,6 +196,8 @@ pub(super) async fn maybe_handle_session_admin_command(
                     coordinators.insert(swarm_id.clone(), new_id);
                 }
             }
+
+            persist_swarm_state_for(swarm_id, swarm_plans, swarm_coordinators, swarm_members).await;
 
             broadcast_swarm_status(swarm_id, swarm_members, swarms_by_id).await;
         }

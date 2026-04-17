@@ -1,4 +1,8 @@
 use super::client_lifecycle::process_message_streaming_mpsc;
+use super::swarm_mutation_state::{
+    PersistedSwarmMutationResponse, SwarmMutationRuntime, begin_or_replay, finish_request,
+    request_key,
+};
 use super::{
     SessionInterruptQueues, SwarmEvent, SwarmEventType, SwarmMember, VersionedPlan,
     broadcast_swarm_plan, broadcast_swarm_status, create_headless_session, persist_swarm_state_for,
@@ -206,6 +210,7 @@ pub(super) async fn handle_comm_spawn(
     swarm_event_tx: &broadcast::Sender<SwarmEvent>,
     mcp_pool: &Arc<crate::mcp::SharedMcpPool>,
     soft_interrupt_queues: &SessionInterruptQueues,
+    swarm_mutation_runtime: &SwarmMutationRuntime,
 ) {
     let swarm_id = match ensure_spawn_coordinator_swarm(
         id,
@@ -215,6 +220,7 @@ pub(super) async fn handle_comm_spawn(
         swarm_members,
         swarms_by_id,
         swarm_coordinators,
+        swarm_plans,
     )
     .await
     {
@@ -247,6 +253,28 @@ pub(super) async fn handle_comm_spawn(
                     .map(|agent_guard| agent_guard.is_canary())
             })
             .unwrap_or(false)
+    };
+
+    let mutation_key = request_key(
+        &req_session_id,
+        "spawn",
+        &[
+            swarm_id.clone(),
+            working_dir.clone().unwrap_or_default(),
+            initial_message.clone().unwrap_or_default(),
+        ],
+    );
+    let Some(mutation_state) = begin_or_replay(
+        swarm_mutation_runtime,
+        &mutation_key,
+        "spawn",
+        &req_session_id,
+        id,
+        client_event_tx,
+    )
+    .await
+    else {
+        return;
     };
 
     let visible_spawn = prepare_visible_spawn_session(
@@ -296,10 +324,9 @@ pub(super) async fn handle_comm_spawn(
         }
     };
 
-    match spawn_result {
+    let response = match spawn_result {
         Ok((new_session_id, is_headless_fallback)) => {
             let startup_message = initial_message.clone();
-            let mut plan_participants_changed = false;
             {
                 let mut plans = swarm_plans.write().await;
                 if let Some(plan) = plans.get_mut(&swarm_id)
@@ -307,11 +334,7 @@ pub(super) async fn handle_comm_spawn(
                 {
                     plan.participants.insert(req_session_id.clone());
                     plan.participants.insert(new_session_id.clone());
-                    plan_participants_changed = true;
                 }
-            }
-            if plan_participants_changed {
-                persist_swarm_state_for(&swarm_id, swarm_plans, swarm_coordinators).await;
             }
 
             broadcast_swarm_plan(
@@ -337,6 +360,9 @@ pub(super) async fn handle_comm_spawn(
                 )
                 .await;
             }
+
+            persist_swarm_state_for(&swarm_id, swarm_plans, swarm_coordinators, swarm_members)
+                .await;
 
             if let Some(initial_msg) = startup_message
                 && is_headless_fallback
@@ -409,20 +435,15 @@ pub(super) async fn handle_comm_spawn(
                 }
             }
 
-            let _ = client_event_tx.send(ServerEvent::CommSpawnResponse {
-                id,
-                session_id: req_session_id,
-                new_session_id,
-            });
+            PersistedSwarmMutationResponse::Spawn { new_session_id }
         }
-        Err(error) => {
-            let _ = client_event_tx.send(ServerEvent::Error {
-                id,
-                message: format!("Failed to spawn agent: {error}"),
-                retry_after_secs: None,
-            });
-        }
-    }
+        Err(error) => PersistedSwarmMutationResponse::Error {
+            message: format!("Failed to spawn agent: {error}"),
+            retry_after_secs: None,
+        },
+    };
+
+    finish_request(swarm_mutation_runtime, &mutation_state, response).await;
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -442,8 +463,9 @@ pub(super) async fn handle_comm_stop(
     event_counter: &Arc<std::sync::atomic::AtomicU64>,
     swarm_event_tx: &broadcast::Sender<SwarmEvent>,
     soft_interrupt_queues: &SessionInterruptQueues,
+    swarm_mutation_runtime: &SwarmMutationRuntime,
 ) {
-    if require_coordinator_swarm(
+    let swarm_id = if let Some(swarm_id) = require_coordinator_swarm(
         id,
         &req_session_id,
         "Only the coordinator can stop agents.",
@@ -452,10 +474,25 @@ pub(super) async fn handle_comm_stop(
         swarm_coordinators,
     )
     .await
-    .is_none()
     {
+        swarm_id
+    } else {
         return;
-    }
+    };
+
+    let mutation_key = request_key(&req_session_id, "stop", &[swarm_id, target_session.clone()]);
+    let Some(mutation_state) = begin_or_replay(
+        swarm_mutation_runtime,
+        &mutation_key,
+        "stop",
+        &req_session_id,
+        id,
+        client_event_tx,
+    )
+    .await
+    else {
+        return;
+    };
 
     let mut sessions_guard = sessions.write().await;
     let removed_agent = sessions_guard.remove(&target_session);
@@ -518,13 +555,22 @@ pub(super) async fn handle_comm_stop(
             channel_subscriptions_by_session,
         )
         .await;
-        let _ = client_event_tx.send(ServerEvent::Done { id });
+        finish_request(
+            swarm_mutation_runtime,
+            &mutation_state,
+            PersistedSwarmMutationResponse::Done,
+        )
+        .await;
     } else {
-        let _ = client_event_tx.send(ServerEvent::Error {
-            id,
-            message: format!("Unknown session '{target_session}'"),
-            retry_after_secs: None,
-        });
+        finish_request(
+            swarm_mutation_runtime,
+            &mutation_state,
+            PersistedSwarmMutationResponse::Error {
+                message: format!("Unknown session '{target_session}'"),
+                retry_after_secs: None,
+            },
+        )
+        .await;
     }
 }
 
@@ -536,6 +582,7 @@ async fn ensure_spawn_coordinator_swarm(
     swarm_members: &Arc<RwLock<HashMap<String, SwarmMember>>>,
     swarms_by_id: &Arc<RwLock<HashMap<String, HashSet<String>>>>,
     swarm_coordinators: &Arc<RwLock<HashMap<String, String>>>,
+    swarm_plans: &Arc<RwLock<HashMap<String, VersionedPlan>>>,
 ) -> Option<String> {
     let (swarm_id, from_name, coordinator_id) = {
         let members = swarm_members.read().await;
@@ -602,6 +649,7 @@ async fn ensure_spawn_coordinator_swarm(
                 member.role = "coordinator".to_string();
             }
         }
+        persist_swarm_state_for(&swarm_id, swarm_plans, swarm_coordinators, swarm_members).await;
         broadcast_swarm_status(&swarm_id, swarm_members, swarms_by_id).await;
         let _ = client_event_tx.send(ServerEvent::Notification {
             from_session: req_session_id.to_string(),
@@ -671,8 +719,7 @@ mod tests {
         register_visible_spawned_member,
     };
     use crate::protocol::{NotificationType, ServerEvent};
-    use crate::server::SwarmEventType;
-    use crate::server::SwarmMember;
+    use crate::server::{SwarmEventType, SwarmMember, VersionedPlan};
     use std::collections::{HashMap, HashSet, VecDeque};
     use std::sync::Arc;
     use std::sync::atomic::AtomicU64;
@@ -871,6 +918,7 @@ mod tests {
             HashSet::from(["req".to_string()]),
         )])));
         let swarm_coordinators = Arc::new(RwLock::new(HashMap::new()));
+        let swarm_plans = Arc::new(RwLock::new(HashMap::<String, VersionedPlan>::new()));
         let (req_member, _req_rx) = member("req", Some("swarm-1"), "agent");
         swarm_members
             .write()
@@ -886,6 +934,7 @@ mod tests {
             &swarm_members,
             &swarms_by_id,
             &swarm_coordinators,
+            &swarm_plans,
         )
         .await;
 
@@ -927,6 +976,7 @@ mod tests {
             "swarm-1".to_string(),
             "coord".to_string(),
         )])));
+        let swarm_plans = Arc::new(RwLock::new(HashMap::<String, VersionedPlan>::new()));
         let (req_member, _req_rx) = member("req", Some("swarm-1"), "agent");
         let (coord_member, _coord_rx) = member("coord", Some("swarm-1"), "coordinator");
         let mut members = swarm_members.write().await;
@@ -943,6 +993,7 @@ mod tests {
             &swarm_members,
             &swarms_by_id,
             &swarm_coordinators,
+            &swarm_plans,
         )
         .await;
 

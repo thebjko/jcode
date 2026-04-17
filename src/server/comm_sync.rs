@@ -1,14 +1,56 @@
 use super::{
-    SwarmEvent, SwarmEventType, SwarmMember, VersionedPlan, broadcast_swarm_plan,
-    persist_swarm_state_for, record_swarm_event,
+    ClientConnectionInfo, SwarmEvent, SwarmEventType, SwarmMember, VersionedPlan,
+    broadcast_swarm_plan, persist_swarm_state_for, record_swarm_event,
 };
 use crate::agent::Agent;
-use crate::protocol::{NotificationType, ServerEvent};
+use crate::protocol::{
+    AgentStatusSnapshot, NotificationType, ServerEvent, SessionActivitySnapshot,
+};
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock, broadcast, mpsc};
 
 type SessionAgents = Arc<RwLock<HashMap<String, Arc<Mutex<Agent>>>>>;
+
+type SessionFilesTouched = Arc<RwLock<HashMap<String, HashSet<PathBuf>>>>;
+
+fn live_activity_snapshot(
+    connections: &HashMap<String, ClientConnectionInfo>,
+    session_id: &str,
+    fallback_processing: bool,
+) -> Option<SessionActivitySnapshot> {
+    let mut processing_without_tool = false;
+    let mut tool_name = None;
+    for info in connections.values() {
+        if info.session_id != session_id || !info.is_processing {
+            continue;
+        }
+        if let Some(current_tool_name) = info.current_tool_name.clone() {
+            tool_name = Some(current_tool_name);
+            break;
+        }
+        processing_without_tool = true;
+    }
+
+    tool_name
+        .map(|current_tool_name| SessionActivitySnapshot {
+            is_processing: true,
+            current_tool_name: Some(current_tool_name),
+        })
+        .or_else(|| {
+            processing_without_tool.then_some(SessionActivitySnapshot {
+                is_processing: true,
+                current_tool_name: None,
+            })
+        })
+        .or_else(|| {
+            fallback_processing.then_some(SessionActivitySnapshot {
+                is_processing: true,
+                current_tool_name: None,
+            })
+        })
+}
 
 async fn ensure_same_swarm_access(
     id: u64,
@@ -111,6 +153,94 @@ pub(super) async fn handle_comm_summary(
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "status snapshots combine live connection state, session metadata, files touched, and optional provider/model hints"
+)]
+pub(super) async fn handle_comm_status(
+    id: u64,
+    req_session_id: String,
+    target_session: String,
+    sessions: &SessionAgents,
+    swarm_members: &Arc<RwLock<HashMap<String, SwarmMember>>>,
+    client_connections: &Arc<RwLock<HashMap<String, ClientConnectionInfo>>>,
+    files_touched_by_session: &SessionFilesTouched,
+    client_event_tx: &mpsc::UnboundedSender<ServerEvent>,
+) {
+    if !ensure_same_swarm_access(
+        id,
+        &req_session_id,
+        &target_session,
+        swarm_members,
+        client_event_tx,
+    )
+    .await
+    {
+        return;
+    }
+
+    let snapshot = {
+        let members = swarm_members.read().await;
+        let Some(member) = members.get(&target_session) else {
+            let _ = client_event_tx.send(ServerEvent::Error {
+                id,
+                message: format!("Unknown session '{target_session}'"),
+                retry_after_secs: None,
+            });
+            return;
+        };
+
+        let files_touched = {
+            let touches = files_touched_by_session.read().await;
+            let mut files: Vec<String> = touches
+                .get(&target_session)
+                .into_iter()
+                .flat_map(|paths| paths.iter())
+                .map(|path| path.display().to_string())
+                .collect();
+            files.sort();
+            files
+        };
+
+        let activity = {
+            let connections = client_connections.read().await;
+            live_activity_snapshot(&connections, &target_session, member.status == "running")
+        };
+
+        let (provider_name, provider_model) = {
+            let agent_sessions = sessions.read().await;
+            if let Some(agent) = agent_sessions.get(&target_session) {
+                if let Ok(agent) = agent.try_lock() {
+                    (Some(agent.provider_name()), Some(agent.provider_model()))
+                } else {
+                    (None, None)
+                }
+            } else {
+                (None, None)
+            }
+        };
+
+        AgentStatusSnapshot {
+            session_id: member.session_id.clone(),
+            friendly_name: member.friendly_name.clone(),
+            swarm_id: member.swarm_id.clone(),
+            status: Some(member.status.clone()),
+            detail: member.detail.clone(),
+            role: Some(member.role.clone()),
+            is_headless: Some(member.is_headless),
+            live_attachments: Some(member.event_txs.len()),
+            status_age_secs: Some(member.last_status_change.elapsed().as_secs()),
+            joined_age_secs: Some(member.joined_at.elapsed().as_secs()),
+            files_touched,
+            activity,
+            provider_name,
+            provider_model,
+        }
+    };
+
+    let _ = client_event_tx.send(ServerEvent::CommStatusResponse { id, snapshot });
+}
+
 pub(super) async fn handle_comm_read_context(
     id: u64,
     req_session_id: String,
@@ -198,7 +328,8 @@ pub(super) async fn handle_comm_resync_plan(
             })
         };
         if let Some((version, item_count)) = plan_state {
-            persist_swarm_state_for(&swarm_id, swarm_plans, swarm_coordinators).await;
+            persist_swarm_state_for(&swarm_id, swarm_plans, swarm_coordinators, swarm_members)
+                .await;
             if let Some(member) = swarm_members.read().await.get(&req_session_id) {
                 let _ = member.event_tx.send(ServerEvent::Notification {
                     from_session: req_session_id.clone(),

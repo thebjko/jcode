@@ -15,13 +15,15 @@ use super::client_session::{
 use super::client_state::{handle_get_history, handle_get_state};
 use super::comm_control::{
     handle_client_debug_command, handle_client_debug_response, handle_comm_assign_role,
-    handle_comm_assign_task, handle_comm_await_members,
+    handle_comm_assign_task, handle_comm_await_members, handle_comm_task_control,
 };
 use super::comm_plan::{
     handle_comm_approve_plan, handle_comm_propose_plan, handle_comm_reject_plan,
 };
 use super::comm_session::{handle_comm_spawn, handle_comm_stop};
-use super::comm_sync::{handle_comm_read_context, handle_comm_resync_plan, handle_comm_summary};
+use super::comm_sync::{
+    handle_comm_read_context, handle_comm_resync_plan, handle_comm_status, handle_comm_summary,
+};
 use super::provider_control::{
     handle_cycle_model, handle_notify_auth_changed, handle_refresh_models,
     handle_set_compaction_mode, handle_set_model, handle_set_premium_mode,
@@ -30,8 +32,8 @@ use super::provider_control::{
 };
 use super::{
     AwaitMembersRuntime, ClientConnectionInfo, ClientDebugState, FileAccess,
-    SessionInterruptQueues, SharedContext, SwarmEvent, SwarmMember, VersionedPlan,
-    enqueue_soft_interrupt, register_session_interrupt_queue, truncate_detail,
+    SessionInterruptQueues, SharedContext, SwarmEvent, SwarmMember, SwarmMutationRuntime,
+    VersionedPlan, enqueue_soft_interrupt, register_session_interrupt_queue, truncate_detail,
     update_member_status,
 };
 use crate::agent::Agent;
@@ -99,6 +101,7 @@ pub(super) async fn handle_client(
     shutdown_signals: Arc<RwLock<HashMap<String, InterruptSignal>>>,
     soft_interrupt_queues: SessionInterruptQueues,
     await_members_runtime: AwaitMembersRuntime,
+    swarm_mutation_runtime: SwarmMutationRuntime,
 ) -> Result<()> {
     let (reader, writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
@@ -1233,6 +1236,7 @@ pub(super) async fn handle_client(
                     &event_history,
                     &event_counter,
                     &swarm_event_tx,
+                    &swarm_mutation_runtime,
                 )
                 .await;
             }
@@ -1257,6 +1261,7 @@ pub(super) async fn handle_client(
                     &event_history,
                     &event_counter,
                     &swarm_event_tx,
+                    &swarm_mutation_runtime,
                 )
                 .await;
             }
@@ -1281,6 +1286,7 @@ pub(super) async fn handle_client(
                     &event_history,
                     &event_counter,
                     &swarm_event_tx,
+                    &swarm_mutation_runtime,
                 )
                 .await;
             }
@@ -1311,6 +1317,7 @@ pub(super) async fn handle_client(
                     &swarm_event_tx,
                     &mcp_pool,
                     &soft_interrupt_queues,
+                    &swarm_mutation_runtime,
                 )
                 .await;
             }
@@ -1336,6 +1343,7 @@ pub(super) async fn handle_client(
                     &event_counter,
                     &swarm_event_tx,
                     &soft_interrupt_queues,
+                    &swarm_mutation_runtime,
                 )
                 .await;
             }
@@ -1356,9 +1364,11 @@ pub(super) async fn handle_client(
                     &swarm_members,
                     &swarms_by_id,
                     &swarm_coordinators,
+                    &swarm_plans,
                     &event_history,
                     &event_counter,
                     &swarm_event_tx,
+                    &swarm_mutation_runtime,
                 )
                 .await;
             }
@@ -1376,6 +1386,24 @@ pub(super) async fn handle_client(
                     limit,
                     &sessions,
                     &swarm_members,
+                    &client_event_tx,
+                )
+                .await;
+            }
+
+            Request::CommStatus {
+                id,
+                session_id: req_session_id,
+                target_session,
+            } => {
+                handle_comm_status(
+                    id,
+                    req_session_id,
+                    target_session,
+                    &sessions,
+                    &swarm_members,
+                    &client_connections,
+                    &files_touched_by_session,
                     &client_event_tx,
                 )
                 .await;
@@ -1440,6 +1468,38 @@ pub(super) async fn handle_client(
                     &event_history,
                     &event_counter,
                     &swarm_event_tx,
+                    &swarm_mutation_runtime,
+                )
+                .await;
+            }
+
+            Request::CommTaskControl {
+                id,
+                session_id: req_session_id,
+                action,
+                task_id,
+                target_session,
+                message,
+            } => {
+                handle_comm_task_control(
+                    id,
+                    req_session_id,
+                    action,
+                    task_id,
+                    target_session,
+                    message,
+                    &client_event_tx,
+                    &sessions,
+                    &soft_interrupt_queues,
+                    &client_connections,
+                    &swarm_members,
+                    &swarms_by_id,
+                    &swarm_plans,
+                    &swarm_coordinators,
+                    &event_history,
+                    &event_counter,
+                    &swarm_event_tx,
+                    &swarm_mutation_runtime,
                 )
                 .await;
             }

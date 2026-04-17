@@ -123,6 +123,9 @@ impl App {
                         },
                         detail: self.subagent_status.clone(),
                         role: None,
+                        is_headless: Some(false),
+                        live_attachments: Some(1),
+                        status_age_secs: Some(0),
                     }],
                 })
                 .to_string()

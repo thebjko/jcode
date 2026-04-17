@@ -1225,6 +1225,9 @@ mod tests {
                         status: "running".to_string(),
                         detail: Some("parser tests".to_string()),
                         role: Some("agent".to_string()),
+                        is_headless: None,
+                        live_attachments: None,
+                        status_age_secs: None,
                     }],
                 },
             },
@@ -1287,6 +1290,9 @@ mod tests {
                         status: "completed".to_string(),
                         detail: None,
                         role: Some("agent".to_string()),
+                        is_headless: None,
+                        live_attachments: None,
+                        status_age_secs: None,
                     }],
                 },
             },
@@ -1346,6 +1352,9 @@ mod tests {
             status: "running".to_string(),
             detail: None,
             role: Some("coordinator".to_string()),
+            is_headless: None,
+            live_attachments: None,
+            status_age_secs: None,
         }]);
         seed.save().unwrap();
 

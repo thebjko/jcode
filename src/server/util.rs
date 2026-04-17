@@ -45,7 +45,7 @@ pub(crate) async fn get_shared_mcp_pool(
 }
 
 pub(crate) fn server_update_candidate(is_selfdev_session: bool) -> Option<(PathBuf, &'static str)> {
-    build::client_update_candidate(is_selfdev_session)
+    build::shared_server_update_candidate(is_selfdev_session)
 }
 
 fn canonicalize_or(path: PathBuf) -> PathBuf {

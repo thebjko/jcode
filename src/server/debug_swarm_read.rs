@@ -50,6 +50,9 @@ pub(super) async fn maybe_handle_swarm_read_command(
                 "working_dir": member.working_dir,
                 "status": member.status,
                 "detail": member.detail,
+                "role": member.role,
+                "is_headless": member.is_headless,
+                "live_attachments": member.event_txs.len(),
                 "joined_secs_ago": member.joined_at.elapsed().as_secs(),
                 "status_changed_secs_ago": member.last_status_change.elapsed().as_secs(),
                 "provider": provider,
@@ -72,12 +75,44 @@ pub(super) async fn maybe_handle_swarm_read_command(
             let coordinator = coordinators.get(swarm_id);
             let coordinator_name =
                 coordinator.and_then(|cid| members.get(cid).and_then(|m| m.friendly_name.clone()));
+            let mut status_counts: HashMap<String, usize> = HashMap::new();
+            let mut headless_count = 0usize;
+            let mut attached_member_count = 0usize;
+            let mut live_attachment_count = 0usize;
+            let member_details: Vec<serde_json::Value> = session_ids
+                .iter()
+                .filter_map(|session_id| members.get(session_id))
+                .map(|member| {
+                    *status_counts.entry(member.status.clone()).or_default() += 1;
+                    if member.is_headless {
+                        headless_count += 1;
+                    }
+                    if !member.event_txs.is_empty() {
+                        attached_member_count += 1;
+                    }
+                    live_attachment_count += member.event_txs.len();
+                    serde_json::json!({
+                        "session_id": member.session_id,
+                        "friendly_name": member.friendly_name,
+                        "status": member.status,
+                        "detail": member.detail,
+                        "role": member.role,
+                        "is_headless": member.is_headless,
+                        "live_attachments": member.event_txs.len(),
+                    })
+                })
+                .collect();
             out.push(serde_json::json!({
                 "swarm_id": swarm_id,
                 "member_count": session_ids.len(),
                 "members": session_ids.iter().collect::<Vec<_>>(),
                 "coordinator": coordinator,
                 "coordinator_name": coordinator_name,
+                "headless_count": headless_count,
+                "attached_member_count": attached_member_count,
+                "live_attachment_count": live_attachment_count,
+                "status_counts": status_counts,
+                "member_details": member_details,
             }));
         }
         return Ok(Some(
@@ -178,6 +213,7 @@ pub(super) async fn maybe_handle_swarm_read_command(
                 "swarm_id": swarm_id,
                 "version": vp.version,
                 "item_count": vp.items.len(),
+                "stale_item_count": vp.items.iter().filter(|item| item.status == "running_stale").count(),
             })
             .to_string()
         } else {
@@ -185,6 +221,7 @@ pub(super) async fn maybe_handle_swarm_read_command(
                 "swarm_id": swarm_id,
                 "version": 0,
                 "item_count": 0,
+                "stale_item_count": 0,
             })
             .to_string()
         };
@@ -199,8 +236,9 @@ pub(super) async fn maybe_handle_swarm_read_command(
                 "swarm_id": swarm_id,
                 "item_count": vp.items.len(),
                 "version": vp.version,
-                "participants": vp.participants,
-                "items": vp.items,
+                "participants": &vp.participants,
+                "items": &vp.items,
+                "task_progress": &vp.task_progress,
             }));
         }
         return Ok(Some(
@@ -214,8 +252,9 @@ pub(super) async fn maybe_handle_swarm_read_command(
         let output = if let Some(vp) = plans.get(swarm_id) {
             serde_json::json!({
                 "version": vp.version,
-                "participants": vp.participants,
-                "items": vp.items,
+                "participants": &vp.participants,
+                "items": &vp.items,
+                "task_progress": &vp.task_progress,
             })
             .to_string()
         } else {
@@ -542,9 +581,20 @@ pub(super) async fn maybe_handle_swarm_read_command(
 
             let plan = plans
                 .get(swarm_id)
-                .map(|vp| &vp.items)
-                .cloned()
-                .unwrap_or_default();
+                .map(|vp| {
+                    serde_json::json!({
+                        "items": &vp.items,
+                        "task_progress": &vp.task_progress,
+                        "version": vp.version,
+                    })
+                })
+                .unwrap_or_else(|| {
+                    serde_json::json!({
+                        "items": [],
+                        "task_progress": {},
+                        "version": 0,
+                    })
+                });
 
             let context_keys: Vec<_> = ctx
                 .get(swarm_id)

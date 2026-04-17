@@ -28,6 +28,7 @@ mod reload_state;
 mod runtime;
 mod socket;
 mod swarm;
+mod swarm_mutation_state;
 mod swarm_persistence;
 mod util;
 
@@ -39,13 +40,14 @@ use self::reload::await_reload_signal;
 use self::runtime::ServerRuntime;
 use self::swarm::{
     broadcast_swarm_plan, broadcast_swarm_status, record_swarm_event,
-    record_swarm_event_for_session, remove_plan_participant, remove_session_channel_subscriptions,
-    remove_session_file_touches, remove_session_from_swarm, rename_plan_participant,
-    run_swarm_message, subscribe_session_to_channel, summarize_plan_items, truncate_detail,
-    unsubscribe_session_from_channel, update_member_status,
+    record_swarm_event_for_session, refresh_swarm_task_staleness, remove_plan_participant,
+    remove_session_channel_subscriptions, remove_session_file_touches, remove_session_from_swarm,
+    rename_plan_participant, run_swarm_message, subscribe_session_to_channel, summarize_plan_items,
+    truncate_detail, unsubscribe_session_from_channel, update_member_status,
 };
+pub(super) use self::swarm_mutation_state::SwarmMutationRuntime;
 use self::swarm_persistence::{
-    load_runtime_state as load_persisted_swarm_runtime_state,
+    LoadedSwarmRuntimeState, load_runtime_state as load_persisted_swarm_runtime_state,
     persist_swarm_state as persist_swarm_state_snapshot,
     remove_swarm_state as remove_persisted_swarm_state,
 };
@@ -78,17 +80,42 @@ pub(super) async fn persist_swarm_state_for(
     swarm_id: &str,
     swarm_plans: &Arc<RwLock<HashMap<String, VersionedPlan>>>,
     swarm_coordinators: &Arc<RwLock<HashMap<String, String>>>,
+    swarm_members: &Arc<RwLock<HashMap<String, SwarmMember>>>,
 ) {
-    let plans = swarm_plans.read().await;
-    let coordinators = swarm_coordinators.read().await;
-    persist_swarm_state_snapshot(swarm_id, &plans, &coordinators);
+    let plan = {
+        let plans = swarm_plans.read().await;
+        plans.get(swarm_id).cloned()
+    };
+    let coordinator = {
+        let coordinators = swarm_coordinators.read().await;
+        coordinators.get(swarm_id).cloned()
+    };
+    let members = {
+        let members = swarm_members.read().await;
+        members
+            .values()
+            .filter(|member| member.swarm_id.as_deref() == Some(swarm_id))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    persist_swarm_state_snapshot(swarm_id, plan.as_ref(), coordinator.as_deref(), &members);
 }
 
 pub(super) async fn remove_persisted_swarm_state_for(
     swarm_id: &str,
     swarm_plans: &Arc<RwLock<HashMap<String, VersionedPlan>>>,
+    swarm_coordinators: &Arc<RwLock<HashMap<String, String>>>,
+    swarm_members: &Arc<RwLock<HashMap<String, SwarmMember>>>,
 ) {
-    if swarm_plans.read().await.contains_key(swarm_id) {
+    let has_plan = swarm_plans.read().await.contains_key(swarm_id);
+    let has_coordinator = swarm_coordinators.read().await.contains_key(swarm_id);
+    let has_members = {
+        let members = swarm_members.read().await;
+        members
+            .values()
+            .any(|member| member.swarm_id.as_deref() == Some(swarm_id))
+    };
+    if has_plan || has_coordinator || has_members {
         return;
     }
     remove_persisted_swarm_state(swarm_id);
@@ -393,7 +420,8 @@ mod state;
 
 use self::state::latest_peer_touches;
 pub use self::state::{
-    FileAccess, SharedContext, SwarmEvent, SwarmEventType, SwarmMember, VersionedPlan,
+    FileAccess, SharedContext, SwarmEvent, SwarmEventType, SwarmMember, SwarmTaskProgress,
+    VersionedPlan,
 };
 use self::state::{
     SessionInterruptQueues, enqueue_soft_interrupt, fanout_live_client_event, fanout_session_event,
@@ -513,6 +541,8 @@ pub struct Server {
     soft_interrupt_queues: SessionInterruptQueues,
     /// Persisted communicate await_members wait registry.
     await_members_runtime: AwaitMembersRuntime,
+    /// Persisted dedupe registry for mutating swarm coordinator operations.
+    swarm_mutation_runtime: SwarmMutationRuntime,
 }
 
 impl Server {
@@ -543,8 +573,12 @@ impl Server {
             Some(handle)
         };
 
-        let (restored_swarm_plans, restored_swarm_coordinators) =
-            load_persisted_swarm_runtime_state();
+        let LoadedSwarmRuntimeState {
+            plans: restored_swarm_plans,
+            coordinators: restored_swarm_coordinators,
+            members: restored_swarm_members,
+            swarms_by_id: restored_swarms_by_id,
+        } = load_persisted_swarm_runtime_state();
 
         Self {
             provider,
@@ -560,8 +594,8 @@ impl Server {
             client_connections: Arc::new(RwLock::new(HashMap::new())),
             file_touches: Arc::new(RwLock::new(HashMap::new())),
             files_touched_by_session: Arc::new(RwLock::new(HashMap::new())),
-            swarm_members: Arc::new(RwLock::new(HashMap::new())),
-            swarms_by_id: Arc::new(RwLock::new(HashMap::new())),
+            swarm_members: Arc::new(RwLock::new(restored_swarm_members)),
+            swarms_by_id: Arc::new(RwLock::new(restored_swarms_by_id)),
             shared_context: Arc::new(RwLock::new(HashMap::new())),
             swarm_plans: Arc::new(RwLock::new(restored_swarm_plans)),
             swarm_coordinators: Arc::new(RwLock::new(restored_swarm_coordinators)),
@@ -578,6 +612,7 @@ impl Server {
             shutdown_signals: Arc::new(RwLock::new(HashMap::new())),
             soft_interrupt_queues: Arc::new(RwLock::new(HashMap::new())),
             await_members_runtime: AwaitMembersRuntime::default(),
+            swarm_mutation_runtime: SwarmMutationRuntime::default(),
         }
     }
 
@@ -724,6 +759,26 @@ impl Server {
                 monitor_swarm_event_tx,
             )
             .await;
+        });
+
+        let stale_swarm_members = Arc::clone(&self.swarm_members);
+        let stale_swarms_by_id = Arc::clone(&self.swarms_by_id);
+        let stale_swarm_plans = Arc::clone(&self.swarm_plans);
+        let stale_swarm_coordinators = Arc::clone(&self.swarm_coordinators);
+        tokio::spawn(async move {
+            let mut interval =
+                tokio::time::interval(crate::server::swarm::swarm_task_sweep_interval());
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                interval.tick().await;
+                refresh_swarm_task_staleness(
+                    &stale_swarm_members,
+                    &stale_swarms_by_id,
+                    &stale_swarm_plans,
+                    &stale_swarm_coordinators,
+                )
+                .await;
+            }
         });
 
         // Initialize the memory agent early so it's ready for all sessions

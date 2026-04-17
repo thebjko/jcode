@@ -14,7 +14,6 @@ type SessionAgents = Arc<RwLock<HashMap<String, Arc<Mutex<Agent>>>>>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum HistoryPayloadMode {
     Full,
-    MetadataOnly,
 }
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{Mutex, RwLock};
@@ -140,7 +139,9 @@ pub(super) async fn handle_get_history(
     Ok(())
 }
 
-fn render_history_messages_from_session(session: &crate::session::Session) -> Vec<crate::protocol::HistoryMessage> {
+fn render_history_messages_from_session(
+    session: &crate::session::Session,
+) -> Vec<crate::protocol::HistoryMessage> {
     crate::session::render_messages(session)
         .into_iter()
         .map(|msg| crate::protocol::HistoryMessage {
@@ -274,23 +275,13 @@ pub(super) async fn send_history(
         let agent_lock_ms = agent_lock_start.elapsed().as_millis();
         let provider = agent_guard.provider_handle();
 
-        let (messages, history_snapshot_ms) = match payload_mode {
-            HistoryPayloadMode::Full => {
-                let history_snapshot_start = Instant::now();
-                let messages = agent_guard.get_history();
-                (messages, history_snapshot_start.elapsed().as_millis())
-            }
-            HistoryPayloadMode::MetadataOnly => (Vec::new(), 0),
-        };
+        let history_snapshot_start = Instant::now();
+        let messages = agent_guard.get_history();
+        let history_snapshot_ms = history_snapshot_start.elapsed().as_millis();
 
-        let (images, image_render_ms) = match payload_mode {
-            HistoryPayloadMode::Full => {
-                let image_render_start = Instant::now();
-                let images = agent_guard.get_rendered_images();
-                (images, image_render_start.elapsed().as_millis())
-            }
-            HistoryPayloadMode::MetadataOnly => (Vec::new(), 0),
-        };
+        let image_render_start = Instant::now();
+        let images = agent_guard.get_rendered_images();
+        let image_render_ms = image_render_start.elapsed().as_millis();
 
         let tool_names_start = Instant::now();
         let tool_names = agent_guard.tool_names().await;
@@ -561,8 +552,8 @@ mod tests {
     use crate::tool::Registry;
     use anyhow::Result;
     use async_trait::async_trait;
-    use std::io::BufRead as _;
     use std::collections::HashMap;
+    use std::io::BufRead as _;
     use std::sync::Arc;
     use std::time::Instant;
     use tokio::io::AsyncReadExt;
@@ -696,7 +687,8 @@ mod tests {
             session_id.to_string(),
             Arc::clone(&agent),
         )])));
-        let client_connections = Arc::new(RwLock::new(HashMap::<String, ClientConnectionInfo>::new()));
+        let client_connections =
+            Arc::new(RwLock::new(HashMap::<String, ClientConnectionInfo>::new()));
         let client_count = Arc::new(RwLock::new(1usize));
 
         let (stream_a, mut stream_b) = crate::transport::stream_pair().expect("stream pair");

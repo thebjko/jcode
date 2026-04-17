@@ -1,3 +1,7 @@
+use super::swarm_mutation_state::{
+    PersistedSwarmMutationResponse, SwarmMutationRuntime, begin_or_replay, finish_request,
+    request_key,
+};
 use super::{
     SessionInterruptQueues, SharedContext, SwarmEvent, SwarmEventType, SwarmMember, VersionedPlan,
     broadcast_swarm_plan, persist_swarm_state_for, queue_soft_interrupt_for_session,
@@ -33,6 +37,7 @@ pub(super) async fn handle_comm_propose_plan(
     event_history: &Arc<RwLock<std::collections::VecDeque<SwarmEvent>>>,
     event_counter: &Arc<std::sync::atomic::AtomicU64>,
     swarm_event_tx: &broadcast::Sender<SwarmEvent>,
+    _swarm_mutation_runtime: &SwarmMutationRuntime,
 ) {
     let swarm_id = {
         let members = swarm_members.read().await;
@@ -125,7 +130,7 @@ pub(super) async fn handle_comm_propose_plan(
             .await;
         }
 
-        persist_swarm_state_for(&swarm_id, swarm_plans, swarm_coordinators).await;
+        persist_swarm_state_for(&swarm_id, swarm_plans, swarm_coordinators, swarm_members).await;
 
         broadcast_swarm_plan(
             &swarm_id,
@@ -269,6 +274,7 @@ pub(super) async fn handle_comm_approve_plan(
     event_history: &Arc<RwLock<std::collections::VecDeque<SwarmEvent>>>,
     event_counter: &Arc<std::sync::atomic::AtomicU64>,
     swarm_event_tx: &broadcast::Sender<SwarmEvent>,
+    swarm_mutation_runtime: &SwarmMutationRuntime,
 ) {
     let swarm_id = match require_coordinator_swarm(
         id,
@@ -284,6 +290,24 @@ pub(super) async fn handle_comm_approve_plan(
         None => return,
     };
 
+    let mutation_key = request_key(
+        &req_session_id,
+        "approve_plan",
+        &[swarm_id.clone(), proposer_session.clone()],
+    );
+    let Some(mutation_state) = begin_or_replay(
+        swarm_mutation_runtime,
+        &mutation_key,
+        "approve_plan",
+        &req_session_id,
+        id,
+        client_event_tx,
+    )
+    .await
+    else {
+        return;
+    };
+
     let proposal_key = format!("plan_proposal:{proposer_session}");
     let proposal_value = {
         let context = shared_context.read().await;
@@ -296,11 +320,15 @@ pub(super) async fn handle_comm_approve_plan(
     let proposal = match proposal_value {
         Some(proposal) => proposal,
         None => {
-            let _ = client_event_tx.send(ServerEvent::Error {
-                id,
-                message: format!("No pending plan proposal from session '{proposer_session}'"),
-                retry_after_secs: None,
-            });
+            finish_request(
+                swarm_mutation_runtime,
+                &mutation_state,
+                PersistedSwarmMutationResponse::Error {
+                    message: format!("No pending plan proposal from session '{proposer_session}'"),
+                    retry_after_secs: None,
+                },
+            )
+            .await;
             return;
         }
     };
@@ -389,10 +417,15 @@ pub(super) async fn handle_comm_approve_plan(
             }
         }
 
-        persist_swarm_state_for(&swarm_id, swarm_plans, swarm_coordinators).await;
+        persist_swarm_state_for(&swarm_id, swarm_plans, swarm_coordinators, swarm_members).await;
     }
 
-    let _ = client_event_tx.send(ServerEvent::Done { id });
+    finish_request(
+        swarm_mutation_runtime,
+        &mutation_state,
+        PersistedSwarmMutationResponse::Done,
+    )
+    .await;
 }
 
 #[expect(
@@ -413,6 +446,7 @@ pub(super) async fn handle_comm_reject_plan(
     event_history: &Arc<RwLock<std::collections::VecDeque<SwarmEvent>>>,
     event_counter: &Arc<std::sync::atomic::AtomicU64>,
     swarm_event_tx: &broadcast::Sender<SwarmEvent>,
+    swarm_mutation_runtime: &SwarmMutationRuntime,
 ) {
     let swarm_id = match require_coordinator_swarm(
         id,
@@ -428,6 +462,28 @@ pub(super) async fn handle_comm_reject_plan(
         None => return,
     };
 
+    let mutation_key = request_key(
+        &req_session_id,
+        "reject_plan",
+        &[
+            swarm_id.clone(),
+            proposer_session.clone(),
+            reason.clone().unwrap_or_default(),
+        ],
+    );
+    let Some(mutation_state) = begin_or_replay(
+        swarm_mutation_runtime,
+        &mutation_key,
+        "reject_plan",
+        &req_session_id,
+        id,
+        client_event_tx,
+    )
+    .await
+    else {
+        return;
+    };
+
     let proposal_key = format!("plan_proposal:{proposer_session}");
     let proposal_exists = {
         let context = shared_context.read().await;
@@ -438,11 +494,15 @@ pub(super) async fn handle_comm_reject_plan(
     };
 
     if !proposal_exists {
-        let _ = client_event_tx.send(ServerEvent::Error {
-            id,
-            message: format!("No pending plan proposal from session '{proposer_session}'"),
-            retry_after_secs: None,
-        });
+        finish_request(
+            swarm_mutation_runtime,
+            &mutation_state,
+            PersistedSwarmMutationResponse::Error {
+                message: format!("No pending plan proposal from session '{proposer_session}'"),
+                retry_after_secs: None,
+            },
+        )
+        .await;
         return;
     }
 
@@ -501,7 +561,12 @@ pub(super) async fn handle_comm_reject_plan(
     )
     .await;
 
-    let _ = client_event_tx.send(ServerEvent::Done { id });
+    finish_request(
+        swarm_mutation_runtime,
+        &mutation_state,
+        PersistedSwarmMutationResponse::Done,
+    )
+    .await;
 }
 
 async fn require_coordinator_swarm(

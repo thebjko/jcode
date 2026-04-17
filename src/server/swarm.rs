@@ -1,6 +1,6 @@
 use super::state::{MAX_EVENT_HISTORY, fanout_session_event};
-use super::{persist_swarm_state_for, remove_persisted_swarm_state_for};
 use super::{FileAccess, SwarmEvent, SwarmEventType, SwarmMember, VersionedPlan};
+use super::{persist_swarm_state_for, remove_persisted_swarm_state_for};
 use crate::agent::Agent;
 use crate::plan::PlanItem;
 use crate::protocol::{NotificationType, ServerEvent};
@@ -13,13 +13,20 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex as StdMutex, OnceLock};
-use std::time::Instant;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{Mutex, RwLock, broadcast};
 
 type ChannelSubscriptions = Arc<RwLock<HashMap<String, HashMap<String, HashSet<String>>>>>;
 
+fn status_age_secs(last_status_change: Instant) -> u64 {
+    last_status_change.elapsed().as_secs()
+}
+
 const DEFAULT_SWARM_STATUS_DEBOUNCE_MEMBER_THRESHOLD: usize = 2;
 const DEFAULT_SWARM_STATUS_DEBOUNCE_MS: u64 = 75;
+const DEFAULT_SWARM_TASK_HEARTBEAT_SECS: u64 = 10;
+const DEFAULT_SWARM_TASK_STALE_AFTER_SECS: u64 = 45;
+const DEFAULT_SWARM_TASK_SWEEP_INTERVAL_SECS: u64 = 5;
 
 #[derive(Default, Clone, Copy)]
 struct PendingSwarmStatusBroadcast {
@@ -62,6 +69,149 @@ fn swarm_status_debounce_ms() -> u64 {
         .load(Ordering::Relaxed)
 }
 
+fn configured_positive_u64(name: &str, default: u64) -> u64 {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(default)
+}
+
+pub(super) fn now_unix_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+pub(super) fn swarm_task_heartbeat_interval() -> Duration {
+    Duration::from_secs(configured_positive_u64(
+        "JCODE_SWARM_TASK_HEARTBEAT_SECS",
+        DEFAULT_SWARM_TASK_HEARTBEAT_SECS,
+    ))
+}
+
+pub(super) fn swarm_task_stale_after() -> Duration {
+    Duration::from_secs(configured_positive_u64(
+        "JCODE_SWARM_TASK_STALE_AFTER_SECS",
+        DEFAULT_SWARM_TASK_STALE_AFTER_SECS,
+    ))
+}
+
+pub(super) fn swarm_task_sweep_interval() -> Duration {
+    Duration::from_secs(configured_positive_u64(
+        "JCODE_SWARM_TASK_SWEEP_INTERVAL_SECS",
+        DEFAULT_SWARM_TASK_SWEEP_INTERVAL_SECS,
+    ))
+}
+
+pub(super) async fn touch_swarm_task_progress(
+    swarm_id: &str,
+    task_id: &str,
+    assigned_session_id: Option<&str>,
+    detail: Option<String>,
+    checkpoint_summary: Option<String>,
+    swarm_members: &Arc<RwLock<HashMap<String, SwarmMember>>>,
+    swarm_plans: &Arc<RwLock<HashMap<String, VersionedPlan>>>,
+    swarm_coordinators: &Arc<RwLock<HashMap<String, String>>>,
+) -> bool {
+    let now_ms = now_unix_ms();
+    let revived = {
+        let mut plans = swarm_plans.write().await;
+        let Some(plan) = plans.get_mut(swarm_id) else {
+            return false;
+        };
+        let Some(item) = plan.items.iter_mut().find(|item| item.id == task_id) else {
+            return false;
+        };
+        let progress = plan.task_progress.entry(task_id.to_string()).or_default();
+        if let Some(session_id) = assigned_session_id {
+            progress.assigned_session_id = Some(session_id.to_string());
+        }
+        progress.last_heartbeat_unix_ms = Some(now_ms);
+        progress.heartbeat_count = Some(progress.heartbeat_count.unwrap_or(0) + 1);
+        if let Some(detail) = detail {
+            progress.last_detail = Some(truncate_detail(&detail, 120));
+        }
+        if let Some(summary) = checkpoint_summary {
+            progress.last_checkpoint_unix_ms = Some(now_ms);
+            progress.checkpoint_summary = Some(truncate_detail(&summary, 120));
+            progress.checkpoint_count = Some(progress.checkpoint_count.unwrap_or(0) + 1);
+        }
+        if item.status == "running_stale" {
+            item.status = "running".to_string();
+            progress.stale_since_unix_ms = None;
+            plan.version += 1;
+            true
+        } else {
+            false
+        }
+    };
+    persist_swarm_state_for(swarm_id, swarm_plans, swarm_coordinators, swarm_members).await;
+    revived
+}
+
+pub(super) async fn refresh_swarm_task_staleness(
+    swarm_members: &Arc<RwLock<HashMap<String, SwarmMember>>>,
+    swarms_by_id: &Arc<RwLock<HashMap<String, HashSet<String>>>>,
+    swarm_plans: &Arc<RwLock<HashMap<String, VersionedPlan>>>,
+    swarm_coordinators: &Arc<RwLock<HashMap<String, String>>>,
+) {
+    let now_ms = now_unix_ms();
+    let stale_after_ms = swarm_task_stale_after().as_millis() as u64;
+    let changed_swarm_ids = {
+        let mut plans = swarm_plans.write().await;
+        let mut changed = Vec::new();
+        for (swarm_id, plan) in plans.iter_mut() {
+            let mut swarm_changed = false;
+            for item in &mut plan.items {
+                if !matches!(item.status.as_str(), "running" | "running_stale") {
+                    continue;
+                }
+                let progress = plan.task_progress.entry(item.id.clone()).or_default();
+                let last_heartbeat = progress
+                    .last_heartbeat_unix_ms
+                    .or(progress.started_at_unix_ms)
+                    .or(progress.assigned_at_unix_ms);
+                let is_stale = last_heartbeat
+                    .map(|ts| now_ms.saturating_sub(ts) >= stale_after_ms)
+                    .unwrap_or(true);
+                match (item.status.as_str(), is_stale) {
+                    ("running", true) => {
+                        item.status = "running_stale".to_string();
+                        progress.stale_since_unix_ms.get_or_insert(now_ms);
+                        plan.version += 1;
+                        swarm_changed = true;
+                    }
+                    ("running_stale", false) => {
+                        item.status = "running".to_string();
+                        progress.stale_since_unix_ms = None;
+                        plan.version += 1;
+                        swarm_changed = true;
+                    }
+                    _ => {}
+                }
+            }
+            if swarm_changed {
+                changed.push(swarm_id.clone());
+            }
+        }
+        changed
+    };
+
+    for swarm_id in changed_swarm_ids {
+        persist_swarm_state_for(&swarm_id, swarm_plans, swarm_coordinators, swarm_members).await;
+        broadcast_swarm_plan(
+            &swarm_id,
+            Some("task_staleness_changed".to_string()),
+            swarm_plans,
+            swarm_members,
+            swarms_by_id,
+        )
+        .await;
+    }
+}
+
 fn swarm_broadcast_key(
     swarm_id: &str,
     swarm_members: &Arc<RwLock<HashMap<String, SwarmMember>>>,
@@ -94,6 +244,9 @@ async fn broadcast_swarm_status_now(
                     status: m.status.clone(),
                     detail: m.detail.clone(),
                     role: Some(m.role.clone()),
+                    is_headless: Some(m.is_headless),
+                    live_attachments: Some(m.event_txs.len()),
+                    status_age_secs: Some(status_age_secs(m.last_status_change)),
                 })
         })
         .collect();
@@ -502,9 +655,10 @@ pub(super) async fn remove_session_from_swarm(
     }
 
     if swarm_plans.read().await.contains_key(swarm_id) {
-        persist_swarm_state_for(swarm_id, swarm_plans, swarm_coordinators).await;
+        persist_swarm_state_for(swarm_id, swarm_plans, swarm_coordinators, swarm_members).await;
     } else {
-        remove_persisted_swarm_state_for(swarm_id, swarm_plans).await;
+        remove_persisted_swarm_state_for(swarm_id, swarm_plans, swarm_coordinators, swarm_members)
+            .await;
     }
 
     broadcast_swarm_status(swarm_id, swarm_members, swarms_by_id).await;
@@ -864,8 +1018,8 @@ fn parse_swarm_tasks(text: &str) -> Vec<SwarmTaskSpec> {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_swarm_tasks, remove_session_from_swarm, summarize_plan_items, truncate_detail,
-        update_member_status,
+        now_unix_ms, parse_swarm_tasks, refresh_swarm_task_staleness, remove_session_from_swarm,
+        summarize_plan_items, touch_swarm_task_progress, truncate_detail, update_member_status,
     };
     use crate::plan::PlanItem;
     use crate::protocol::{NotificationType, ServerEvent};
@@ -972,6 +1126,7 @@ mod tests {
                 }],
                 version: 1,
                 participants: HashSet::from(["coord".to_string()]),
+                task_progress: HashMap::new(),
             },
         )])));
 
@@ -1205,5 +1360,89 @@ mod tests {
                 && members[0].status == "busy"
                 && members[0].detail.as_deref() == Some("working")
         ));
+    }
+
+    #[tokio::test]
+    async fn refresh_swarm_task_staleness_marks_running_tasks_stale_and_heartbeat_revives() {
+        let swarm_members = Arc::new(RwLock::new(HashMap::new()));
+        let swarms_by_id = Arc::new(RwLock::new(HashMap::from([(
+            "swarm-1".to_string(),
+            HashSet::from(["worker".to_string()]),
+        )])));
+        let swarm_coordinators = Arc::new(RwLock::new(HashMap::new()));
+        let now_ms = now_unix_ms();
+        let stale_age_ms = super::swarm_task_stale_after().as_millis() as u64 + 5_000;
+        let swarm_plans = Arc::new(RwLock::new(HashMap::from([(
+            "swarm-1".to_string(),
+            VersionedPlan {
+                items: vec![PlanItem {
+                    content: "task".to_string(),
+                    status: "running".to_string(),
+                    priority: "medium".to_string(),
+                    id: "task-1".to_string(),
+                    blocked_by: Vec::new(),
+                    assigned_to: Some("worker".to_string()),
+                }],
+                version: 1,
+                participants: HashSet::from(["worker".to_string()]),
+                task_progress: HashMap::from([(
+                    "task-1".to_string(),
+                    crate::server::SwarmTaskProgress {
+                        assigned_session_id: Some("worker".to_string()),
+                        started_at_unix_ms: Some(now_ms.saturating_sub(stale_age_ms)),
+                        last_heartbeat_unix_ms: Some(now_ms.saturating_sub(stale_age_ms)),
+                        ..Default::default()
+                    },
+                )]),
+            },
+        )])));
+        let (worker, _worker_rx) = swarm_member("worker", "agent", true);
+        swarm_members
+            .write()
+            .await
+            .insert("worker".to_string(), worker);
+
+        refresh_swarm_task_staleness(
+            &swarm_members,
+            &swarms_by_id,
+            &swarm_plans,
+            &swarm_coordinators,
+        )
+        .await;
+
+        {
+            let plans = swarm_plans.read().await;
+            let plan = plans.get("swarm-1").expect("plan");
+            assert_eq!(plan.items[0].status, "running_stale");
+            assert!(
+                plan.task_progress
+                    .get("task-1")
+                    .and_then(|progress| progress.stale_since_unix_ms)
+                    .is_some()
+            );
+        }
+
+        let revived = touch_swarm_task_progress(
+            "swarm-1",
+            "task-1",
+            Some("worker"),
+            Some("still working".to_string()),
+            Some("checkpoint saved".to_string()),
+            &swarm_members,
+            &swarm_plans,
+            &swarm_coordinators,
+        )
+        .await;
+        assert!(revived);
+
+        let plans = swarm_plans.read().await;
+        let plan = plans.get("swarm-1").expect("plan");
+        assert_eq!(plan.items[0].status, "running");
+        let progress = plan.task_progress.get("task-1").expect("progress");
+        assert_eq!(
+            progress.checkpoint_summary.as_deref(),
+            Some("checkpoint saved")
+        );
+        assert!(progress.stale_since_unix_ms.is_none());
     }
 }
