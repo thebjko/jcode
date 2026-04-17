@@ -16,7 +16,9 @@ use super::{
     queue_soft_interrupt_for_session, record_swarm_event, truncate_detail, update_member_status,
 };
 use crate::agent::Agent;
-use crate::plan::next_runnable_item_ids;
+use crate::plan::{
+    cycle_item_ids, missing_dependencies, next_runnable_item_ids, unresolved_dependencies,
+};
 use crate::protocol::{AwaitedMemberStatus, NotificationType, ServerEvent};
 use jcode_agent_runtime::SoftInterruptSource;
 use std::collections::{HashMap, HashSet};
@@ -1016,62 +1018,108 @@ pub(super) async fn handle_comm_assign_task(
         return;
     };
 
-    let (selected_task_id, task_content, participant_ids, plan_item_count) = {
-        let now_ms = now_unix_ms();
-        let mut plans = swarm_plans.write().await;
-        let plan = plans
-            .entry(swarm_id.clone())
-            .or_insert_with(VersionedPlan::new);
-        let selected_task_id = requested_task_id.clone().or_else(|| {
-            let next_ids = next_runnable_item_ids(&plan.items, None);
-            next_ids.into_iter().find(|candidate_id| {
-                plan.items
-                    .iter()
-                    .find(|item| item.id == *candidate_id)
-                    .map(|item| item.assigned_to.is_none())
-                    .unwrap_or(false)
+    let (selected_task_id, task_content, participant_ids, plan_item_count, blocked_reason) =
+        {
+            let now_ms = now_unix_ms();
+            let mut plans = swarm_plans.write().await;
+            let plan = plans
+                .entry(swarm_id.clone())
+                .or_insert_with(VersionedPlan::new);
+            let known_ids: HashSet<&str> = plan.items.iter().map(|item| item.id.as_str()).collect();
+            let completed_ids: HashSet<&str> = plan
+                .items
+                .iter()
+                .filter(|item| matches!(item.status.as_str(), "completed" | "done"))
+                .map(|item| item.id.as_str())
+                .collect();
+            let cycle_ids: HashSet<String> = cycle_item_ids(&plan.items).into_iter().collect();
+            let selected_task_id = requested_task_id.clone().or_else(|| {
+                let next_ids = next_runnable_item_ids(&plan.items, None);
+                next_ids.into_iter().find(|candidate_id| {
+                    plan.items
+                        .iter()
+                        .find(|item| item.id == *candidate_id)
+                        .map(|item| item.assigned_to.is_none())
+                        .unwrap_or(false)
+                })
+            });
+            let blocked_reason =
+                selected_task_id.as_ref().and_then(|selected_task_id| {
+                    requested_task_id.as_ref().and_then(|_| {
+                plan.items.iter().find(|item| item.id == *selected_task_id).and_then(|item| {
+                    let missing = missing_dependencies(item, &known_ids);
+                    if !missing.is_empty() {
+                        return Some(format!(
+                            "Task '{}' has missing dependencies: {}",
+                            item.id,
+                            missing.join(", ")
+                        ));
+                    }
+                    let unresolved = unresolved_dependencies(item, &known_ids, &completed_ids);
+                    if !unresolved.is_empty() {
+                        return Some(format!(
+                            "Task '{}' is still blocked by: {}",
+                            item.id,
+                            unresolved.join(", ")
+                        ));
+                    }
+                    if cycle_ids.contains(&item.id) {
+                        return Some(format!(
+                            "Task '{}' is part of a dependency cycle and is not runnable",
+                            item.id
+                        ));
+                    }
+                    None
+                })
             })
-        });
-        let found = selected_task_id.as_ref().and_then(|selected_task_id| {
-            plan.items
-                .iter_mut()
-                .find(|item| item.id == *selected_task_id)
-        });
-        if let Some(item) = found {
-            let content = item.content.clone();
-            item.assigned_to = Some(target_session.clone());
-            item.status = "queued".to_string();
-            plan.task_progress.insert(
-                item.id.clone(),
-                SwarmTaskProgress {
-                    assigned_session_id: Some(target_session.clone()),
-                    assignment_summary: Some(truncate_detail(
-                        &combine_assignment_text(&content, message.as_deref()),
-                        120,
-                    )),
-                    assigned_at_unix_ms: Some(now_ms),
-                    ..SwarmTaskProgress::default()
-                },
-            );
-            plan.version += 1;
-            plan.participants.insert(req_session_id.clone());
-            plan.participants.insert(target_session.clone());
-            (
-                Some(item.id.clone()),
-                Some(content),
-                plan.participants.clone(),
-                plan.items.len(),
-            )
-        } else {
-            (None, None, HashSet::new(), 0)
-        }
-    };
+                });
+            let found = if blocked_reason.is_some() {
+                None
+            } else {
+                selected_task_id.as_ref().and_then(|selected_task_id| {
+                    plan.items
+                        .iter_mut()
+                        .find(|item| item.id == *selected_task_id)
+                })
+            };
+            if let Some(item) = found {
+                let content = item.content.clone();
+                item.assigned_to = Some(target_session.clone());
+                item.status = "queued".to_string();
+                plan.task_progress.insert(
+                    item.id.clone(),
+                    SwarmTaskProgress {
+                        assigned_session_id: Some(target_session.clone()),
+                        assignment_summary: Some(truncate_detail(
+                            &combine_assignment_text(&content, message.as_deref()),
+                            120,
+                        )),
+                        assigned_at_unix_ms: Some(now_ms),
+                        ..SwarmTaskProgress::default()
+                    },
+                );
+                plan.version += 1;
+                plan.participants.insert(req_session_id.clone());
+                plan.participants.insert(target_session.clone());
+                (
+                    Some(item.id.clone()),
+                    Some(content),
+                    plan.participants.clone(),
+                    plan.items.len(),
+                    None,
+                )
+            } else {
+                (None, None, HashSet::new(), 0, blocked_reason)
+            }
+        };
 
     let Some(selected_task_id) = selected_task_id else {
-        let message = requested_task_id.as_ref().map_or_else(
-            || "No runnable unassigned tasks are available in the swarm plan".to_string(),
-            |task_id| format!("Task '{}' not found in swarm plan", task_id),
-        );
+        let message = blocked_reason.unwrap_or_else(|| {
+            requested_task_id.as_ref().map_or_else(
+                || "No runnable unassigned tasks are available in the swarm plan".to_string(),
+                |task_id| format!("Task '{}' not found in swarm plan", task_id),
+            )
+        });
         finish_swarm_mutation_request(
             swarm_mutation_runtime,
             &mutation_state,
@@ -1884,6 +1932,89 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn assign_task_rejects_explicit_blocked_task() {
+        let (_env, _runtime) = RuntimeEnvGuard::new();
+        let swarm_id = "swarm-blocked";
+        let requester = "coord";
+        let worker = "worker";
+        let (client_tx, mut client_rx) = mpsc::unbounded_channel();
+        let sessions = Arc::new(RwLock::new(HashMap::new()));
+        let soft_interrupt_queues = Arc::new(RwLock::new(HashMap::new()));
+        let client_connections = Arc::new(RwLock::new(HashMap::new()));
+        let swarm_members = Arc::new(RwLock::new(HashMap::from([
+            (requester.to_string(), {
+                let mut member = member(requester, swarm_id, "ready");
+                member.role = "coordinator".to_string();
+                member
+            }),
+            (worker.to_string(), member(worker, swarm_id, "ready")),
+        ])));
+        let swarms_by_id = Arc::new(RwLock::new(HashMap::from([(
+            swarm_id.to_string(),
+            HashSet::from([requester.to_string(), worker.to_string()]),
+        )])));
+        let swarm_plans = Arc::new(RwLock::new(HashMap::from([(
+            swarm_id.to_string(),
+            VersionedPlan {
+                items: vec![
+                    plan_item("setup", "completed", "high", &[]),
+                    plan_item("blocked", "queued", "high", &["missing-prereq"]),
+                ],
+                version: 1,
+                participants: HashSet::from([requester.to_string(), worker.to_string()]),
+                task_progress: HashMap::new(),
+            },
+        )])));
+        let swarm_coordinators = Arc::new(RwLock::new(HashMap::from([(
+            swarm_id.to_string(),
+            requester.to_string(),
+        )])));
+        let event_history = Arc::new(RwLock::new(VecDeque::new()));
+        let event_counter = Arc::new(AtomicU64::new(1));
+        let (swarm_event_tx, _swarm_event_rx) = broadcast::channel(32);
+        let mutation_runtime = SwarmMutationRuntime::default();
+
+        handle_comm_assign_task(
+            88,
+            requester.to_string(),
+            worker.to_string(),
+            Some("blocked".to_string()),
+            None,
+            &client_tx,
+            &sessions,
+            &soft_interrupt_queues,
+            &client_connections,
+            &swarm_members,
+            &swarms_by_id,
+            &swarm_plans,
+            &swarm_coordinators,
+            &event_history,
+            &event_counter,
+            &swarm_event_tx,
+            &mutation_runtime,
+        )
+        .await;
+
+        match client_rx.recv().await.expect("response") {
+            ServerEvent::Error { message, .. } => {
+                assert!(message.contains("missing dependencies") || message.contains("blocked"));
+            }
+            other => panic!("expected error for blocked task assignment, got {other:?}"),
+        }
+
+        let plans = swarm_plans.read().await;
+        let blocked = plans[swarm_id]
+            .items
+            .iter()
+            .find(|item| item.id == "blocked")
+            .expect("blocked task exists");
+        assert!(
+            blocked.assigned_to.is_none(),
+            "blocked task should stay unassigned"
+        );
+    }
+
+    #[tokio::test]
     async fn await_members_includes_late_joiners_when_watching_swarm() {
         let (_env, _runtime) = RuntimeEnvGuard::new();
         let swarm_id = "swarm-a";
@@ -2105,9 +2236,16 @@ mod tests {
                 summary,
                 ..
             } => {
-                assert!(completed, "await any should complete after first member matches");
-                assert!(summary.contains("peer-a"), "summary should mention matched member");
-                let done_members: Vec<_> = members.into_iter().filter(|member| member.done).collect();
+                assert!(
+                    completed,
+                    "await any should complete after first member matches"
+                );
+                assert!(
+                    summary.contains("peer-a"),
+                    "summary should mention matched member"
+                );
+                let done_members: Vec<_> =
+                    members.into_iter().filter(|member| member.done).collect();
                 assert_eq!(done_members.len(), 1);
                 assert_eq!(done_members[0].session_id, peer_a);
             }
