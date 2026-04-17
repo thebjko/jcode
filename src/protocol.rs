@@ -510,6 +510,9 @@ pub enum Request {
         /// Specific session IDs to watch. If empty, watches all non-self members.
         #[serde(default)]
         session_ids: Vec<String>,
+        /// Whether to wait for all matching members or wake when any member matches.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mode: Option<String>,
         /// Timeout in seconds (default 3600 = 1 hour)
         #[serde(default)]
         timeout_secs: Option<u64>,

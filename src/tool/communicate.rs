@@ -477,6 +477,8 @@ struct CommunicateInput {
     #[serde(default)]
     session_ids: Option<Vec<String>>,
     #[serde(default)]
+    mode: Option<String>,
+    #[serde(default)]
     timeout_minutes: Option<u64>,
     #[serde(default)]
     wake: Option<bool>,
@@ -555,6 +557,11 @@ impl Tool for CommunicateTool {
                 "session_ids": {
                     "type": "array",
                     "items": {"type": "string"}
+                },
+                "mode": {
+                    "type": "string",
+                    "enum": ["all", "any"],
+                    "description": "For await_members: wait for all targeted members or wake when any targeted member matches."
                 },
                 "target_status": {
                     "type": "array",
@@ -1177,6 +1184,7 @@ impl Tool for CommunicateTool {
                     session_id: ctx.session_id.clone(),
                     target_status,
                     session_ids,
+                    mode: params.mode.clone(),
                     timeout_secs: Some(timeout_secs),
                 };
 
@@ -1290,6 +1298,7 @@ mod tests {
         assert!(props.contains_key("limit"));
         assert!(props.contains_key("task_id"));
         assert!(props.contains_key("session_ids"));
+        assert!(props.contains_key("mode"));
         assert!(props.contains_key("target_status"));
         assert!(props.contains_key("timeout_minutes"));
         assert!(props.contains_key("wake"));

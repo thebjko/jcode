@@ -568,6 +568,39 @@ fn completion_summary(member_statuses: &[AwaitedMemberStatus]) -> String {
     )
 }
 
+fn completion_mode(mode: Option<&str>) -> &str {
+    match mode {
+        Some("any") => "any",
+        _ => "all",
+    }
+}
+
+fn mode_satisfied(member_statuses: &[AwaitedMemberStatus], mode: Option<&str>) -> bool {
+    match completion_mode(mode) {
+        "any" => member_statuses.iter().any(|status| status.done),
+        _ => member_statuses.iter().all(|status| status.done),
+    }
+}
+
+fn mode_summary(member_statuses: &[AwaitedMemberStatus], mode: Option<&str>) -> String {
+    match completion_mode(mode) {
+        "any" => {
+            let matching: Vec<String> = member_statuses
+                .iter()
+                .filter(|member| member.done)
+                .map(short_member_name)
+                .collect();
+            format!(
+                "Matched {} member{}: {}",
+                matching.len(),
+                if matching.len() == 1 { "" } else { "s" },
+                matching.join(", ")
+            )
+        }
+        _ => completion_summary(member_statuses),
+    }
+}
+
 fn deadline_to_instant(deadline_unix_ms: u64) -> tokio::time::Instant {
     let now_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -686,6 +719,7 @@ async fn spawn_or_resume_await_members(
     let swarm_id = state.swarm_id.clone();
     let requested_ids = state.requested_ids.clone();
     let target_status = state.target_status.clone();
+    let mode = state.mode.clone();
 
     tokio::spawn(async move {
         let mut event_rx = swarm_event_tx.subscribe();
@@ -709,8 +743,8 @@ async fn spawn_or_resume_await_members(
                 return;
             }
 
-            if member_statuses.iter().all(|status| status.done) {
-                let summary = completion_summary(&member_statuses);
+            if mode_satisfied(&member_statuses, mode.as_deref()) {
+                let summary = mode_summary(&member_statuses, mode.as_deref());
                 let _ =
                     persist_final_response(&state, true, member_statuses.clone(), summary.clone());
                 respond_to_waiters(&await_members_runtime, &key, true, member_statuses, summary)
@@ -998,9 +1032,11 @@ pub(super) async fn handle_comm_assign_task(
                     .unwrap_or(false)
             })
         });
-        let found = selected_task_id
-            .as_ref()
-            .and_then(|selected_task_id| plan.items.iter_mut().find(|item| item.id == *selected_task_id));
+        let found = selected_task_id.as_ref().and_then(|selected_task_id| {
+            plan.items
+                .iter_mut()
+                .find(|item| item.id == *selected_task_id)
+        });
         if let Some(item) = found {
             let content = item.content.clone();
             item.assigned_to = Some(target_session.clone());
@@ -1549,6 +1585,7 @@ pub(super) async fn handle_comm_await_members(
     req_session_id: String,
     target_status: Vec<String>,
     requested_ids: Vec<String>,
+    mode: Option<String>,
     timeout_secs: Option<u64>,
     client_event_tx: &mpsc::UnboundedSender<ServerEvent>,
     swarm_members: &Arc<RwLock<HashMap<String, SwarmMember>>>,
@@ -1564,7 +1601,13 @@ pub(super) async fn handle_comm_await_members(
     };
 
     if let Some(swarm_id) = swarm_id {
-        let key = request_key(&req_session_id, &swarm_id, &requested_ids, &target_status);
+        let key = request_key(
+            &req_session_id,
+            &swarm_id,
+            &requested_ids,
+            &target_status,
+            mode.as_deref(),
+        );
         let persisted = load_state(&key);
 
         if let Some(final_response) = persisted
@@ -1612,6 +1655,7 @@ pub(super) async fn handle_comm_await_members(
                 &swarm_id,
                 &requested_ids,
                 &target_status,
+                mode.as_deref(),
                 requested_deadline,
             )
         });
@@ -1760,14 +1804,11 @@ mod tests {
         let soft_interrupt_queues = Arc::new(RwLock::new(HashMap::new()));
         let client_connections = Arc::new(RwLock::new(HashMap::new()));
         let swarm_members = Arc::new(RwLock::new(HashMap::from([
-            (
-                requester.to_string(),
-                {
-                    let mut member = member(requester, swarm_id, "ready");
-                    member.role = "coordinator".to_string();
-                    member
-                },
-            ),
+            (requester.to_string(), {
+                let mut member = member(requester, swarm_id, "ready");
+                member.role = "coordinator".to_string();
+                member
+            }),
             (worker.to_string(), member(worker, swarm_id, "ready")),
         ])));
         let swarms_by_id = Arc::new(RwLock::new(HashMap::from([(
@@ -1836,7 +1877,10 @@ mod tests {
             .iter()
             .find(|item| item.id == "blocked")
             .expect("blocked task exists");
-        assert!(blocked.assigned_to.is_none(), "blocked task should not be auto-assigned");
+        assert!(
+            blocked.assigned_to.is_none(),
+            "blocked task should not be auto-assigned"
+        );
     }
 
     #[tokio::test]
@@ -1867,6 +1911,7 @@ mod tests {
             requester.to_string(),
             vec!["completed".to_string()],
             vec![],
+            None,
             Some(2),
             &client_tx,
             &swarm_members,
@@ -1971,6 +2016,7 @@ mod tests {
             requester.to_string(),
             vec!["completed".to_string()],
             vec![],
+            None,
             Some(60),
             &client_tx,
             &swarm_members,
@@ -1995,6 +2041,81 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn await_members_any_mode_returns_after_first_match() {
+        let (_env, _runtime) = RuntimeEnvGuard::new();
+        let swarm_id = "swarm-any";
+        let requester = "req";
+        let peer_a = "peer-a";
+        let peer_b = "peer-b";
+        let await_runtime = AwaitMembersRuntime::default();
+
+        let (client_tx, mut client_rx) = mpsc::unbounded_channel();
+        let swarm_members = Arc::new(RwLock::new(HashMap::from([
+            (requester.to_string(), member(requester, swarm_id, "ready")),
+            (peer_a.to_string(), member(peer_a, swarm_id, "running")),
+            (peer_b.to_string(), member(peer_b, swarm_id, "running")),
+        ])));
+        let swarms_by_id = Arc::new(RwLock::new(HashMap::from([(
+            swarm_id.to_string(),
+            HashSet::from([
+                requester.to_string(),
+                peer_a.to_string(),
+                peer_b.to_string(),
+            ]),
+        )])));
+        let (swarm_event_tx, _swarm_event_rx) = broadcast::channel(32);
+
+        handle_comm_await_members(
+            1,
+            requester.to_string(),
+            vec!["completed".to_string()],
+            vec![],
+            Some("any".to_string()),
+            Some(60),
+            &client_tx,
+            &swarm_members,
+            &swarms_by_id,
+            &swarm_event_tx,
+            &await_runtime,
+        )
+        .await;
+
+        {
+            let mut members = swarm_members.write().await;
+            members.get_mut(peer_a).expect("peer a exists").status = "completed".to_string();
+        }
+        let _ = swarm_event_tx.send(swarm_event(
+            peer_a,
+            swarm_id,
+            SwarmEventType::StatusChange {
+                old_status: "running".to_string(),
+                new_status: "completed".to_string(),
+            },
+        ));
+
+        let response = tokio::time::timeout(Duration::from_secs(1), client_rx.recv())
+            .await
+            .expect("response should arrive")
+            .expect("channel should stay open");
+
+        match response {
+            ServerEvent::CommAwaitMembersResponse {
+                completed,
+                members,
+                summary,
+                ..
+            } => {
+                assert!(completed, "await any should complete after first member matches");
+                assert!(summary.contains("peer-a"), "summary should mention matched member");
+                let done_members: Vec<_> = members.into_iter().filter(|member| member.done).collect();
+                assert_eq!(done_members.len(), 1);
+                assert_eq!(done_members[0].session_id, peer_a);
+            }
+            other => panic!("expected CommAwaitMembersResponse, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn await_members_reuses_persisted_deadline_after_reload_retry() {
         let (_env, _runtime_dir) = RuntimeEnvGuard::new();
         let swarm_id = "swarm-c";
@@ -2005,6 +2126,7 @@ mod tests {
             swarm_id,
             &[],
             &["completed".to_string()],
+            None,
         );
         let now_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -2017,6 +2139,7 @@ mod tests {
                 swarm_id: swarm_id.to_string(),
                 target_status: vec!["completed".to_string()],
                 requested_ids: vec![],
+                mode: None,
                 created_at_unix_ms: now_ms,
                 deadline_unix_ms: now_ms + 150,
                 final_response: None,
@@ -2040,6 +2163,7 @@ mod tests {
             requester.to_string(),
             vec!["completed".to_string()],
             vec![],
+            None,
             Some(60),
             &client_tx,
             &swarm_members,
@@ -2081,6 +2205,7 @@ mod tests {
             swarm_id,
             &[],
             &["completed".to_string()],
+            None,
         );
         let now_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -2093,6 +2218,7 @@ mod tests {
                 swarm_id: swarm_id.to_string(),
                 target_status: vec!["completed".to_string()],
                 requested_ids: vec![],
+                mode: None,
                 created_at_unix_ms: now_ms,
                 deadline_unix_ms: now_ms + 60_000,
                 final_response: Some(
@@ -2128,6 +2254,7 @@ mod tests {
             requester.to_string(),
             vec!["completed".to_string()],
             vec![],
+            None,
             Some(60),
             &client_tx,
             &swarm_members,

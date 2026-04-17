@@ -1564,6 +1564,7 @@ pub(super) async fn handle_client(
                 session_id: req_session_id,
                 target_status,
                 session_ids: requested_ids,
+                mode,
                 timeout_secs,
             } => {
                 handle_comm_await_members(
@@ -1571,6 +1572,7 @@ pub(super) async fn handle_client(
                     req_session_id,
                     target_status,
                     requested_ids,
+                    mode,
                     timeout_secs,
                     &client_event_tx,
                     &swarm_members,

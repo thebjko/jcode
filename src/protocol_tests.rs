@@ -276,6 +276,7 @@ fn test_comm_await_members_roundtrip() -> Result<()> {
         session_id: "sess_waiter".to_string(),
         target_status: vec!["completed".to_string(), "stopped".to_string()],
         session_ids: vec!["sess_a".to_string(), "sess_b".to_string()],
+        mode: Some("any".to_string()),
         timeout_secs: Some(120),
     };
     let json = serde_json::to_string(&req)?;
@@ -286,6 +287,7 @@ fn test_comm_await_members_roundtrip() -> Result<()> {
         session_id,
         target_status,
         session_ids,
+        mode,
         timeout_secs,
         ..
     } = decoded
@@ -295,6 +297,7 @@ fn test_comm_await_members_roundtrip() -> Result<()> {
     assert_eq!(session_id, "sess_waiter");
     assert_eq!(target_status, vec!["completed", "stopped"]);
     assert_eq!(session_ids, vec!["sess_a", "sess_b"]);
+    assert_eq!(mode.as_deref(), Some("any"));
     assert_eq!(timeout_secs, Some(120));
     Ok(())
 }
@@ -306,6 +309,7 @@ fn test_comm_await_members_defaults() -> Result<()> {
     let decoded = parse_request_json(json)?;
     let Request::CommAwaitMembers {
         session_ids,
+        mode,
         timeout_secs,
         ..
     } = decoded
@@ -316,6 +320,7 @@ fn test_comm_await_members_defaults() -> Result<()> {
         session_ids.is_empty(),
         "session_ids should default to empty"
     );
+    assert_eq!(mode, None, "mode should default to None");
     assert_eq!(timeout_secs, None, "timeout_secs should default to None");
     Ok(())
 }

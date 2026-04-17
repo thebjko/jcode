@@ -26,6 +26,8 @@ pub struct PersistedAwaitMembersState {
     pub swarm_id: String,
     pub target_status: Vec<String>,
     pub requested_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
     pub created_at_unix_ms: u64,
     pub deadline_unix_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -138,6 +140,7 @@ pub(super) fn request_key(
     swarm_id: &str,
     requested_ids: &[String],
     target_status: &[String],
+    mode: Option<&str>,
 ) -> String {
     let mut requested = requested_ids.to_vec();
     requested.sort();
@@ -150,6 +153,7 @@ pub(super) fn request_key(
     swarm_id.hash(&mut hasher);
     requested.hash(&mut hasher);
     target.hash(&mut hasher);
+    mode.unwrap_or("all").hash(&mut hasher);
     format!(
         "{}-{:016x}",
         sanitize_session_id(session_id),
@@ -196,6 +200,7 @@ pub(super) fn ensure_pending_state(
     swarm_id: &str,
     requested_ids: &[String],
     target_status: &[String],
+    mode: Option<&str>,
     deadline_unix_ms: u64,
 ) -> PersistedAwaitMembersState {
     if let Some(existing) = load_state(key) {
@@ -208,6 +213,7 @@ pub(super) fn ensure_pending_state(
         swarm_id: swarm_id.to_string(),
         target_status: target_status.to_vec(),
         requested_ids: requested_ids.to_vec(),
+        mode: mode.map(str::to_string),
         created_at_unix_ms: now_unix_ms(),
         deadline_unix_ms,
         final_response: None,
