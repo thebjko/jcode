@@ -55,6 +55,15 @@ impl MacTerminalKind {
             _ => None,
         }
     }
+
+    fn open_command_app_and_args(self) -> Option<(&'static str, &'static str)> {
+        match self {
+            Self::Ghostty => Some(("Ghostty", "-e /bin/bash -lc")),
+            Self::Alacritty => Some(("Alacritty", "-e /bin/bash -lc")),
+            Self::WezTerm => Some(("WezTerm", "start --always-new-process -- /bin/bash -lc")),
+            Self::Iterm2 | Self::AppleTerminal | Self::Warp | Self::Vscode | Self::Unknown => None,
+        }
+    }
 }
 
 impl fmt::Display for MacTerminalKind {
@@ -134,8 +143,27 @@ pub(super) fn escape_applescript_text(input: &str) -> String {
 pub(super) fn paused_jcode_shell_command(exe_path: &str) -> String {
     let escaped_exe = escape_shell_single_quotes(exe_path);
     format!(
-        "if [ ! -x '{exe}' ]; then printf 'jcode executable not found.\\n'; exit 127; fi; '{exe}'; status=$?; if [ \"$status\" -ne 0 ]; then printf '\\nJcode exited with status %s.\\n' \"$status\"; printf 'Press Enter to close... '; read -r _; fi; exit \"$status\"",
+        r#"if [ ! -x '{exe}' ]; then printf 'jcode executable not found.\n'; exit 127; fi; '{exe}'; status=$?; if [ "$status" -ne 0 ]; then printf '\nJcode exited with status %s.\n' "$status"; printf 'Press Enter to close... '; read -r _; fi; exit "$status""#,
         exe = escaped_exe,
+    )
+}
+
+fn open_command_for_terminal(app_name: &str, app_args: &str, shell_command: &str) -> String {
+    let escaped_shell = escape_shell_single_quotes(shell_command);
+    format!("/usr/bin/open -na {app_name} --args {app_args} '{escaped_shell}'")
+}
+
+fn applescript_command_for_terminal(app_name: &str, shell_command: &str) -> String {
+    format!(
+        "/usr/bin/osascript <<'APPLESCRIPT'\ntell application \"{app_name}\"\n    activate\n    do script \"{}\"\nend tell\nAPPLESCRIPT",
+        escape_applescript_text(shell_command)
+    )
+}
+
+fn applescript_command_for_iterm(shell_command: &str) -> String {
+    format!(
+        "/usr/bin/osascript <<'APPLESCRIPT'\ntell application \"iTerm2\"\n    create window with default profile command \"{}\"\n    activate\nend tell\nAPPLESCRIPT",
+        escape_applescript_text(shell_command)
     )
 }
 
@@ -143,28 +171,19 @@ pub(super) fn launch_command_for_macos_terminal(
     terminal: MacTerminalKind,
     shell_command: &str,
 ) -> String {
-    let escaped_shell = escape_shell_single_quotes(shell_command);
+    if let Some((app_name, app_args)) = terminal.open_command_app_and_args() {
+        return open_command_for_terminal(app_name, app_args, shell_command);
+    }
+
     match terminal {
-        MacTerminalKind::Ghostty => {
-            format!("/usr/bin/open -na Ghostty --args -e /bin/bash -lc '{escaped_shell}'")
-        }
-        MacTerminalKind::Alacritty => {
-            format!("/usr/bin/open -na Alacritty --args -e /bin/bash -lc '{escaped_shell}'")
-        }
-        MacTerminalKind::WezTerm => format!(
-            "/usr/bin/open -na WezTerm --args start --always-new-process -- /bin/bash -lc '{escaped_shell}'"
-        ),
-        MacTerminalKind::Iterm2 => format!(
-            "/usr/bin/osascript <<'APPLESCRIPT'\ntell application \"iTerm2\"\n    create window with default profile command \"{}\"\n    activate\nend tell\nAPPLESCRIPT",
-            escape_applescript_text(shell_command)
-        ),
+        MacTerminalKind::Iterm2 => applescript_command_for_iterm(shell_command),
         MacTerminalKind::AppleTerminal
         | MacTerminalKind::Warp
         | MacTerminalKind::Vscode
-        | MacTerminalKind::Unknown => format!(
-            "/usr/bin/osascript <<'APPLESCRIPT'\ntell application \"Terminal\"\n    activate\n    do script \"{}\"\nend tell\nAPPLESCRIPT",
-            escape_applescript_text(shell_command)
-        ),
+        | MacTerminalKind::Unknown => applescript_command_for_terminal("Terminal", shell_command),
+        MacTerminalKind::Ghostty | MacTerminalKind::WezTerm | MacTerminalKind::Alacritty => {
+            unreachable!("open-command terminals should be handled above")
+        }
     }
 }
 
@@ -177,4 +196,50 @@ pub(super) fn launch_script_for_macos_terminal(
         "#!/bin/bash\nset -e\n{}\n",
         launch_command_for_macos_terminal(terminal, shell_command)
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        MacTerminalKind, applescript_command_for_iterm, applescript_command_for_terminal,
+        launch_command_for_macos_terminal, open_command_for_terminal,
+    };
+
+    #[test]
+    fn open_command_terminals_use_open_with_expected_args() {
+        let shell_command = "printf 'hi'";
+        assert_eq!(
+            launch_command_for_macos_terminal(MacTerminalKind::Ghostty, shell_command),
+            open_command_for_terminal("Ghostty", "-e /bin/bash -lc", shell_command)
+        );
+        assert_eq!(
+            launch_command_for_macos_terminal(MacTerminalKind::Alacritty, shell_command),
+            open_command_for_terminal("Alacritty", "-e /bin/bash -lc", shell_command)
+        );
+        assert_eq!(
+            launch_command_for_macos_terminal(MacTerminalKind::WezTerm, shell_command),
+            open_command_for_terminal(
+                "WezTerm",
+                "start --always-new-process -- /bin/bash -lc",
+                shell_command,
+            )
+        );
+    }
+
+    #[test]
+    fn applescript_terminals_use_expected_launcher_commands() {
+        let shell_command = r#"echo "hi""#;
+        assert_eq!(
+            launch_command_for_macos_terminal(MacTerminalKind::Iterm2, shell_command),
+            applescript_command_for_iterm(shell_command)
+        );
+        assert_eq!(
+            launch_command_for_macos_terminal(MacTerminalKind::AppleTerminal, shell_command),
+            applescript_command_for_terminal("Terminal", shell_command)
+        );
+        assert_eq!(
+            launch_command_for_macos_terminal(MacTerminalKind::Warp, shell_command),
+            applescript_command_for_terminal("Terminal", shell_command)
+        );
+    }
 }
