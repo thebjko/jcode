@@ -5,7 +5,7 @@ use std::collections::{HashSet, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 use std::sync::OnceLock;
 
-const IDLE_VARIANTS: &[&str] = &["donut", "three_rings", "orbit_rings", "cube"];
+const IDLE_VARIANTS: &[&str] = &["donut", "three_rings", "orbit_rings"];
 
 fn rotate_xyz(x: f32, y: f32, z: f32, ax: f32, ay: f32, az: f32) -> (f32, f32, f32) {
     let (sx, cx) = ax.sin_cos();
@@ -155,14 +155,6 @@ pub(super) fn draw_idle_animation(frame: &mut Frame, app: &dyn TuiState, area: R
                 &mut bufs.lum_map,
                 &mut bufs.z_buf,
             ),
-            "cube" => sample_cube(
-                elapsed,
-                sw,
-                sh,
-                &mut bufs.hit,
-                &mut bufs.lum_map,
-                &mut bufs.z_buf,
-            ),
             "black_hole" => sample_black_hole(
                 elapsed,
                 sw,
@@ -301,143 +293,6 @@ fn sample_donut(
 
 fn idle_animation_variant() -> &'static str {
     choose_animation_variant(IDLE_VARIANTS, 0x4944_4c45_414e_494d)
-}
-
-#[expect(
-    clippy::too_many_arguments,
-    reason = "animation sampler is math-heavy and the hot-path scalar arguments are intentionally kept flat"
-)]
-fn plot_idle_sample(
-    sw: usize,
-    sh: usize,
-    hit: &mut [bool],
-    lum_map: &mut [f32],
-    z_buf: &mut [f32],
-    x: f32,
-    y: f32,
-    z: f32,
-    cam_dist: f32,
-    scale_base: f32,
-    aspect: f32,
-    lum: f32,
-) {
-    let d = cam_dist + z;
-    if d < 0.1 {
-        return;
-    }
-
-    let proj = cam_dist / d;
-    let xp = (sw as f32 / 2.0 + x * proj * scale_base) as isize;
-    let yp = (sh as f32 / 2.0 - y * proj * scale_base * aspect) as isize;
-    if xp < 0 || (xp as usize) >= sw || yp < 0 || (yp as usize) >= sh {
-        return;
-    }
-
-    let idx = yp as usize * sw + xp as usize;
-    let depth = 1.0 / d;
-    if depth > z_buf[idx] {
-        z_buf[idx] = depth;
-        lum_map[idx] = lum.clamp(-1.0, 1.0);
-        hit[idx] = true;
-    }
-}
-
-fn sample_cube(
-    elapsed: f32,
-    sw: usize,
-    sh: usize,
-    hit: &mut [bool],
-    lum_map: &mut [f32],
-    z_buf: &mut [f32],
-) {
-    let rot_x = elapsed * 0.65 + (elapsed * 0.8).sin() * 0.20;
-    let rot_y = elapsed * 0.95;
-    let rot_z = elapsed * 0.35 + (elapsed * 0.55).cos() * 0.12;
-    let cam_dist = 6.8f32;
-    let aspect = 0.5f32;
-    let scale_base = (sw as f32).min(sh as f32 / aspect) * 0.14;
-    let s = 1.45f32;
-
-    let faces = [
-        (1.0f32, 0.0f32, 0.0f32),
-        (-1.0, 0.0, 0.0),
-        (0.0, 1.0, 0.0),
-        (0.0, -1.0, 0.0),
-        (0.0, 0.0, 1.0),
-        (0.0, 0.0, -1.0),
-    ];
-
-    for &(nx0, ny0, nz0) in &faces {
-        let (rnx, rny, rnz) = rotate_xyz(nx0, ny0, nz0, rot_x, rot_y, rot_z);
-        let face_lum = (rnx * 0.25 + rny * 0.15 + rnz * 0.90).clamp(-1.0, 1.0);
-        if face_lum < -0.25 {
-            continue;
-        }
-
-        let mut u = -s;
-        while u <= s {
-            let mut v = -s;
-            while v <= s {
-                let (x, y, z) = if nx0 != 0.0 {
-                    (nx0 * s, u, v)
-                } else if ny0 != 0.0 {
-                    (u, ny0 * s, v)
-                } else {
-                    (u, v, nz0 * s)
-                };
-                let (rx, ry, rz) = rotate_xyz(x, y, z, rot_x, rot_y, rot_z);
-                plot_idle_sample(
-                    sw, sh, hit, lum_map, z_buf, rx, ry, rz, cam_dist, scale_base, aspect, face_lum,
-                );
-                v += 0.20;
-            }
-            u += 0.20;
-        }
-    }
-
-    let verts: [(f32, f32, f32); 8] = [
-        (-s, -s, -s),
-        (s, -s, -s),
-        (s, s, -s),
-        (-s, s, -s),
-        (-s, -s, s),
-        (s, -s, s),
-        (s, s, s),
-        (-s, s, s),
-    ];
-    let edges: [(usize, usize); 12] = [
-        (0, 1),
-        (1, 2),
-        (2, 3),
-        (3, 0),
-        (4, 5),
-        (5, 6),
-        (6, 7),
-        (7, 4),
-        (0, 4),
-        (1, 5),
-        (2, 6),
-        (3, 7),
-    ];
-    let rotated: Vec<(f32, f32, f32)> = verts
-        .iter()
-        .map(|&(x, y, z)| rotate_xyz(x, y, z, rot_x, rot_y, rot_z))
-        .collect();
-
-    for &(a, b) in &edges {
-        let (x0, y0, z0) = rotated[a];
-        let (x1, y1, z1) = rotated[b];
-        for step in 0..=72 {
-            let t = step as f32 / 72.0;
-            let x = x0 + (x1 - x0) * t;
-            let y = y0 + (y1 - y0) * t;
-            let z = z0 + (z1 - z0) * t;
-            let edge_lum = (0.55 + z * 0.12).clamp(-1.0, 1.0);
-            plot_idle_sample(
-                sw, sh, hit, lum_map, z_buf, x, y, z, cam_dist, scale_base, aspect, edge_lum,
-            );
-        }
-    }
 }
 
 fn sample_black_hole(
@@ -1034,11 +889,11 @@ mod tests {
     }
 
     #[test]
-    fn idle_variants_keep_normal_donut_and_include_cube() {
+    fn idle_variants_keep_normal_donut_and_exclude_cube() {
         assert!(IDLE_VARIANTS.contains(&"donut"));
         assert!(!IDLE_VARIANTS.contains(&"pulse_donut"));
         assert!(IDLE_VARIANTS.contains(&"orbit_rings"));
-        assert!(IDLE_VARIANTS.contains(&"cube"));
+        assert!(!IDLE_VARIANTS.contains(&"cube"));
     }
 
     #[test]
@@ -1057,30 +912,14 @@ mod tests {
     }
 
     #[test]
-    fn cube_idle_sampler_marks_pixels() {
-        let sw = 120;
-        let sh = 60;
-        let mut hit = vec![false; sw * sh];
-        let mut lum_map = vec![0.0; sw * sh];
-        let mut z_buf = vec![0.0; sw * sh];
-
-        sample_cube(0.8, sw, sh, &mut hit, &mut lum_map, &mut z_buf);
-
-        let lit_pixels = hit.iter().filter(|&&value| value).count();
-        assert!(lit_pixels > (sw * sh) / 40);
-    }
-
-    #[test]
     fn idle_animation_samplers_avoid_heavy_border_clipping() {
         assert_idle_sampler_avoids_heavy_border_clipping("donut", sample_donut);
         assert_idle_sampler_avoids_heavy_border_clipping("three_rings", sample_gyroscope);
         assert_idle_sampler_avoids_heavy_border_clipping("orbit_rings", sample_orbit_rings);
-        assert_idle_sampler_avoids_heavy_border_clipping("cube", sample_cube);
     }
 
     #[test]
-    fn cube_and_three_rings_fit_small_viewports_without_touching_border() {
+    fn three_rings_fit_small_viewports_without_touching_border() {
         assert_idle_sampler_stays_off_border_on_small_viewports("three_rings", sample_gyroscope);
-        assert_idle_sampler_stays_off_border_on_small_viewports("cube", sample_cube);
     }
 }
