@@ -1023,7 +1023,9 @@ mod tests {
             _system: &str,
             _resume_session_id: Option<&str>,
         ) -> Result<EventStream> {
-            unimplemented!("test provider")
+            Err(anyhow::anyhow!(
+                "TestProvider should not be used for streaming completions in ambient runner tests"
+            ))
         }
 
         fn name(&self) -> &str {
