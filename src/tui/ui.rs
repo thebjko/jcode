@@ -862,11 +862,12 @@ const BODY_CACHE_MAX_ENTRIES: usize = 8;
 // Keep enough room for a single large transcript snapshot so long sessions do not
 // fall off a hard per-entry cache cliff and get rebuilt every frame.
 const BODY_CACHE_MAX_BYTES: usize = 32 * 1024 * 1024;
+const BODY_OVERSIZED_CACHE_MAX_ENTRIES: usize = 2;
 
 #[derive(Default)]
 struct BodyCacheState {
     entries: VecDeque<BodyCacheEntry>,
-    oversized_entry: Option<BodyCacheEntry>,
+    oversized_entries: VecDeque<BodyCacheEntry>,
 }
 
 impl BodyCacheState {
@@ -881,10 +882,14 @@ impl BodyCacheState {
             self.entries.push_front(entry);
             Some(prepared)
         } else {
-            self.oversized_entry
-                .as_ref()
-                .filter(|entry| &entry.key == key)
-                .map(|entry| entry.prepared.clone())
+            let pos = self
+                .oversized_entries
+                .iter()
+                .position(|entry| &entry.key == key)?;
+            let entry = self.oversized_entries.remove(pos)?;
+            let prepared = entry.prepared.clone();
+            self.oversized_entries.push_front(entry);
+            Some(prepared)
         }
     }
 
@@ -907,8 +912,8 @@ impl BodyCacheState {
             .max_by_key(|entry| entry.msg_count)
             .map(|entry| (entry.prepared.clone(), entry.msg_count));
         let oversized = self
-            .oversized_entry
-            .as_ref()
+            .oversized_entries
+            .iter()
             .filter(|entry| {
                 entry.msg_count > 0
                     && msg_count > entry.msg_count
@@ -917,6 +922,7 @@ impl BodyCacheState {
                     && entry.key.diagram_mode == key.diagram_mode
                     && entry.key.centered == key.centered
             })
+            .max_by_key(|entry| entry.msg_count)
             .map(|entry| (entry.prepared.clone(), entry.msg_count));
 
         match (regular, oversized) {
@@ -935,20 +941,30 @@ impl BodyCacheState {
     fn insert(&mut self, key: BodyCacheKey, prepared: Arc<PreparedMessages>, msg_count: usize) {
         let prepared_bytes = estimate_prepared_messages_bytes(&prepared);
         if prepared_bytes > BODY_CACHE_MAX_BYTES {
-            self.oversized_entry = Some(BodyCacheEntry {
+            if let Some(pos) = self
+                .oversized_entries
+                .iter()
+                .position(|entry| entry.key == key)
+            {
+                self.oversized_entries.remove(pos);
+            }
+            self.oversized_entries.push_front(BodyCacheEntry {
                 key,
                 prepared,
                 prepared_bytes,
                 msg_count,
             });
+            while self.oversized_entries.len() > BODY_OVERSIZED_CACHE_MAX_ENTRIES {
+                self.oversized_entries.pop_back();
+            }
             return;
         }
-        if self
-            .oversized_entry
-            .as_ref()
-            .is_some_and(|entry| entry.key == key)
+        if let Some(pos) = self
+            .oversized_entries
+            .iter()
+            .position(|entry| entry.key == key)
         {
-            self.oversized_entry = None;
+            self.oversized_entries.remove(pos);
         }
         if let Some(pos) = self.entries.iter().position(|entry| entry.key == key) {
             self.entries.remove(pos);
@@ -998,11 +1014,12 @@ const FULL_PREP_CACHE_MAX_ENTRIES: usize = 4;
 // Full prepared frames duplicate some body data, so give them enough headroom to
 // retain the active large transcript instead of forcing full recomposition.
 const FULL_PREP_CACHE_MAX_BYTES: usize = 24 * 1024 * 1024;
+const FULL_PREP_OVERSIZED_CACHE_MAX_ENTRIES: usize = 2;
 
 #[derive(Default)]
 struct FullPrepCacheState {
     entries: VecDeque<FullPrepCacheEntry>,
-    oversized_entry: Option<FullPrepCacheEntry>,
+    oversized_entries: VecDeque<FullPrepCacheEntry>,
 }
 
 impl FullPrepCacheState {
@@ -1017,29 +1034,43 @@ impl FullPrepCacheState {
             self.entries.push_front(entry);
             Some(prepared)
         } else {
-            self.oversized_entry
-                .as_ref()
-                .filter(|entry| &entry.key == key)
-                .map(|entry| entry.prepared.clone())
+            let pos = self
+                .oversized_entries
+                .iter()
+                .position(|entry| &entry.key == key)?;
+            let entry = self.oversized_entries.remove(pos)?;
+            let prepared = entry.prepared.clone();
+            self.oversized_entries.push_front(entry);
+            Some(prepared)
         }
     }
 
     fn insert(&mut self, key: FullPrepCacheKey, prepared: Arc<PreparedMessages>) {
         let prepared_bytes = estimate_prepared_messages_bytes(&prepared);
         if prepared_bytes > FULL_PREP_CACHE_MAX_BYTES {
-            self.oversized_entry = Some(FullPrepCacheEntry {
+            if let Some(pos) = self
+                .oversized_entries
+                .iter()
+                .position(|entry| entry.key == key)
+            {
+                self.oversized_entries.remove(pos);
+            }
+            self.oversized_entries.push_front(FullPrepCacheEntry {
                 key,
                 prepared,
                 prepared_bytes,
             });
+            while self.oversized_entries.len() > FULL_PREP_OVERSIZED_CACHE_MAX_ENTRIES {
+                self.oversized_entries.pop_back();
+            }
             return;
         }
-        if self
-            .oversized_entry
-            .as_ref()
-            .is_some_and(|entry| entry.key == key)
+        if let Some(pos) = self
+            .oversized_entries
+            .iter()
+            .position(|entry| entry.key == key)
         {
-            self.oversized_entry = None;
+            self.oversized_entries.remove(pos);
         }
         if let Some(pos) = self.entries.iter().position(|entry| entry.key == key) {
             self.entries.remove(pos);

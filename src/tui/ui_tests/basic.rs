@@ -367,7 +367,38 @@ fn test_body_cache_state_retains_oversized_hot_entry() {
         .expect("expected oversized body cache entry to be retained as hot entry");
     assert!(Arc::ptr_eq(&hit, &prepared));
     assert!(cache.entries.is_empty());
-    assert!(cache.oversized_entry.is_some());
+    assert_eq!(cache.oversized_entries.len(), 1);
+}
+
+#[test]
+fn test_body_cache_state_keeps_two_oversized_width_entries_hot() {
+    let key_a = BodyCacheKey {
+        width: 140,
+        diff_mode: crate::config::DiffDisplayMode::Off,
+        messages_version: 120,
+        diagram_mode: crate::config::DiagramDisplayMode::Pinned,
+        centered: false,
+    };
+    let key_b = BodyCacheKey {
+        width: 139,
+        ..key_a.clone()
+    };
+    let prepared_a = make_oversized_prepared_messages("body-oversized-a-");
+    let prepared_b = make_oversized_prepared_messages("body-oversized-b-");
+
+    let mut cache = BodyCacheState::default();
+    cache.insert(key_a.clone(), prepared_a.clone(), 120);
+    cache.insert(key_b.clone(), prepared_b.clone(), 120);
+
+    let hit_a = cache
+        .get_exact(&key_a)
+        .expect("expected first oversized body width to remain hot");
+    let hit_b = cache
+        .get_exact(&key_b)
+        .expect("expected second oversized body width to remain hot");
+    assert!(Arc::ptr_eq(&hit_a, &prepared_a));
+    assert!(Arc::ptr_eq(&hit_b, &prepared_b));
+    assert_eq!(cache.oversized_entries.len(), 2);
 }
 
 #[test]
@@ -558,7 +589,43 @@ fn test_full_prep_cache_state_retains_oversized_hot_entry() {
         .expect("expected oversized full prep entry to be retained as hot entry");
     assert!(Arc::ptr_eq(&hit, &prepared));
     assert!(cache.entries.is_empty());
-    assert!(cache.oversized_entry.is_some());
+    assert_eq!(cache.oversized_entries.len(), 1);
+}
+
+#[test]
+fn test_full_prep_cache_state_keeps_two_oversized_width_entries_hot() {
+    let key_a = FullPrepCacheKey {
+        width: 140,
+        height: 42,
+        diff_mode: crate::config::DiffDisplayMode::Off,
+        messages_version: 120,
+        diagram_mode: crate::config::DiagramDisplayMode::Pinned,
+        centered: false,
+        is_processing: true,
+        streaming_text_len: 4096,
+        streaming_text_hash: 12345,
+        batch_progress_hash: 0,
+    };
+    let key_b = FullPrepCacheKey {
+        width: 139,
+        ..key_a.clone()
+    };
+    let prepared_a = make_oversized_prepared_messages("full-oversized-a-");
+    let prepared_b = make_oversized_prepared_messages("full-oversized-b-");
+
+    let mut cache = FullPrepCacheState::default();
+    cache.insert(key_a.clone(), prepared_a.clone());
+    cache.insert(key_b.clone(), prepared_b.clone());
+
+    let hit_a = cache
+        .get_exact(&key_a)
+        .expect("expected first oversized full-prep width to remain hot");
+    let hit_b = cache
+        .get_exact(&key_b)
+        .expect("expected second oversized full-prep width to remain hot");
+    assert!(Arc::ptr_eq(&hit_a, &prepared_a));
+    assert!(Arc::ptr_eq(&hit_b, &prepared_b));
+    assert_eq!(cache.oversized_entries.len(), 2);
 }
 
 #[test]
