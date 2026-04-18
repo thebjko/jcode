@@ -2,6 +2,10 @@ use super::{
     FALLBACK_TOOL_CALL_COUNTER, NORMALIZED_NULL_TOOL_ARGUMENTS, RECOVERED_TEXT_WRAPPED_TOOL_CALLS,
     extract_error_with_retry, is_websocket_fallback_notice,
 };
+
+fn truncated_stream_payload_context(data: &str) -> String {
+    crate::util::truncate_str(&data.trim().replace("\n", "\\n"), 240).to_string()
+}
 use crate::message::StreamEvent;
 use anyhow::Result;
 use bytes::Bytes;
@@ -225,7 +229,14 @@ pub(super) fn parse_openai_response_event(
 
     let event: ResponseSseEvent = match serde_json::from_str(data) {
         Ok(parsed) => parsed,
-        Err(_) => return None,
+        Err(error) => {
+            crate::logging::warn(&format!(
+                "OpenAI SSE JSON parse failed: {} payload={}",
+                error,
+                truncated_stream_payload_context(data)
+            ));
+            return None;
+        }
     };
 
     match event.kind.as_str() {

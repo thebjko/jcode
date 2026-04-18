@@ -1,5 +1,9 @@
 use super::*;
 
+fn truncated_stream_payload_context(data: &str) -> String {
+    crate::util::truncate_str(&data.trim().replace('\n', "\\n"), 240).to_string()
+}
+
 // ============================================================================
 // SSE Stream Parser
 // ============================================================================
@@ -289,7 +293,15 @@ impl OpenRouterStream {
 
             let parsed: Value = match serde_json::from_str(data) {
                 Ok(v) => v,
-                Err(_) => continue,
+                Err(error) => {
+                    crate::logging::warn(&format!(
+                        "OpenRouter SSE JSON parse failed for model {}: {} payload={} ",
+                        self.model,
+                        error,
+                        truncated_stream_payload_context(data)
+                    ));
+                    continue;
+                }
             };
 
             // Extract upstream provider info (only emit once)
