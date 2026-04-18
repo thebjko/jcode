@@ -877,3 +877,47 @@ fn test_input_shell_result_event_roundtrip() -> Result<()> {
     assert_eq!(result.exit_code, Some(0));
     Ok(())
 }
+
+
+#[test]
+fn test_protocol_enum_roundtrips_cover_wire_names() -> Result<()> {
+    let transcript_modes = [
+        (TranscriptMode::Insert, "insert"),
+        (TranscriptMode::Append, "append"),
+        (TranscriptMode::Replace, "replace"),
+        (TranscriptMode::Send, "send"),
+    ];
+    for (mode, wire) in transcript_modes {
+        let json = serde_json::to_string(&mode)?;
+        assert_eq!(json, format!("\"{}\"", wire));
+        let decoded: TranscriptMode = serde_json::from_str(&json)?;
+        assert_eq!(decoded, mode);
+    }
+
+    let delivery_modes = [
+        (CommDeliveryMode::Notify, "notify"),
+        (CommDeliveryMode::Interrupt, "interrupt"),
+        (CommDeliveryMode::Wake, "wake"),
+    ];
+    for (mode, wire) in delivery_modes {
+        let json = serde_json::to_string(&mode)?;
+        assert_eq!(json, format!("\"{}\"", wire));
+        let decoded: CommDeliveryMode = serde_json::from_str(&json)?;
+        assert_eq!(decoded, mode);
+    }
+
+    let feature_toggles = [
+        (FeatureToggle::Memory, "memory"),
+        (FeatureToggle::Swarm, "swarm"),
+        (FeatureToggle::Autoreview, "autoreview"),
+        (FeatureToggle::Autojudge, "autojudge"),
+    ];
+    for (feature, wire) in feature_toggles {
+        let json = serde_json::to_string(&feature)?;
+        assert_eq!(json, format!("\"{}\"", wire));
+        let decoded: FeatureToggle = serde_json::from_str(&json)?;
+        assert_eq!(decoded, feature);
+    }
+
+    Ok(())
+}
