@@ -103,6 +103,23 @@ fn test_render_swarm_message_uses_left_rail_not_box() {
 }
 
 #[test]
+fn test_render_swarm_message_matches_exact_compact_snapshot() {
+    crate::tui::markdown::set_center_code_blocks(false);
+    let msg = DisplayMessage::swarm("Task · sheep", "Implement compaction asymptotic fixes");
+
+    let lines = render_swarm_message(&msg, 80, crate::config::DiffDisplayMode::Off);
+    let rendered: Vec<String> = lines.iter().map(extract_line_text).collect();
+
+    assert_eq!(
+        rendered,
+        vec![
+            "│ ⚑ Task · sheep".to_string(),
+            "│ Implement compaction asymptotic fixes".to_string(),
+        ]
+    );
+}
+
+#[test]
 fn test_render_swarm_message_trims_extra_newlines() {
     crate::tui::markdown::set_center_code_blocks(false);
     let msg = DisplayMessage::swarm("Broadcast · coordinator", "\n\nPlan updated\n\n");
