@@ -691,7 +691,9 @@ mod tests {
             _system: &str,
             _resume_session_id: Option<&str>,
         ) -> Result<EventStream> {
-            unimplemented!("Mock provider")
+            Err(anyhow::anyhow!(
+                "Mock provider should not be used for streaming completions in ui header tests"
+            ))
         }
 
         fn name(&self) -> &str {
