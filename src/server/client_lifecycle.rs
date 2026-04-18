@@ -1,5 +1,5 @@
 use super::client_actions::{
-    handle_agent_task, handle_compact, handle_input_shell, handle_notify_session,
+    AgentTaskContext, handle_agent_task, handle_compact, handle_input_shell, handle_notify_session,
     handle_run_subagent, handle_set_feature, handle_set_subagent_model, handle_split,
     handle_stdin_response, handle_trigger_memory_extraction,
 };
@@ -1700,12 +1700,14 @@ pub(super) async fn handle_client(
                     task,
                     &client_session_id,
                     &agent,
-                    &client_event_tx,
-                    &swarm_members,
-                    &swarms_by_id,
-                    &event_history,
-                    &event_counter,
-                    &swarm_event_tx,
+                    &AgentTaskContext {
+                        client_event_tx: &client_event_tx,
+                        swarm_members: &swarm_members,
+                        swarms_by_id: &swarms_by_id,
+                        event_history: &event_history,
+                        event_counter: &event_counter,
+                        swarm_event_tx: &swarm_event_tx,
+                    },
                 )
                 .await;
             }

@@ -1184,28 +1184,31 @@ pub(super) async fn handle_stdin_response(
     let _ = client_event_tx.send(ServerEvent::Done { id });
 }
 
-#[allow(clippy::too_many_arguments)]
+pub(super) struct AgentTaskContext<'a> {
+    pub(super) client_event_tx: &'a mpsc::UnboundedSender<ServerEvent>,
+    pub(super) swarm_members: &'a Arc<RwLock<HashMap<String, SwarmMember>>>,
+    pub(super) swarms_by_id: &'a Arc<RwLock<HashMap<String, HashSet<String>>>>,
+    pub(super) event_history: &'a Arc<RwLock<std::collections::VecDeque<SwarmEvent>>>,
+    pub(super) event_counter: &'a Arc<std::sync::atomic::AtomicU64>,
+    pub(super) swarm_event_tx: &'a broadcast::Sender<SwarmEvent>,
+}
+
 pub(super) async fn handle_agent_task(
     id: u64,
     task: String,
     client_session_id: &str,
     agent: &Arc<Mutex<Agent>>,
-    client_event_tx: &mpsc::UnboundedSender<ServerEvent>,
-    swarm_members: &Arc<RwLock<HashMap<String, SwarmMember>>>,
-    swarms_by_id: &Arc<RwLock<HashMap<String, HashSet<String>>>>,
-    event_history: &Arc<RwLock<std::collections::VecDeque<SwarmEvent>>>,
-    event_counter: &Arc<std::sync::atomic::AtomicU64>,
-    swarm_event_tx: &broadcast::Sender<SwarmEvent>,
+    ctx: &AgentTaskContext<'_>,
 ) {
     update_member_status(
         client_session_id,
         "running",
         Some(truncate_detail(&task, 120)),
-        swarm_members,
-        swarms_by_id,
-        Some(event_history),
-        Some(event_counter),
-        Some(swarm_event_tx),
+        ctx.swarm_members,
+        ctx.swarms_by_id,
+        Some(ctx.event_history),
+        Some(ctx.event_counter),
+        Some(ctx.swarm_event_tx),
     )
     .await;
 
@@ -1214,7 +1217,7 @@ pub(super) async fn handle_agent_task(
         &task,
         vec![],
         None,
-        client_event_tx.clone(),
+        ctx.client_event_tx.clone(),
     )
     .await;
     match result {
@@ -1223,31 +1226,31 @@ pub(super) async fn handle_agent_task(
                 client_session_id,
                 "completed",
                 None,
-                swarm_members,
-                swarms_by_id,
-                Some(event_history),
-                Some(event_counter),
-                Some(swarm_event_tx),
+                ctx.swarm_members,
+                ctx.swarms_by_id,
+                Some(ctx.event_history),
+                Some(ctx.event_counter),
+                Some(ctx.swarm_event_tx),
             )
             .await;
-            let _ = client_event_tx.send(ServerEvent::Done { id });
+            let _ = ctx.client_event_tx.send(ServerEvent::Done { id });
         }
         Err(e) => {
             update_member_status(
                 client_session_id,
                 "failed",
                 Some(truncate_detail(&e.to_string(), 120)),
-                swarm_members,
-                swarms_by_id,
-                Some(event_history),
-                Some(event_counter),
-                Some(swarm_event_tx),
+                ctx.swarm_members,
+                ctx.swarms_by_id,
+                Some(ctx.event_history),
+                Some(ctx.event_counter),
+                Some(ctx.swarm_event_tx),
             )
             .await;
             let retry_after_secs = e
                 .downcast_ref::<StreamError>()
                 .and_then(|stream_error| stream_error.retry_after_secs);
-            let _ = client_event_tx.send(ServerEvent::Error {
+            let _ = ctx.client_event_tx.send(ServerEvent::Error {
                 id,
                 message: crate::util::format_error_chain(&e),
                 retry_after_secs,
