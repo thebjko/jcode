@@ -77,6 +77,9 @@ impl Tool for SidePanelTool {
 
     async fn execute(&self, input: Value, ctx: ToolContext) -> Result<ToolOutput> {
         let params: SidePanelInput = serde_json::from_value(input)?;
+        let action_label = params.action.clone();
+        let page_label = params.page_id.clone().unwrap_or_else(|| "<none>".to_string());
+        let file_label = params.file_path.clone().unwrap_or_else(|| "<none>".to_string());
         let focus = params.focus.unwrap_or(true);
 
         let snapshot = match params.action.as_str() {
@@ -157,6 +160,13 @@ impl Tool for SidePanelTool {
         Ok(ToolOutput::new(crate::side_panel::status_output(&snapshot))
             .with_title("side_panel")
             .with_metadata(serde_json::to_value(&snapshot)?))
+        .map_err(|err| {
+            crate::logging::warn(&format!(
+                "[tool:side_panel] action failed action={} page_id={} file_path={} session_id={} error={}",
+                action_label, page_label, file_label, ctx.session_id, err
+            ));
+            err
+        })
     }
 }
 
