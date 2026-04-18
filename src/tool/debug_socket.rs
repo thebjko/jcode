@@ -64,6 +64,7 @@ impl Tool for DebugSocketTool {
     async fn execute(&self, input: Value, _ctx: ToolContext) -> Result<ToolOutput> {
         let params: DebugSocketInput = serde_json::from_value(input)?;
         let timeout_secs = params.timeout_secs.unwrap_or(30);
+        let session_label = params.session_id.clone().unwrap_or_else(|| "<none>".to_string());
 
         // Build title based on command namespace
         let title =
@@ -77,7 +78,13 @@ impl Tool for DebugSocketTool {
 
         match result {
             Ok(output) => Ok(ToolOutput::new(output).with_title(title)),
-            Err(e) => Ok(ToolOutput::new(format!("Error: {}", e)).with_title(title)),
+            Err(e) => {
+                crate::logging::warn(&format!(
+                    "[tool:debug_socket] command failed command={} session_id={} timeout_secs={} error={}",
+                    params.command, session_label, timeout_secs, e
+                ));
+                Ok(ToolOutput::new(format!("Error: {}", e)).with_title(title))
+            }
         }
     }
 }
