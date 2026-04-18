@@ -522,3 +522,24 @@ impl Stream for OpenRouterStream {
         }
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_next_event_ignores_malformed_json_chunks() {
+        let provider_pin = Arc::new(std::sync::Mutex::new(None));
+        let mut stream = OpenRouterStream::new(futures::stream::empty(), "test-model".to_string(), provider_pin);
+        stream.buffer = "data: {not-json}
+
+".to_string();
+
+        let event = stream.parse_next_event();
+
+        assert!(event.is_none());
+        assert!(stream.pending.is_empty());
+        assert!(stream.current_tool_call.is_none());
+    }
+}

@@ -629,3 +629,31 @@ impl Stream for OpenAIResponsesStream {
         }
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_openai_response_event_ignores_malformed_json_chunks() {
+        let mut saw_text_delta = false;
+        let mut streaming_tool_calls = HashMap::new();
+        let mut completed_tool_items = HashSet::new();
+        let mut pending = VecDeque::new();
+
+        let event = parse_openai_response_event(
+            "{not-json}",
+            &mut saw_text_delta,
+            &mut streaming_tool_calls,
+            &mut completed_tool_items,
+            &mut pending,
+        );
+
+        assert!(event.is_none());
+        assert!(!saw_text_delta);
+        assert!(streaming_tool_calls.is_empty());
+        assert!(completed_tool_items.is_empty());
+        assert!(pending.is_empty());
+    }
+}
