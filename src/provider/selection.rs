@@ -11,32 +11,49 @@ pub(super) enum ActiveProvider {
     OpenRouter,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub(super) struct ProviderAvailability {
+    pub(super) openai: bool,
+    pub(super) claude: bool,
+    pub(super) copilot: bool,
+    pub(super) antigravity: bool,
+    pub(super) gemini: bool,
+    pub(super) cursor: bool,
+    pub(super) openrouter: bool,
+    pub(super) copilot_premium_zero: bool,
+}
+
+impl ProviderAvailability {
+    pub(super) fn is_configured(self, provider: ActiveProvider) -> bool {
+        match provider {
+            ActiveProvider::Claude => self.claude,
+            ActiveProvider::OpenAI => self.openai,
+            ActiveProvider::Copilot => self.copilot,
+            ActiveProvider::Antigravity => self.antigravity,
+            ActiveProvider::Gemini => self.gemini,
+            ActiveProvider::Cursor => self.cursor,
+            ActiveProvider::OpenRouter => self.openrouter,
+        }
+    }
+}
+
 impl MultiProvider {
-    pub(super) fn auto_default_provider(
-        openai: bool,
-        claude: bool,
-        copilot: bool,
-        antigravity: bool,
-        gemini: bool,
-        cursor: bool,
-        openrouter: bool,
-        copilot_premium_zero: bool,
-    ) -> ActiveProvider {
-        if copilot_premium_zero && copilot {
+    pub(super) fn auto_default_provider(availability: ProviderAvailability) -> ActiveProvider {
+        if availability.copilot_premium_zero && availability.copilot {
             ActiveProvider::Copilot
-        } else if openai {
+        } else if availability.openai {
             ActiveProvider::OpenAI
-        } else if claude {
+        } else if availability.claude {
             ActiveProvider::Claude
-        } else if copilot {
+        } else if availability.copilot {
             ActiveProvider::Copilot
-        } else if antigravity {
+        } else if availability.antigravity {
             ActiveProvider::Antigravity
-        } else if gemini {
+        } else if availability.gemini {
             ActiveProvider::Gemini
-        } else if cursor {
+        } else if availability.cursor {
             ActiveProvider::Cursor
-        } else if openrouter {
+        } else if availability.openrouter {
             ActiveProvider::OpenRouter
         } else {
             ActiveProvider::Claude

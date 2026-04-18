@@ -271,7 +271,7 @@ async fn resolve_assignment_target_session(
         let plans = swarm_plans.read().await;
         plans
             .get(swarm_id)
-            .map(|plan| compute_assignment_loads(plan))
+            .map(compute_assignment_loads)
             .unwrap_or_default()
     };
 

@@ -120,7 +120,8 @@ impl MultiProvider {
             None
         };
 
-        let antigravity_provider = if matches!(auth_status.antigravity, auth::AuthState::Available) {
+        let antigravity_provider = if matches!(auth_status.antigravity, auth::AuthState::Available)
+        {
             Some(Arc::new(antigravity::AntigravityCliProvider::new()))
         } else {
             None
@@ -154,16 +155,17 @@ impl MultiProvider {
             std::env::var("JCODE_COPILOT_PREMIUM").ok().as_deref(),
             Some("0")
         );
-        let mut active = Self::auto_default_provider(
-            openai.is_some(),
-            claude.is_some() || anthropic.is_some(),
-            copilot_api.is_some(),
-            antigravity_provider.is_some(),
-            gemini_provider.is_some(),
-            cursor_provider.is_some(),
-            openrouter.is_some(),
+        let availability = ProviderAvailability {
+            openai: openai.is_some(),
+            claude: claude.is_some() || anthropic.is_some(),
+            copilot: copilot_api.is_some(),
+            antigravity: antigravity_provider.is_some(),
+            gemini: gemini_provider.is_some(),
+            cursor: cursor_provider.is_some(),
+            openrouter: openrouter.is_some(),
             copilot_premium_zero,
-        );
+        };
+        let mut active = Self::auto_default_provider(availability);
 
         if copilot_premium_zero && matches!(active, ActiveProvider::Copilot) {
             crate::logging::info(
@@ -175,15 +177,7 @@ impl MultiProvider {
         let cfg = crate::config::config();
         if let Some(forced) = forced_provider {
             active = forced;
-            let is_configured = match forced {
-                ActiveProvider::Claude => claude.is_some() || anthropic.is_some(),
-                ActiveProvider::OpenAI => openai.is_some(),
-                ActiveProvider::Copilot => copilot_api.is_some(),
-                ActiveProvider::Antigravity => antigravity_provider.is_some(),
-                ActiveProvider::Gemini => gemini_provider.is_some(),
-                ActiveProvider::Cursor => cursor_provider.is_some(),
-                ActiveProvider::OpenRouter => openrouter.is_some(),
-            };
+            let is_configured = availability.is_configured(forced);
             if is_configured {
                 crate::logging::info(&format!(
                     "Using forced provider '{}' from CLI/environment",
@@ -197,15 +191,7 @@ impl MultiProvider {
             }
         } else if let Some(ref pref) = cfg.provider.default_provider {
             if let Some(pref_provider) = Self::parse_provider_hint(pref) {
-                let is_configured = match pref_provider {
-                    ActiveProvider::Claude => claude.is_some() || anthropic.is_some(),
-                    ActiveProvider::OpenAI => openai.is_some(),
-                    ActiveProvider::Copilot => copilot_api.is_some(),
-                    ActiveProvider::Antigravity => antigravity_provider.is_some(),
-                    ActiveProvider::Gemini => gemini_provider.is_some(),
-                    ActiveProvider::Cursor => cursor_provider.is_some(),
-                    ActiveProvider::OpenRouter => openrouter.is_some(),
-                };
+                let is_configured = availability.is_configured(pref_provider);
                 if is_configured {
                     active = pref_provider;
                     crate::logging::info(&format!(

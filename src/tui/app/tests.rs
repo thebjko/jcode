@@ -545,7 +545,10 @@ impl Provider for AntigravityMockProvider {
     }
 
     fn set_model(&self, model: &str) -> Result<()> {
-        let resolved = model.strip_prefix("antigravity:").unwrap_or(model).to_string();
+        let resolved = model
+            .strip_prefix("antigravity:")
+            .unwrap_or(model)
+            .to_string();
         *self.model.lock().unwrap() = resolved;
         Ok(())
     }

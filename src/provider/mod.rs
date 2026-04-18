@@ -410,7 +410,7 @@ use self::models::{
     normalize_copilot_model_name,
 };
 use self::pricing::{cheapness_for_route, openrouter_pricing_from_model_pricing};
-use self::selection::ActiveProvider;
+use self::selection::{ActiveProvider, ProviderAvailability};
 
 /// MultiProvider wraps multiple providers and allows seamless model switching
 pub struct MultiProvider {
@@ -1780,7 +1780,10 @@ impl Provider for MultiProvider {
 
         let already_has_antigravity = self.antigravity_provider().is_some();
         if !already_has_antigravity
-            && matches!(crate::auth::AuthStatus::check().antigravity, crate::auth::AuthState::Available)
+            && matches!(
+                crate::auth::AuthStatus::check().antigravity,
+                crate::auth::AuthState::Available
+            )
         {
             crate::logging::info("Hot-initialized Antigravity provider after login");
             *self
