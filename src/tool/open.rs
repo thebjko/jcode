@@ -139,17 +139,36 @@ impl Tool for OpenTool {
 
     async fn execute(&self, input: Value, ctx: ToolContext) -> Result<ToolOutput> {
         let params: OpenInput = serde_json::from_value(input)?;
+        let requested_target = params.target.clone();
         let action = OpenAction::from_params(params.mode.as_deref(), params.action.as_deref())?;
-        let target = resolve_target(&params.target, &ctx)
-            .with_context(|| format!("Invalid open target: {}", params.target))?;
-
-        let outcome = match action {
-            OpenAction::Open => perform_open(&target).await?,
-            OpenAction::Reveal => perform_reveal(&target).await?,
+        let action_name = action.as_str();
+        let target = match resolve_target(&params.target, &ctx)
+            .with_context(|| format!("Invalid open target: {}", params.target))
+        {
+            Ok(target) => target,
+            Err(err) => {
+                crate::logging::warn(&format!(
+                    "[tool:open] failed to resolve target action={} session_id={} target={} error={}",
+                    action_name, ctx.session_id, requested_target, err
+                ));
+                return Err(err);
+            }
         };
 
+        let outcome = match action {
+            OpenAction::Open => perform_open(&target).await,
+            OpenAction::Reveal => perform_reveal(&target).await,
+        }
+        .map_err(|err| {
+            crate::logging::warn(&format!(
+                "[tool:open] action failed action={} session_id={} target={} error={}",
+                action_name, ctx.session_id, requested_target, err
+            ));
+            err
+        })?;
+
         Ok(ToolOutput::new(outcome.message)
-            .with_title(format!("open {}", action.as_str()))
+            .with_title(format!("open {}", action_name))
             .with_metadata(outcome.metadata))
     }
 }
