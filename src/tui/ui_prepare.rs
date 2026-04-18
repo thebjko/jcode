@@ -271,6 +271,8 @@ pub(super) fn prepare_messages(
         batch_progress_hash: active_batch_progress_hash(app),
     };
 
+    super::note_full_prep_request();
+
     {
         let cache = match full_prep_cache().lock() {
             Ok(c) => c,
@@ -281,12 +283,16 @@ pub(super) fn prepare_messages(
             }
         };
         let mut cache = cache;
-        if let Some(prepared) = cache.get_exact(&key) {
+        if let Some((prepared, kind)) = cache.get_exact_with_kind(&key) {
+            super::note_full_prep_cache_hit(kind, prepared.as_ref());
             return prepared;
         }
     }
 
+    super::note_full_prep_cache_miss();
+
     let prepared = Arc::new(prepare_messages_inner(app, width, height));
+    super::note_full_prep_built(prepared.as_ref());
 
     {
         if let Ok(mut cache) = full_prep_cache().lock() {
@@ -425,6 +431,8 @@ fn prepare_body_cached(app: &dyn TuiState, width: u16) -> Arc<PreparedMessages> 
         return Arc::new(prepare_body(app, width, false));
     }
 
+    super::note_body_request();
+
     let key = BodyCacheKey {
         width,
         diff_mode: app.diff_mode(),
@@ -444,19 +452,25 @@ fn prepare_body_cached(app: &dyn TuiState, width: u16) -> Arc<PreparedMessages> 
     };
 
     let mut cache = cache;
-    if let Some(prepared) = cache.get_exact(&key) {
+    if let Some((prepared, kind)) = cache.get_exact_with_kind(&key) {
+        super::note_body_cache_hit(kind, prepared.as_ref());
         return prepared;
     }
+
+    super::note_body_cache_miss();
 
     let incremental_base = cache.take_best_incremental_base(&key, msg_count);
 
     drop(cache);
 
     let prepared = if let Some((prev, prev_count)) = incremental_base {
+        super::note_body_incremental_reuse(prev_count);
         prepare_body_incremental(app, width, prev, prev_count)
     } else {
         Arc::new(prepare_body(app, width, false))
     };
+
+    super::note_body_built(prepared.as_ref());
 
     let mut cache = match body_cache().lock() {
         Ok(c) => c,

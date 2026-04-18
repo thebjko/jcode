@@ -267,6 +267,15 @@ pub(super) fn draw_messages(
         badge_assignments.push((target.badge_line, key));
     }
     set_visible_copy_targets(visible_copy_targets);
+    super::note_viewport_metrics(
+        scroll,
+        visible_end,
+        visible_lines.len(),
+        total_lines,
+        prompt_preview_lines,
+        visible_user_indices.len(),
+        badge_assignments.len(),
+    );
 
     let now_ms = app.now_millis();
     let policy = crate::perf::tui_policy();

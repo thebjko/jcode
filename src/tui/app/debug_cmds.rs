@@ -268,6 +268,14 @@ impl App {
         } else if cmd == "memory-history" {
             let payload = crate::process_memory::history(128);
             serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "[]".to_string())
+        } else if cmd == "slow-frames" {
+            let payload = crate::tui::ui::debug_slow_frame_history(32);
+            serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string())
+        } else if cmd.starts_with("slow-frames ") {
+            let raw_limit = cmd.strip_prefix("slow-frames ").unwrap_or("32").trim();
+            let limit = raw_limit.parse::<usize>().unwrap_or(32);
+            let payload = crate::tui::ui::debug_slow_frame_history(limit);
+            serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string())
         } else if cmd == "mermaid:memory-bench" {
             let result = crate::tui::mermaid::debug_memory_benchmark(40);
             serde_json::to_string_pretty(&result).unwrap_or_else(|_| "{}".to_string())
@@ -527,6 +535,7 @@ impl App {
                  - markdown:memory - dump markdown cache memory estimate\n\
                  - memory - dump aggregate client memory profile\n\
                  - memory-history - dump recent process memory samples\n\
+                 - slow-frames [n] - dump recent slow-frame records\n\
                  - overlay:on/off/status - toggle overlay boxes\n\
                  - enable/disable/status - control visual debug capture\n\
                  - wait - check if processing\n\

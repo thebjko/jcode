@@ -49,6 +49,7 @@ use super::{DisplayMessage, ProcessingStatus, TuiState, is_unexpected_cache_miss
 use crate::message::ToolCall;
 use ratatui::{prelude::*, widgets::Paragraph};
 use regex::Regex;
+use serde::Serialize;
 #[cfg(test)]
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque, hash_map::DefaultHasher};
@@ -149,6 +150,9 @@ use viewport::draw_messages;
 /// Scroll handlers use this to clamp scroll_offset and prevent overshoot.
 #[cfg(not(test))]
 static LAST_MAX_SCROLL: AtomicUsize = AtomicUsize::new(0);
+/// Whether the chat viewport used a native scrollbar in the most recent frame.
+#[cfg(not(test))]
+static LAST_CHAT_SCROLLBAR_VISIBLE: AtomicUsize = AtomicUsize::new(0);
 /// Number of recovered panics while rendering the frame.
 static DRAW_PANIC_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// Total line count in the pinned diff/content pane (set during render).
@@ -165,6 +169,7 @@ static LAST_USER_PROMPT_POSITIONS: OnceLock<Mutex<Vec<usize>>> = OnceLock::new()
 #[cfg(test)]
 thread_local! {
     static TEST_LAST_MAX_SCROLL: Cell<usize> = const { Cell::new(0) };
+    static TEST_LAST_CHAT_SCROLLBAR_VISIBLE: Cell<bool> = const { Cell::new(false) };
     static TEST_PINNED_PANE_TOTAL_LINES: Cell<usize> = const { Cell::new(0) };
     static TEST_LAST_DIFF_PANE_EFFECTIVE_SCROLL: Cell<usize> = const { Cell::new(0) };
     static TEST_LAST_USER_PROMPT_POSITIONS: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
@@ -184,6 +189,29 @@ pub fn last_max_scroll() -> usize {
     #[cfg(not(test))]
     {
         LAST_MAX_SCROLL.load(Ordering::Relaxed)
+    }
+}
+
+fn set_last_chat_scrollbar_visible(visible: bool) {
+    #[cfg(test)]
+    {
+        TEST_LAST_CHAT_SCROLLBAR_VISIBLE.with(|state| state.set(visible));
+        return;
+    }
+    #[cfg(not(test))]
+    {
+        LAST_CHAT_SCROLLBAR_VISIBLE.store(usize::from(visible), Ordering::Relaxed);
+    }
+}
+
+fn last_chat_scrollbar_visible() -> bool {
+    #[cfg(test)]
+    {
+        return TEST_LAST_CHAT_SCROLLBAR_VISIBLE.with(Cell::get);
+    }
+    #[cfg(not(test))]
+    {
+        LAST_CHAT_SCROLLBAR_VISIBLE.load(Ordering::Relaxed) != 0
     }
 }
 
@@ -1076,12 +1104,15 @@ impl BodyCacheState {
         self.entries.iter().map(|entry| entry.prepared_bytes).sum()
     }
 
-    fn get_exact(&mut self, key: &BodyCacheKey) -> Option<Arc<PreparedMessages>> {
+    fn get_exact_with_kind(
+        &mut self,
+        key: &BodyCacheKey,
+    ) -> Option<(Arc<PreparedMessages>, CacheEntryKind)> {
         if let Some(pos) = self.entries.iter().position(|entry| &entry.key == key) {
             let entry = self.entries.remove(pos)?;
             let prepared = entry.prepared.clone();
             self.entries.push_front(entry);
-            Some(prepared)
+            Some((prepared, CacheEntryKind::Regular))
         } else {
             let pos = self
                 .oversized_entries
@@ -1090,8 +1121,13 @@ impl BodyCacheState {
             let entry = self.oversized_entries.remove(pos)?;
             let prepared = entry.prepared.clone();
             self.oversized_entries.push_front(entry);
-            Some(prepared)
+            Some((prepared, CacheEntryKind::Oversized))
         }
+    }
+
+    #[cfg(test)]
+    fn get_exact(&mut self, key: &BodyCacheKey) -> Option<Arc<PreparedMessages>> {
+        self.get_exact_with_kind(key).map(|(prepared, _)| prepared)
     }
 
     #[cfg(test)]
@@ -1279,17 +1315,26 @@ struct FullPrepCacheState {
     oversized_entries: VecDeque<FullPrepCacheEntry>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+enum CacheEntryKind {
+    Regular,
+    Oversized,
+}
+
 impl FullPrepCacheState {
     fn total_bytes(&self) -> usize {
         self.entries.iter().map(|entry| entry.prepared_bytes).sum()
     }
 
-    fn get_exact(&mut self, key: &FullPrepCacheKey) -> Option<Arc<PreparedChatFrame>> {
+    fn get_exact_with_kind(
+        &mut self,
+        key: &FullPrepCacheKey,
+    ) -> Option<(Arc<PreparedChatFrame>, CacheEntryKind)> {
         if let Some(pos) = self.entries.iter().position(|entry| &entry.key == key) {
             let entry = self.entries.remove(pos)?;
             let prepared = entry.prepared.clone();
             self.entries.push_front(entry);
-            Some(prepared)
+            Some((prepared, CacheEntryKind::Regular))
         } else {
             let pos = self
                 .oversized_entries
@@ -1298,8 +1343,13 @@ impl FullPrepCacheState {
             let entry = self.oversized_entries.remove(pos)?;
             let prepared = entry.prepared.clone();
             self.oversized_entries.push_front(entry);
-            Some(prepared)
+            Some((prepared, CacheEntryKind::Oversized))
         }
+    }
+
+    #[cfg(test)]
+    fn get_exact(&mut self, key: &FullPrepCacheKey) -> Option<Arc<PreparedChatFrame>> {
+        self.get_exact_with_kind(key).map(|(prepared, _)| prepared)
     }
 
     fn insert(&mut self, key: FullPrepCacheKey, prepared: Arc<PreparedChatFrame>) {
@@ -1349,6 +1399,316 @@ static FULL_PREP_CACHE: OnceLock<Mutex<FullPrepCacheState>> = OnceLock::new();
 
 fn full_prep_cache() -> &'static Mutex<FullPrepCacheState> {
     FULL_PREP_CACHE.get_or_init(|| Mutex::new(FullPrepCacheState::default()))
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+struct FramePerfStats {
+    full_prep_requests: usize,
+    full_prep_hits: usize,
+    full_prep_oversized_hits: usize,
+    full_prep_misses: usize,
+    full_prep_last_prepared_bytes: usize,
+    full_prep_last_total_wrapped_lines: usize,
+    full_prep_last_section_count: usize,
+    body_requests: usize,
+    body_hits: usize,
+    body_oversized_hits: usize,
+    body_misses: usize,
+    body_incremental_reuses: usize,
+    body_last_incremental_base_messages: Option<usize>,
+    body_last_prepared_bytes: usize,
+    body_last_wrapped_lines: usize,
+    body_last_copy_targets: usize,
+    body_last_image_regions: usize,
+    viewport_scroll: usize,
+    viewport_visible_end: usize,
+    viewport_visible_lines: usize,
+    viewport_total_wrapped_lines: usize,
+    viewport_prompt_preview_lines: u16,
+    viewport_visible_user_prompts: usize,
+    viewport_visible_copy_targets: usize,
+    chat_area_width: u16,
+    chat_area_height: u16,
+    messages_area_width: u16,
+    messages_area_height: u16,
+    content_height: usize,
+    initial_content_height: usize,
+    chat_scrollbar_visible: bool,
+    use_packed_layout: bool,
+    has_side_panel_content: bool,
+    has_pinned_content: bool,
+    has_file_diff_edits: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct SlowFrameSample {
+    timestamp_ms: u64,
+    threshold_ms: f64,
+    session_id: Option<String>,
+    session_name: Option<String>,
+    status: String,
+    diff_mode: String,
+    centered: bool,
+    is_processing: bool,
+    auto_scroll_paused: bool,
+    display_messages: usize,
+    display_messages_version: u64,
+    user_messages: usize,
+    queued_messages: usize,
+    streaming_text_len: usize,
+    prepare_ms: f64,
+    draw_ms: f64,
+    total_ms: f64,
+    messages_ms: Option<f64>,
+    perf: FramePerfStats,
+}
+
+#[derive(Default)]
+struct SlowFrameHistory {
+    samples: VecDeque<SlowFrameSample>,
+    last_log_at_ms: Option<u64>,
+}
+
+const SLOW_FRAME_HISTORY_MAX_SAMPLES: usize = 128;
+const SLOW_FRAME_LOG_INTERVAL_MS: u64 = 1_000;
+
+static FRAME_PERF_STATS: OnceLock<Mutex<FramePerfStats>> = OnceLock::new();
+static SLOW_FRAME_HISTORY: OnceLock<Mutex<SlowFrameHistory>> = OnceLock::new();
+
+fn frame_perf_stats() -> &'static Mutex<FramePerfStats> {
+    FRAME_PERF_STATS.get_or_init(|| Mutex::new(FramePerfStats::default()))
+}
+
+fn slow_frame_history() -> &'static Mutex<SlowFrameHistory> {
+    SLOW_FRAME_HISTORY.get_or_init(|| Mutex::new(SlowFrameHistory::default()))
+}
+
+fn wall_clock_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+fn slow_frame_threshold_ms() -> f64 {
+    static THRESHOLD_MS: OnceLock<f64> = OnceLock::new();
+    *THRESHOLD_MS.get_or_init(|| {
+        std::env::var("JCODE_TUI_SLOW_FRAME_MS")
+            .ok()
+            .and_then(|raw| raw.trim().parse::<f64>().ok())
+            .filter(|value| value.is_finite() && *value > 0.0)
+            .unwrap_or(40.0)
+    })
+}
+
+fn with_frame_perf_stats_mut(f: impl FnOnce(&mut FramePerfStats)) {
+    let mut stats = frame_perf_stats()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    f(&mut stats);
+}
+
+fn reset_frame_perf_stats() {
+    with_frame_perf_stats_mut(|stats| *stats = FramePerfStats::default());
+}
+
+fn frame_perf_stats_snapshot() -> FramePerfStats {
+    frame_perf_stats()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
+}
+
+fn note_full_prep_request() {
+    with_frame_perf_stats_mut(|stats| stats.full_prep_requests += 1);
+}
+
+fn note_full_prep_cache_hit(kind: CacheEntryKind, prepared: &PreparedChatFrame) {
+    with_frame_perf_stats_mut(|stats| {
+        stats.full_prep_hits += 1;
+        if matches!(kind, CacheEntryKind::Oversized) {
+            stats.full_prep_oversized_hits += 1;
+        }
+        stats.full_prep_last_prepared_bytes = estimate_prepared_chat_frame_bytes(prepared);
+        stats.full_prep_last_total_wrapped_lines = prepared.total_wrapped_lines();
+        stats.full_prep_last_section_count = prepared.sections.len();
+    });
+}
+
+fn note_full_prep_cache_miss() {
+    with_frame_perf_stats_mut(|stats| stats.full_prep_misses += 1);
+}
+
+fn note_full_prep_built(prepared: &PreparedChatFrame) {
+    with_frame_perf_stats_mut(|stats| {
+        stats.full_prep_last_prepared_bytes = estimate_prepared_chat_frame_bytes(prepared);
+        stats.full_prep_last_total_wrapped_lines = prepared.total_wrapped_lines();
+        stats.full_prep_last_section_count = prepared.sections.len();
+    });
+}
+
+fn note_body_request() {
+    with_frame_perf_stats_mut(|stats| stats.body_requests += 1);
+}
+
+fn note_body_cache_hit(kind: CacheEntryKind, prepared: &PreparedMessages) {
+    with_frame_perf_stats_mut(|stats| {
+        stats.body_hits += 1;
+        if matches!(kind, CacheEntryKind::Oversized) {
+            stats.body_oversized_hits += 1;
+        }
+        stats.body_last_prepared_bytes = estimate_prepared_messages_bytes(prepared);
+        stats.body_last_wrapped_lines = prepared.wrapped_lines.len();
+        stats.body_last_copy_targets = prepared.copy_targets.len();
+        stats.body_last_image_regions = prepared.image_regions.len();
+    });
+}
+
+fn note_body_cache_miss() {
+    with_frame_perf_stats_mut(|stats| stats.body_misses += 1);
+}
+
+fn note_body_incremental_reuse(base_messages: usize) {
+    with_frame_perf_stats_mut(|stats| {
+        stats.body_incremental_reuses += 1;
+        stats.body_last_incremental_base_messages = Some(base_messages);
+    });
+}
+
+fn note_body_built(prepared: &PreparedMessages) {
+    with_frame_perf_stats_mut(|stats| {
+        stats.body_last_prepared_bytes = estimate_prepared_messages_bytes(prepared);
+        stats.body_last_wrapped_lines = prepared.wrapped_lines.len();
+        stats.body_last_copy_targets = prepared.copy_targets.len();
+        stats.body_last_image_regions = prepared.image_regions.len();
+    });
+}
+
+fn note_chat_layout(
+    chat_area: Rect,
+    messages_area: Rect,
+    initial_content_height: usize,
+    content_height: usize,
+    chat_scrollbar_visible: bool,
+    use_packed_layout: bool,
+    has_side_panel_content: bool,
+    has_pinned_content: bool,
+    has_file_diff_edits: bool,
+) {
+    with_frame_perf_stats_mut(|stats| {
+        stats.chat_area_width = chat_area.width;
+        stats.chat_area_height = chat_area.height;
+        stats.messages_area_width = messages_area.width;
+        stats.messages_area_height = messages_area.height;
+        stats.initial_content_height = initial_content_height;
+        stats.content_height = content_height;
+        stats.chat_scrollbar_visible = chat_scrollbar_visible;
+        stats.use_packed_layout = use_packed_layout;
+        stats.has_side_panel_content = has_side_panel_content;
+        stats.has_pinned_content = has_pinned_content;
+        stats.has_file_diff_edits = has_file_diff_edits;
+    });
+}
+
+fn note_viewport_metrics(
+    scroll: usize,
+    visible_end: usize,
+    visible_lines: usize,
+    total_wrapped_lines: usize,
+    prompt_preview_lines: u16,
+    visible_user_prompts: usize,
+    visible_copy_targets: usize,
+) {
+    with_frame_perf_stats_mut(|stats| {
+        stats.viewport_scroll = scroll;
+        stats.viewport_visible_end = visible_end;
+        stats.viewport_visible_lines = visible_lines;
+        stats.viewport_total_wrapped_lines = total_wrapped_lines;
+        stats.viewport_prompt_preview_lines = prompt_preview_lines;
+        stats.viewport_visible_user_prompts = visible_user_prompts;
+        stats.viewport_visible_copy_targets = visible_copy_targets;
+    });
+}
+
+fn record_slow_frame_sample(sample: SlowFrameSample) {
+    let mut history = slow_frame_history()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    history.samples.push_back(sample.clone());
+    while history.samples.len() > SLOW_FRAME_HISTORY_MAX_SAMPLES {
+        history.samples.pop_front();
+    }
+
+    let severe = sample.total_ms >= sample.threshold_ms * 2.0;
+    let should_log = severe
+        || history
+            .last_log_at_ms
+            .map(|last| sample.timestamp_ms.saturating_sub(last) >= SLOW_FRAME_LOG_INTERVAL_MS)
+            .unwrap_or(true);
+    if should_log {
+        history.last_log_at_ms = Some(sample.timestamp_ms);
+        if let Ok(payload) = serde_json::to_string(&sample) {
+            crate::logging::warn(&format!("TUI_SLOW_FRAME {}", payload));
+        } else {
+            crate::logging::warn(&format!(
+                "TUI_SLOW_FRAME total_ms={:.2} prepare_ms={:.2} draw_ms={:.2}",
+                sample.total_ms, sample.prepare_ms, sample.draw_ms
+            ));
+        }
+    }
+}
+
+pub(crate) fn debug_slow_frame_history(limit: usize) -> serde_json::Value {
+    let history = slow_frame_history()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let take = limit.max(1).min(SLOW_FRAME_HISTORY_MAX_SAMPLES);
+    let samples: Vec<SlowFrameSample> = history
+        .samples
+        .iter()
+        .rev()
+        .take(take)
+        .cloned()
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+
+    let max_total_ms = samples
+        .iter()
+        .map(|sample| sample.total_ms)
+        .fold(0.0, f64::max);
+    let max_prepare_ms = samples
+        .iter()
+        .map(|sample| sample.prepare_ms)
+        .fold(0.0, f64::max);
+    let max_draw_ms = samples
+        .iter()
+        .map(|sample| sample.draw_ms)
+        .fold(0.0, f64::max);
+
+    serde_json::json!({
+        "threshold_ms": slow_frame_threshold_ms(),
+        "buffered_samples": history.samples.len(),
+        "returned_samples": samples.len(),
+        "summary": {
+            "max_total_ms": max_total_ms,
+            "max_prepare_ms": max_prepare_ms,
+            "max_draw_ms": max_draw_ms,
+        },
+        "samples": samples,
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn clear_slow_frame_history_for_tests() {
+    let mut history = slow_frame_history()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    history.samples.clear();
+    history.last_log_at_ms = None;
+    reset_frame_perf_stats();
+    set_last_chat_scrollbar_visible(false);
 }
 
 #[derive(Default)]
@@ -2210,6 +2570,8 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
         return;
     }
 
+    reset_frame_perf_stats();
+
     clear_copy_viewport_snapshot();
 
     // Clear full frame to prevent stale cells from prior layouts.
@@ -2439,11 +2801,13 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
     }
     let prep_start = Instant::now();
     let chat_left_inset = left_aligned_content_inset(chat_area.width, app.centered_mode());
-    let prepared_full_width = prepare::prepare_messages(
-        app,
-        chat_area.width.saturating_sub(chat_left_inset),
-        chat_area.height,
-    );
+    let predicted_scrollbar_visible =
+        app.chat_native_scrollbar() && chat_area.width > 1 && last_chat_scrollbar_visible();
+    let initial_prepare_width = chat_area
+        .width
+        .saturating_sub(chat_left_inset)
+        .saturating_sub(if predicted_scrollbar_visible { 1 } else { 0 });
+    let prepared_initial = prepare::prepare_messages(app, initial_prepare_width, chat_area.height);
     let show_donut = super::idle_donut_active(app);
     let donut_height: u16 = if show_donut { 14 } else { 0 };
     let notification_height: u16 = if app.has_notification() { 1 } else { 0 };
@@ -2456,11 +2820,13 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
         + donut_height; // status + queued + notification + inline UI + gap + input + donut
     let available_height = chat_area.height;
 
-    let initial_content_height = prepared_full_width.total_wrapped_lines().max(1) as u16;
+    let initial_content_height = prepared_initial.total_wrapped_lines().max(1) as u16;
     let chat_scrollbar_visible = app.chat_native_scrollbar()
         && chat_area.width > 1
         && initial_content_height + fixed_height > available_height;
-    let prepared = if chat_scrollbar_visible {
+    let prepared = if chat_scrollbar_visible == predicted_scrollbar_visible {
+        prepared_initial
+    } else if chat_scrollbar_visible {
         prepare::prepare_messages(
             app,
             chat_area
@@ -2470,8 +2836,13 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
             chat_area.height,
         )
     } else {
-        prepared_full_width
+        prepare::prepare_messages(
+            app,
+            chat_area.width.saturating_sub(chat_left_inset),
+            chat_area.height,
+        )
     };
+    set_last_chat_scrollbar_visible(chat_scrollbar_visible);
     if let Some(ref mut capture) = debug_capture {
         capture.image_regions = prepared
             .image_regions
@@ -2587,6 +2958,17 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
 
     // Messages area is chunks[0] within the chat column (already excludes diagram).
     let messages_area = chunks[0];
+    note_chat_layout(
+        chat_area,
+        messages_area,
+        initial_content_height as usize,
+        content_height as usize,
+        chat_scrollbar_visible,
+        use_packed,
+        has_side_panel_content,
+        has_pinned_content,
+        has_file_diff_edits,
+    );
 
     if let Some(ref mut capture) = debug_capture {
         capture.layout.messages_area = Some(messages_area.into());
@@ -2799,6 +3181,34 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
     if profile_enabled() {
         let total_draw = draw_start.elapsed();
         record_profile(prep_elapsed, total_draw, total_start.elapsed());
+    }
+
+    let total_elapsed = total_start.elapsed();
+    let total_ms = total_elapsed.as_secs_f64() * 1000.0;
+    let threshold_ms = slow_frame_threshold_ms();
+    if total_ms >= threshold_ms {
+        let perf = frame_perf_stats_snapshot();
+        record_slow_frame_sample(SlowFrameSample {
+            timestamp_ms: wall_clock_ms(),
+            threshold_ms,
+            session_id: app.current_session_id(),
+            session_name: app.session_display_name(),
+            status: format!("{:?}", app.status()),
+            diff_mode: format!("{:?}", app.diff_mode()),
+            centered: app.centered_mode(),
+            is_processing: app.is_processing(),
+            auto_scroll_paused: app.auto_scroll_paused(),
+            display_messages: app.display_messages().len(),
+            display_messages_version: app.display_messages_version(),
+            user_messages: app.display_user_message_count(),
+            queued_messages: app.queued_messages().len(),
+            streaming_text_len: app.streaming_text().len(),
+            prepare_ms: prep_elapsed.as_secs_f64() * 1000.0,
+            draw_ms: draw_start.elapsed().as_secs_f64() * 1000.0,
+            total_ms,
+            messages_ms: Some(messages_draw.as_secs_f64() * 1000.0),
+            perf,
+        });
     }
 }
 

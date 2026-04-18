@@ -118,6 +118,68 @@ fn test_inline_ui_gap_height_only_when_inline_ui_visible() {
 }
 
 #[test]
+fn test_slow_frame_history_retains_recent_samples() {
+    clear_slow_frame_history_for_tests();
+    record_slow_frame_sample(SlowFrameSample {
+        timestamp_ms: 1,
+        threshold_ms: 40.0,
+        session_id: Some("session_test".to_string()),
+        session_name: Some("test".to_string()),
+        status: "Idle".to_string(),
+        diff_mode: "Off".to_string(),
+        centered: false,
+        is_processing: false,
+        auto_scroll_paused: false,
+        display_messages: 10,
+        display_messages_version: 3,
+        user_messages: 5,
+        queued_messages: 0,
+        streaming_text_len: 0,
+        prepare_ms: 12.0,
+        draw_ms: 9.0,
+        total_ms: 41.0,
+        messages_ms: Some(7.0),
+        perf: FramePerfStats {
+            viewport_total_wrapped_lines: 200,
+            body_misses: 1,
+            ..Default::default()
+        },
+    });
+    record_slow_frame_sample(SlowFrameSample {
+        timestamp_ms: 2,
+        threshold_ms: 40.0,
+        session_id: Some("session_test".to_string()),
+        session_name: Some("test".to_string()),
+        status: "Streaming".to_string(),
+        diff_mode: "Off".to_string(),
+        centered: false,
+        is_processing: true,
+        auto_scroll_paused: true,
+        display_messages: 11,
+        display_messages_version: 4,
+        user_messages: 5,
+        queued_messages: 1,
+        streaming_text_len: 120,
+        prepare_ms: 20.0,
+        draw_ms: 15.0,
+        total_ms: 55.0,
+        messages_ms: Some(14.0),
+        perf: FramePerfStats {
+            viewport_total_wrapped_lines: 240,
+            body_hits: 1,
+            ..Default::default()
+        },
+    });
+
+    let payload = debug_slow_frame_history(8);
+    assert_eq!(payload["buffered_samples"], 2);
+    assert_eq!(payload["returned_samples"], 2);
+    assert_eq!(payload["summary"]["max_total_ms"], 55.0);
+    assert_eq!(payload["samples"][1]["status"], "Streaming");
+    assert_eq!(payload["samples"][0]["perf"]["body_misses"], 1);
+}
+
+#[test]
 fn test_link_target_from_screen_detects_chat_url() {
     let _lock = viewport_snapshot_test_lock();
     record_test_chat_snapshot("Docs: https://example.com/docs).");
