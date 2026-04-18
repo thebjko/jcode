@@ -140,6 +140,8 @@ impl Tool for GoalTool {
 
     async fn execute(&self, input: Value, ctx: ToolContext) -> Result<ToolOutput> {
         let params: GoalInput = serde_json::from_value(input)?;
+        let action_label = params.action.clone();
+        let goal_id_label = params.id.clone().unwrap_or_else(|| "<none>".to_string());
         let working_dir = ctx.working_dir.as_deref();
         let display = params
             .display
@@ -345,6 +347,13 @@ impl Tool for GoalTool {
             }
             other => anyhow::bail!("unknown goal action: {}", other),
         }
+        .map_err(|err| {
+            crate::logging::warn(&format!(
+                "[tool:goal] action failed action={} goal_id={} session_id={} error={}",
+                action_label, goal_id_label, ctx.session_id, err
+            ));
+            err
+        })
     }
 }
 
