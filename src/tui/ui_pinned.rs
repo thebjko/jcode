@@ -6,11 +6,12 @@ mod util_support;
 use crate::tui::mermaid;
 #[cfg(test)]
 use layout_support::{
-    clamp_side_panel_image_rows, estimate_side_panel_image_layout_with_font,
-    estimate_side_panel_image_rows_with_font, fit_image_area_with_font,
+    clamp_side_panel_image_rows, estimate_side_panel_image_rows_with_font,
 };
 use layout_support::{
-    estimate_side_panel_image_layout, plan_fit_image_render, side_panel_viewport_scroll_x,
+    estimate_side_panel_image_layout, estimate_side_panel_image_layout_with_font,
+    fit_image_area_with_font, fit_image_area_without_upscale_with_font, plan_fit_image_render,
+    side_panel_viewport_scroll_x,
 };
 use serde::Serialize;
 #[cfg(test)]
@@ -262,6 +263,112 @@ pub struct SidePanelDebugStats {
     pub render_cache_misses: u64,
     pub markdown_cache_entries: usize,
     pub render_cache_entries: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SidePanelMermaidProbeRect {
+    pub width_cells: u16,
+    pub height_cells: u16,
+    pub width_utilization_percent: f64,
+    pub height_utilization_percent: f64,
+    pub area_utilization_percent: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SidePanelMermaidProbe {
+    pub pane_width_cells: u16,
+    pub pane_height_cells: u16,
+    pub font_width_px: u16,
+    pub font_height_px: u16,
+    pub rendered_png_width_px: u32,
+    pub rendered_png_height_px: u32,
+    pub estimated_rows: u16,
+    pub render_mode: String,
+    pub layout_fit: SidePanelMermaidProbeRect,
+    pub widget_fit: SidePanelMermaidProbeRect,
+}
+
+fn utilization_percent(used: u32, total: u32) -> f64 {
+    if total == 0 {
+        0.0
+    } else {
+        (used as f64 * 100.0) / total as f64
+    }
+}
+
+fn probe_rect(rect: Rect, pane_width_cells: u16, pane_height_cells: u16) -> SidePanelMermaidProbeRect {
+    SidePanelMermaidProbeRect {
+        width_cells: rect.width,
+        height_cells: rect.height,
+        width_utilization_percent: utilization_percent(rect.width as u32, pane_width_cells as u32),
+        height_utilization_percent: utilization_percent(rect.height as u32, pane_height_cells as u32),
+        area_utilization_percent: utilization_percent(
+            rect.width as u32 * rect.height as u32,
+            pane_width_cells as u32 * pane_height_cells as u32,
+        ),
+    }
+}
+
+pub fn debug_probe_side_panel_mermaid(
+    mermaid_source: &str,
+    pane_width_cells: u16,
+    pane_height_cells: u16,
+    font_size_px: Option<(u16, u16)>,
+    centered: bool,
+) -> anyhow::Result<SidePanelMermaidProbe> {
+    let font_size_px = font_size_px.unwrap_or((8, 16));
+    let render = mermaid::render_mermaid_untracked(mermaid_source, Some(pane_width_cells));
+    let mermaid::RenderResult::Image { width, height, .. } = render else {
+        let mermaid::RenderResult::Error(error) = render else {
+            unreachable!("non-image mermaid render result")
+        };
+        anyhow::bail!(error);
+    };
+
+    let layout = estimate_side_panel_image_layout_with_font(
+        width,
+        height,
+        pane_width_cells,
+        pane_height_cells,
+        0,
+        false,
+        Some(font_size_px),
+    );
+    let reserved = Rect::new(0, 0, pane_width_cells, layout.rows);
+    let layout_fit = fit_image_area_with_font(
+        reserved,
+        width,
+        height,
+        Some(font_size_px),
+        centered,
+        false,
+    );
+    let widget_fit = fit_image_area_without_upscale_with_font(
+        reserved,
+        width,
+        height,
+        Some(font_size_px),
+        centered,
+        false,
+    );
+
+    Ok(SidePanelMermaidProbe {
+        pane_width_cells,
+        pane_height_cells,
+        font_width_px: font_size_px.0,
+        font_height_px: font_size_px.1,
+        rendered_png_width_px: width,
+        rendered_png_height_px: height,
+        estimated_rows: layout.rows,
+        render_mode: match layout.render_mode {
+            SidePanelImageRenderMode::Fit => "fit".to_string(),
+            SidePanelImageRenderMode::ScrollableViewport { zoom_percent } => {
+                format!("scrollable-viewport@{zoom_percent}%")
+            }
+        },
+        layout_fit: probe_rect(layout_fit, pane_width_cells, pane_height_cells),
+        widget_fit: probe_rect(widget_fit, pane_width_cells, pane_height_cells),
+    })
 }
 
 #[derive(Default)]

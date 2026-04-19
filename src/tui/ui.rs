@@ -131,7 +131,10 @@ pub(crate) use messages::{
     render_assistant_message, render_background_task_message, render_swarm_message,
     render_system_message, render_tool_message,
 };
-pub use pinned_ui::SidePanelDebugStats;
+pub use pinned_ui::{
+    SidePanelDebugStats, SidePanelMermaidProbe, SidePanelMermaidProbeRect,
+    debug_probe_side_panel_mermaid,
+};
 pub(crate) use pinned_ui::{
     clear_side_panel_render_caches, prewarm_focused_side_panel, reset_side_panel_debug_stats,
     side_panel_debug_stats,

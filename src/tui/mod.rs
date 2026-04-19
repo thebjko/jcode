@@ -1027,7 +1027,10 @@ pub fn render_frame(frame: &mut Frame<'_>, state: &dyn TuiState) {
     ui::draw(frame, state);
 }
 
-pub use ui::SidePanelDebugStats;
+pub use ui::{
+    SidePanelDebugStats, SidePanelMermaidProbe, SidePanelMermaidProbeRect,
+    debug_probe_side_panel_mermaid,
+};
 
 pub fn display_messages_from_session(session: &crate::session::Session) -> Vec<DisplayMessage> {
     let mut messages: Vec<DisplayMessage> = crate::session::render_messages(session)
