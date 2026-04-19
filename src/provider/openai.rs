@@ -51,8 +51,11 @@ const WEBSOCKET_PERSISTENT_IDLE_RECONNECT_SECS: u64 = 90;
 /// before reuse so we can proactively detect half-closed connections.
 const WEBSOCKET_PERSISTENT_HEALTHCHECK_IDLE_SECS: u64 = 15;
 const WEBSOCKET_PERSISTENT_HEALTHCHECK_TIMEOUT_MS: u64 = 1500;
-const WEBSOCKET_MODEL_COOLDOWN_BASE_SECS: u64 = 600;
-const WEBSOCKET_MODEL_COOLDOWN_MAX_SECS: u64 = 3600;
+/// Base websocket cooldown after a fallback in auto mode.
+/// Keep this short so one flaky attempt does not pin the TUI to HTTPS for a long time.
+const WEBSOCKET_MODEL_COOLDOWN_BASE_SECS: u64 = 60;
+/// Maximum websocket cooldown after repeated fallback streaks.
+const WEBSOCKET_MODEL_COOLDOWN_MAX_SECS: u64 = 600;
 const DEFAULT_MAX_OUTPUT_TOKENS: u32 = 32_768;
 static FALLBACK_TOOL_CALL_COUNTER: AtomicU64 = AtomicU64::new(1);
 static RECOVERED_TEXT_WRAPPED_TOOL_CALLS: AtomicU64 = AtomicU64::new(0);

@@ -602,6 +602,18 @@ fn create_antigravity_picker_test_app() -> App {
     app
 }
 
+fn render_model_picker_text(app: &mut App, width: u16, height: u16) -> String {
+    let _render_lock = scroll_render_test_lock();
+    if app.display_messages.is_empty() {
+        app.display_messages = vec![DisplayMessage::system("seed render state")];
+        app.bump_display_messages_version();
+    }
+    app.open_model_picker();
+    let backend = ratatui::backend::TestBackend::new(width, height);
+    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create test terminal");
+    render_and_snap(app, &mut terminal)
+}
+
 #[derive(Clone)]
 struct FailingModelSwitchProvider;
 
@@ -4819,6 +4831,43 @@ fn test_local_antigravity_model_picker_selection_preserves_antigravity_provider(
     assert_eq!(app.provider.name(), "Antigravity");
     assert_eq!(app.provider.model(), "claude-sonnet-4-6");
     assert!(app.inline_interactive_state.is_none());
+}
+
+#[test]
+fn test_local_model_picker_render_shows_antigravity_models_exactly_as_user_sees_them() {
+    let mut app = create_antigravity_picker_test_app();
+    let text = render_model_picker_text(&mut app, 90, 12);
+
+    assert!(
+        text.contains("ITEM") && text.contains("PROVIDER") && text.contains("ACT"),
+        "rendered /model view should include picker columns, got:
+{}",
+        text
+    );
+    assert!(
+        text.contains("claude-sonnet-4-6"),
+        "rendered /model view should show the Antigravity Claude row, got:
+{}",
+        text
+    );
+    assert!(
+        text.contains("gpt-oss-120b-medium"),
+        "rendered /model view should show the Antigravity GPT row, got:
+{}",
+        text
+    );
+    assert!(
+        text.contains("Antigravity"),
+        "rendered /model view should show the Antigravity provider column, got:
+{}",
+        text
+    );
+    assert!(
+        text.contains("cli"),
+        "rendered /model view should show the route transport column, got:
+{}",
+        text
+    );
 }
 
 #[test]
