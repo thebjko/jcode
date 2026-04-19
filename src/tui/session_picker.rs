@@ -24,9 +24,9 @@ mod loading;
 mod navigation;
 mod render;
 
-use loading::{build_messages_preview, crashed_sessions_from_all_sessions};
 #[cfg(test)]
-use loading::{build_search_index, collect_recent_session_stems};
+use loading::collect_recent_session_stems;
+use loading::{build_messages_preview, build_search_index, crashed_sessions_from_all_sessions};
 pub use loading::{load_servers, load_sessions, load_sessions_grouped};
 
 /// Session info for display
@@ -701,6 +701,14 @@ impl SessionPicker {
         };
 
         if let Some(s) = self.session_by_ref_mut(session_ref) {
+            s.search_index = build_search_index(
+                &s.id,
+                &s.short_name,
+                &s.title,
+                s.working_dir.as_deref(),
+                s.save_label.as_deref(),
+                &preview,
+            );
             s.messages_preview = preview;
         }
     }
@@ -1882,6 +1890,56 @@ mod tests {
         picker.search_query = "not-in-preview".to_string();
         picker.rebuild_items();
         assert!(picker.visible_sessions.is_empty());
+    }
+
+    #[test]
+    fn test_loading_preview_refreshes_search_index_for_picker_filtering() {
+        let _env_lock = crate::storage::lock_test_env();
+        let temp = tempfile::tempdir().expect("temp dir");
+        let previous_home = std::env::var("JCODE_HOME").ok();
+        crate::env::set_var("JCODE_HOME", temp.path());
+
+        let mut session = Session::create_with_id(
+            "session_preview_search".to_string(),
+            Some("/tmp/preview-search".to_string()),
+            Some("Preview Search".to_string()),
+        );
+        session.append_stored_message(crate::session::StoredMessage {
+            id: "msg1".to_string(),
+            role: crate::message::Role::User,
+            content: vec![crate::message::ContentBlock::Text {
+                text: "needle hidden outside the initial picker summary".to_string(),
+                cache_control: None,
+            }],
+            display_role: None,
+            timestamp: None,
+            tool_duration_ms: None,
+            token_usage: None,
+        });
+        session.save().expect("save session");
+
+        let sessions = load_sessions().expect("load sessions");
+        let mut picker = SessionPicker::new(sessions);
+
+        let selected_before = picker.selected_session().expect("selected session");
+        assert!(!selected_before.search_index.contains("needle hidden"));
+
+        picker.ensure_selected_preview_loaded();
+
+        let selected_after = picker
+            .selected_session()
+            .expect("selected session after preview");
+        assert!(selected_after.search_index.contains("needle hidden"));
+
+        picker.search_query = "needle hidden".to_string();
+        picker.rebuild_items();
+        assert_eq!(picker.visible_sessions.len(), 1);
+
+        if let Some(previous_home) = previous_home {
+            crate::env::set_var("JCODE_HOME", previous_home);
+        } else {
+            crate::env::remove_var("JCODE_HOME");
+        }
     }
 
     #[test]

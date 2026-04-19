@@ -122,6 +122,17 @@ pub(super) fn session_matches_query(session: &SessionInfo, query: &str) -> bool 
     session_transcript_contains_query(session, &normalized)
 }
 
+/// Fast in-memory matcher for interactive picker filtering.
+///
+/// This intentionally avoids transcript file I/O because it runs on every
+/// keystroke while the `/resume` overlay is open. Transcript-backed content can
+/// still become searchable after preview load because the picker refreshes the
+/// session's cached `search_index` from the loaded preview.
+pub(super) fn session_matches_picker_query(session: &SessionInfo, query: &str) -> bool {
+    let normalized = query.trim().to_lowercase();
+    normalized.is_empty() || session.search_index.contains(&normalized)
+}
+
 fn session_transcript_contains_query(session: &SessionInfo, query_lower: &str) -> bool {
     transcript_paths_for_session(session)
         .into_iter()

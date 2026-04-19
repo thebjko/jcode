@@ -1,4 +1,4 @@
-use super::loading::session_matches_query;
+use super::loading::session_matches_picker_query;
 use super::*;
 
 impl SessionPicker {
@@ -8,7 +8,7 @@ impl SessionPicker {
 
     /// Check if a session matches the current search query.
     fn session_matches_search(session: &SessionInfo, query: &str) -> bool {
-        session_matches_query(session, query)
+        session_matches_picker_query(session, query)
     }
 
     fn all_session_refs(&self) -> Vec<SessionRef> {
