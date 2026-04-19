@@ -53,6 +53,7 @@ pub(super) fn handle_tick(app: &mut App) -> bool {
         app.append_streaming_text(&chunk);
         needs_redraw = true;
     }
+    needs_redraw |= app.refresh_todos_view_if_needed();
     needs_redraw |= app.refresh_side_panel_linked_content_if_due();
     needs_redraw |= app.poll_compaction_completion();
     needs_redraw |= app.maybe_progress_provider_failover_countdown();
@@ -152,6 +153,13 @@ pub(super) fn handle_bus_event(
             if update.session_id == app.session.id {
                 app.set_side_panel_snapshot(update.snapshot);
                 true
+            } else {
+                false
+            }
+        }
+        Ok(BusEvent::TodoUpdated(event)) => {
+            if event.session_id == app.session.id {
+                app.refresh_todos_view_now()
             } else {
                 false
             }

@@ -18,6 +18,7 @@ pub(super) use super::commands_review::{
     preferred_one_shot_review_override, prepare_review_spawned_session, queue_review_spawn_remote,
     reset_current_session,
 };
+pub(super) use super::todos_view::handle_todos_view_command;
 use super::{App, DisplayMessage, ProcessingStatus};
 use crate::bus::{Bus, BusEvent, ManualToolCompleted, ToolEvent, ToolStatus};
 use crate::id;
@@ -579,6 +580,7 @@ pub(super) fn handle_session_command(app: &mut App, trimmed: &str) -> bool {
     if handle_subagent_model_command(app, trimmed)
         || handle_subagent_command(app, trimmed)
         || handle_observe_command(app, trimmed)
+        || handle_todos_view_command(app, trimmed)
         || super::split_view::handle_split_view_command(app, trimmed)
         || handle_btw_command(app, trimmed)
         || handle_git_command(app, trimmed)

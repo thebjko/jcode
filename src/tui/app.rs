@@ -67,6 +67,7 @@ mod state_ui_maintenance;
 mod state_ui_messages;
 mod state_ui_runtime;
 mod state_ui_storage;
+mod todos_view;
 mod tui_lifecycle;
 mod tui_lifecycle_runtime;
 mod tui_state;
@@ -633,6 +634,10 @@ pub struct App {
     split_view_updated_at_ms: u64,
     split_view_rendered_display_version: u64,
     split_view_rendered_streaming_hash: u64,
+    todos_view_enabled: bool,
+    todos_view_markdown: String,
+    todos_view_updated_at_ms: u64,
+    todos_view_rendered_hash: u64,
     last_side_panel_refresh: Option<Instant>,
     // Most recently persisted focus target for dictation routing.
     last_client_focus_recorded_at: Option<Instant>,

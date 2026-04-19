@@ -143,6 +143,10 @@ impl App {
                 "Show the latest tool context in the side panel",
             ),
             (
+                "/todos".into(),
+                "Show the current session todo list in the side panel",
+            ),
+            (
                 "/splitview".into(),
                 "Mirror the current chat in the side panel",
             ),
@@ -1035,6 +1039,7 @@ impl App {
                 | "/btw"
                 | "/git"
                 | "/observe"
+                | "/todos"
                 | "/splitview"
                 | "/split-view"
                 | "/model"

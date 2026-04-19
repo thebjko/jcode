@@ -69,6 +69,7 @@ pub(super) async fn handle_tick(app: &mut App, remote: &mut RemoteConnection) ->
         needs_redraw = true;
     }
 
+    needs_redraw |= app.refresh_todos_view_if_needed();
     needs_redraw |= app.refresh_side_panel_linked_content_if_due();
 
     let _ = check_debug_command(app, remote).await;
