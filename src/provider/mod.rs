@@ -1774,12 +1774,7 @@ impl Provider for MultiProvider {
         }
 
         let already_has_antigravity = self.antigravity_provider().is_some();
-        if !already_has_antigravity
-            && matches!(
-                crate::auth::AuthStatus::check().antigravity,
-                crate::auth::AuthState::Available
-            )
-        {
+        if !already_has_antigravity && crate::auth::antigravity::load_tokens().is_ok() {
             crate::logging::info("Hot-initialized Antigravity provider after login");
             *self
                 .antigravity

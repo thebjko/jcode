@@ -120,8 +120,7 @@ impl MultiProvider {
             None
         };
 
-        let antigravity_provider = if matches!(auth_status.antigravity, auth::AuthState::Available)
-        {
+        let antigravity_provider = if auth::antigravity::load_tokens().is_ok() {
             Some(Arc::new(antigravity::AntigravityCliProvider::new()))
         } else {
             None

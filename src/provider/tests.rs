@@ -385,6 +385,42 @@ fn test_on_auth_changed_hot_initializes_gemini_and_marks_routes_available() {
 }
 
 #[test]
+fn test_on_auth_changed_hot_initializes_antigravity_when_tokens_exist_but_are_expired() {
+    with_clean_provider_test_env(|| {
+        let runtime = enter_test_runtime();
+        let _enter = runtime.enter();
+
+        crate::auth::antigravity::save_tokens(&crate::auth::antigravity::AntigravityTokens {
+            access_token: "expired-access-token".to_string(),
+            refresh_token: "refresh-token".to_string(),
+            expires_at: 1,
+            email: None,
+            project_id: None,
+        })
+        .expect("save expired antigravity auth");
+
+        let provider = MultiProvider {
+            claude: RwLock::new(None),
+            anthropic: RwLock::new(None),
+            openai: RwLock::new(None),
+            copilot_api: RwLock::new(None),
+            antigravity: RwLock::new(None),
+            gemini: RwLock::new(None),
+            cursor: RwLock::new(None),
+            openrouter: RwLock::new(None),
+            active: RwLock::new(ActiveProvider::Antigravity),
+            use_claude_cli: false,
+            startup_notices: RwLock::new(Vec::new()),
+            forced_provider: Some(ActiveProvider::Antigravity),
+        };
+
+        provider.on_auth_changed();
+
+        assert!(provider.antigravity_provider().is_some());
+    });
+}
+
+#[test]
 fn test_on_auth_changed_hot_initializes_cursor_and_marks_routes_available() {
     with_clean_provider_test_env(|| {
         with_env_var("CURSOR_API_KEY", "cursor-test-key", || {
