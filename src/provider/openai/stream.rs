@@ -630,7 +630,6 @@ impl Stream for OpenAIResponsesStream {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

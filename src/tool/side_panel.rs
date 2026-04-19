@@ -78,8 +78,14 @@ impl Tool for SidePanelTool {
     async fn execute(&self, input: Value, ctx: ToolContext) -> Result<ToolOutput> {
         let params: SidePanelInput = serde_json::from_value(input)?;
         let action_label = params.action.clone();
-        let page_label = params.page_id.clone().unwrap_or_else(|| "<none>".to_string());
-        let file_label = params.file_path.clone().unwrap_or_else(|| "<none>".to_string());
+        let page_label = params
+            .page_id
+            .clone()
+            .unwrap_or_else(|| "<none>".to_string());
+        let file_label = params
+            .file_path
+            .clone()
+            .unwrap_or_else(|| "<none>".to_string());
         let focus = params.focus.unwrap_or(true);
 
         let snapshot = match params.action.as_str() {

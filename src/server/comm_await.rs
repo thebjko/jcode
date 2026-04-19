@@ -256,12 +256,14 @@ pub(super) async fn handle_comm_await_members(
             .as_ref()
             .and_then(|state| state.final_response.clone())
         {
-            let _ = ctx.client_event_tx.send(ServerEvent::CommAwaitMembersResponse {
-                id,
-                completed: final_response.completed,
-                members: final_response.members,
-                summary: final_response.summary,
-            });
+            let _ = ctx
+                .client_event_tx
+                .send(ServerEvent::CommAwaitMembersResponse {
+                    id,
+                    completed: final_response.completed,
+                    members: final_response.members,
+                    summary: final_response.summary,
+                });
             return;
         }
 
@@ -276,12 +278,14 @@ pub(super) async fn handle_comm_await_members(
         .await;
 
         if initial_statuses.is_empty() {
-            let _ = ctx.client_event_tx.send(ServerEvent::CommAwaitMembersResponse {
-                id,
-                completed: true,
-                members: vec![],
-                summary: "No other members in swarm to wait for.".to_string(),
-            });
+            let _ = ctx
+                .client_event_tx
+                .send(ServerEvent::CommAwaitMembersResponse {
+                    id,
+                    completed: true,
+                    members: vec![],
+                    summary: "No other members in swarm to wait for.".to_string(),
+                });
             return;
         }
 

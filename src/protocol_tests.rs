@@ -981,7 +981,6 @@ fn test_input_shell_result_event_roundtrip() -> Result<()> {
     Ok(())
 }
 
-
 #[test]
 fn test_protocol_enum_roundtrips_cover_wire_names() -> Result<()> {
     let transcript_modes = [
@@ -1025,7 +1024,6 @@ fn test_protocol_enum_roundtrips_cover_wire_names() -> Result<()> {
     Ok(())
 }
 
-
 #[test]
 fn test_set_feature_roundtrip() -> Result<()> {
     let req = Request::SetFeature {
@@ -1036,7 +1034,12 @@ fn test_set_feature_roundtrip() -> Result<()> {
     let json = serde_json::to_string(&req)?;
     assert!(json.contains("\"type\":\"set_feature\""));
     let decoded = parse_request_json(&json)?;
-    let Request::SetFeature { id, feature, enabled } = decoded else {
+    let Request::SetFeature {
+        id,
+        feature,
+        enabled,
+    } = decoded
+    else {
         return Err(anyhow!("expected SetFeature"));
     };
     assert_eq!(id, 77);
@@ -1147,7 +1150,8 @@ fn test_message_request_roundtrip_preserves_images_and_system_reminder() -> Resu
         content,
         images,
         system_reminder,
-    } = decoded else {
+    } = decoded
+    else {
         return Err(anyhow!("expected Message"));
     };
     assert_eq!(id, 88);

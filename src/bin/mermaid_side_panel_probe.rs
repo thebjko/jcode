@@ -39,7 +39,10 @@ fn main() -> Result<()> {
             }
             value => {
                 if path.is_some() {
-                    return Err(anyhow!("only one mermaid file path is supported\n{}", usage()));
+                    return Err(anyhow!(
+                        "only one mermaid file path is supported\n{}",
+                        usage()
+                    ));
                 }
                 path = Some(value.to_string());
             }

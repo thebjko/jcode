@@ -139,7 +139,15 @@ impl Tool for SessionSearchTool {
 
         let results = tokio::task::spawn_blocking({
             let session_id = ctx.session_id.clone();
-            move || search_sessions_blocking(&sessions_dir, &query, wd_filter.as_deref(), limit, &session_id)
+            move || {
+                search_sessions_blocking(
+                    &sessions_dir,
+                    &query,
+                    wd_filter.as_deref(),
+                    limit,
+                    &session_id,
+                )
+            }
         })
         .await??;
 
@@ -636,14 +644,9 @@ mod tests {
             )]);
 
             let query = QueryProfile::new("airpods reconnect bluetooth");
-            let results = search_sessions_blocking(
-                &home.join("sessions"),
-                &query,
-                None,
-                10,
-                "test-session",
-            )
-                .expect("search succeeds");
+            let results =
+                search_sessions_blocking(&home.join("sessions"), &query, None, 10, "test-session")
+                    .expect("search succeeds");
 
             assert!(!results.is_empty(), "expected token-overlap match");
             assert!(results[0].snippet.to_lowercase().contains("airpods"));
@@ -665,14 +668,9 @@ mod tests {
             )]);
 
             let query = QueryProfile::new("hackernews visibility upvotes");
-            let results = search_sessions_blocking(
-                &home.join("sessions"),
-                &query,
-                None,
-                10,
-                "test-session",
-            )
-                .expect("search succeeds");
+            let results =
+                search_sessions_blocking(&home.join("sessions"), &query, None, 10, "test-session")
+                    .expect("search succeeds");
 
             assert!(!results.is_empty(), "expected tool input match");
             assert!(results[0].snippet.to_lowercase().contains("hackernews"));

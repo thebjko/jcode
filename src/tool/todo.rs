@@ -65,7 +65,11 @@ impl Tool for TodoTool {
 
     async fn execute(&self, input: Value, ctx: ToolContext) -> Result<ToolOutput> {
         let params: TodoInput = serde_json::from_value(input)?;
-        let operation = if params.todos.is_some() { "write" } else { "read" };
+        let operation = if params.todos.is_some() {
+            "write"
+        } else {
+            "read"
+        };
         match params.todos {
             Some(todos) => {
                 save_todos(&ctx.session_id, &todos)?;

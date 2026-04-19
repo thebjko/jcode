@@ -64,7 +64,7 @@ use self::swarm_persistence::{
 use self::util::get_shared_mcp_pool;
 use crate::agent::Agent;
 use crate::ambient_runner::AmbientRunnerHandle;
-use crate::bus::{Bus, BusEvent, FileOp};
+use crate::bus::{Bus, BusEvent};
 use crate::message::format_background_task_notification_markdown;
 use crate::protocol::{NotificationType, ServerEvent};
 use crate::provider::Provider;
@@ -423,9 +423,7 @@ mod state;
 use self::state::latest_peer_touches;
 pub use self::state::{
     FileAccess, SharedContext, SwarmEvent, SwarmEventType, SwarmMember, SwarmState,
-    SwarmTaskProgress, VersionedPlan, build_child_scope_id, default_scope_id_for_session,
-    parent_scope_id, require_coordinator_scope_id, resolve_scope_id_for_session,
-    root_scope_id_for_swarm, swarm_id_for_scope_id,
+    SwarmTaskProgress, VersionedPlan,
 };
 use self::state::{
     SessionInterruptQueues, enqueue_soft_interrupt, fanout_live_client_event, fanout_session_event,

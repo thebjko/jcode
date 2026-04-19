@@ -64,7 +64,10 @@ impl Tool for DebugSocketTool {
     async fn execute(&self, input: Value, _ctx: ToolContext) -> Result<ToolOutput> {
         let params: DebugSocketInput = serde_json::from_value(input)?;
         let timeout_secs = params.timeout_secs.unwrap_or(30);
-        let session_label = params.session_id.clone().unwrap_or_else(|| "<none>".to_string());
+        let session_label = params
+            .session_id
+            .clone()
+            .unwrap_or_else(|| "<none>".to_string());
 
         // Build title based on command namespace
         let title =

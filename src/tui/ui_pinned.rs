@@ -5,13 +5,10 @@ mod layout_support;
 mod util_support;
 use crate::tui::mermaid;
 #[cfg(test)]
-use layout_support::{
-    clamp_side_panel_image_rows, estimate_side_panel_image_rows_with_font,
-};
+use layout_support::{clamp_side_panel_image_rows, estimate_side_panel_image_rows_with_font};
 use layout_support::{
     estimate_side_panel_image_layout, estimate_side_panel_image_layout_with_font,
-    fit_image_area_with_font, plan_fit_image_render,
-    side_panel_viewport_scroll_x,
+    fit_image_area_with_font, plan_fit_image_render, side_panel_viewport_scroll_x,
 };
 use serde::Serialize;
 #[cfg(test)]
@@ -296,12 +293,19 @@ fn utilization_percent(used: u32, total: u32) -> f64 {
     }
 }
 
-fn probe_rect(rect: Rect, pane_width_cells: u16, pane_height_cells: u16) -> SidePanelMermaidProbeRect {
+fn probe_rect(
+    rect: Rect,
+    pane_width_cells: u16,
+    pane_height_cells: u16,
+) -> SidePanelMermaidProbeRect {
     SidePanelMermaidProbeRect {
         width_cells: rect.width,
         height_cells: rect.height,
         width_utilization_percent: utilization_percent(rect.width as u32, pane_width_cells as u32),
-        height_utilization_percent: utilization_percent(rect.height as u32, pane_height_cells as u32),
+        height_utilization_percent: utilization_percent(
+            rect.height as u32,
+            pane_height_cells as u32,
+        ),
         area_utilization_percent: utilization_percent(
             rect.width as u32 * rect.height as u32,
             pane_width_cells as u32 * pane_height_cells as u32,
@@ -335,22 +339,10 @@ pub fn debug_probe_side_panel_mermaid(
         Some(font_size_px),
     );
     let reserved = Rect::new(0, 0, pane_width_cells, layout.rows);
-    let layout_fit = fit_image_area_with_font(
-        reserved,
-        width,
-        height,
-        Some(font_size_px),
-        centered,
-        false,
-    );
-    let widget_fit = fit_image_area_with_font(
-        reserved,
-        width,
-        height,
-        Some(font_size_px),
-        centered,
-        false,
-    );
+    let layout_fit =
+        fit_image_area_with_font(reserved, width, height, Some(font_size_px), centered, false);
+    let widget_fit =
+        fit_image_area_with_font(reserved, width, height, Some(font_size_px), centered, false);
 
     Ok(SidePanelMermaidProbe {
         pane_width_cells,

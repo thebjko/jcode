@@ -568,7 +568,6 @@ pub async fn wait_for_reload_ack(
     })?
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -665,7 +664,6 @@ mod tests {
         assert_eq!(received.hash, ack.hash);
     }
 
-
     #[tokio::test]
     async fn wait_for_reload_ack_handles_repeated_unique_requests() {
         let (tx, _) = reload_ack();
@@ -687,7 +685,6 @@ mod tests {
         }
     }
 
-
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn inspect_reload_wait_status_handles_repeated_ready_markers() {
@@ -704,10 +701,9 @@ mod tests {
                 Some(format!("ready-{idx}")),
             );
 
-            let status = inspect_reload_wait_status(&socket_path, Duration::from_secs(5), None).await;
+            let status =
+                inspect_reload_wait_status(&socket_path, Duration::from_secs(5), None).await;
             assert_eq!(status, ReloadWaitStatus::Ready);
         }
     }
-
-
 }

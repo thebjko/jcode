@@ -241,7 +241,8 @@ impl Provider for OpenAIProvider {
                     Err(OpenAIStreamFailure::FallbackToHttps(error)) => {
                         let elapsed_ms = attempt_started.elapsed().as_millis();
                         let reason = summarize_websocket_fallback_reason(&error.to_string());
-                        let fallback_reason = classify_websocket_fallback_reason(&error.to_string());
+                        let fallback_reason =
+                            classify_websocket_fallback_reason(&error.to_string());
                         crate::logging::warn(&format!(
                             "WebSocket fallback after {}ms: {}",
                             elapsed_ms, error

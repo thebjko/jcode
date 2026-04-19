@@ -17,7 +17,12 @@ const REQUEST_ID: u64 = 1;
 fn request_type_from_json(json: &str) -> String {
     serde_json::from_str::<Value>(json)
         .ok()
-        .and_then(|value| value.get("type").and_then(|v| v.as_str()).map(str::to_string))
+        .and_then(|value| {
+            value
+                .get("type")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        })
         .unwrap_or_else(|| "unknown".to_string())
 }
 
