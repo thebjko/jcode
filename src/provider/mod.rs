@@ -15,6 +15,7 @@ pub mod openai;
 pub(crate) mod openai_request;
 pub mod openrouter;
 pub mod pricing;
+mod route_builders;
 mod selection;
 mod startup;
 
@@ -42,6 +43,12 @@ pub use jcode_provider_core::{
     CHEAPNESS_REFERENCE_INPUT_TOKENS, CHEAPNESS_REFERENCE_OUTPUT_TOKENS, ModelRoute,
     NativeCompactionResult, RouteBillingKind, RouteCheapnessEstimate, RouteCostConfidence,
     RouteCostSource, shared_http_client,
+};
+pub use route_builders::{
+    build_anthropic_oauth_route, build_copilot_route, build_openai_oauth_route,
+    build_openrouter_auto_route, build_openrouter_endpoint_route,
+    build_openrouter_fallback_provider_route, is_listable_model_name,
+    listable_model_names_from_routes, openrouter_catalog_model_id,
 };
 
 fn should_eager_detect_copilot_tier() -> bool {
@@ -175,143 +182,6 @@ pub fn summarize_model_catalog_refresh(
         routes_added,
         routes_removed,
         routes_changed,
-    }
-}
-
-pub fn is_listable_model_name(model: &str) -> bool {
-    let trimmed = model.trim();
-    !trimmed.is_empty() && !matches!(trimmed, "copilot models" | "openrouter models")
-}
-
-pub fn openrouter_catalog_model_id(model: &str) -> Option<String> {
-    let trimmed = model.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    if trimmed.contains('/') {
-        return Some(trimmed.to_string());
-    }
-
-    match provider_for_model(trimmed) {
-        Some("claude") => Some(format!("anthropic/{}", trimmed)),
-        Some("openai") => Some(format!("openai/{}", trimmed)),
-        Some("openrouter") => Some(trimmed.to_string()),
-        _ => None,
-    }
-}
-
-pub fn listable_model_names_from_routes(routes: &[ModelRoute]) -> Vec<String> {
-    let mut models = Vec::new();
-    let mut seen = BTreeSet::new();
-    for route in routes {
-        if is_listable_model_name(&route.model) && seen.insert(route.model.clone()) {
-            models.push(route.model.clone());
-        }
-    }
-    models
-}
-
-pub fn build_anthropic_oauth_route(
-    model: &str,
-    available: bool,
-    detail: impl Into<String>,
-) -> ModelRoute {
-    ModelRoute {
-        model: model.to_string(),
-        provider: "Anthropic".to_string(),
-        api_method: "claude-oauth".to_string(),
-        available,
-        detail: detail.into(),
-        cheapness: cheapness_for_route(model, "Anthropic", "claude-oauth"),
-    }
-}
-
-pub fn build_openai_oauth_route(
-    model: &str,
-    available: bool,
-    detail: impl Into<String>,
-) -> ModelRoute {
-    ModelRoute {
-        model: model.to_string(),
-        provider: "OpenAI".to_string(),
-        api_method: "openai-oauth".to_string(),
-        available,
-        detail: detail.into(),
-        cheapness: cheapness_for_route(model, "OpenAI", "openai-oauth"),
-    }
-}
-
-pub fn build_copilot_route(model: &str, available: bool, detail: impl Into<String>) -> ModelRoute {
-    ModelRoute {
-        model: model.to_string(),
-        provider: "Copilot".to_string(),
-        api_method: "copilot".to_string(),
-        available,
-        detail: detail.into(),
-        cheapness: cheapness_for_route(model, "Copilot", "copilot"),
-    }
-}
-
-pub fn build_openrouter_auto_route(
-    model: &str,
-    available: bool,
-    auto_detail: impl Into<String>,
-) -> ModelRoute {
-    ModelRoute {
-        model: model.to_string(),
-        provider: "auto".to_string(),
-        api_method: "openrouter".to_string(),
-        available,
-        detail: auto_detail.into(),
-        cheapness: cheapness_for_route(model, "auto", "openrouter"),
-    }
-}
-
-pub fn build_openrouter_endpoint_route(
-    model: &str,
-    endpoint: &crate::provider::openrouter::EndpointInfo,
-    available: bool,
-    age_suffix: Option<&str>,
-) -> ModelRoute {
-    let mut detail = endpoint.detail_string();
-    if let Some(age_suffix) = age_suffix.map(str::trim).filter(|value| !value.is_empty()) {
-        if !detail.is_empty() {
-            detail = format!("{}, {}", detail, age_suffix);
-        } else {
-            detail = age_suffix.to_string();
-        }
-    }
-
-    ModelRoute {
-        model: model.to_string(),
-        provider: endpoint.provider_name.clone(),
-        api_method: "openrouter".to_string(),
-        available,
-        detail,
-        cheapness: openrouter_pricing_from_model_pricing(
-            &endpoint.pricing,
-            RouteCostSource::OpenRouterEndpoint,
-            RouteCostConfidence::High,
-            Some(format!(
-                "OpenRouter endpoint pricing for {}",
-                endpoint.provider_name
-            )),
-        ),
-    }
-}
-
-pub fn build_openrouter_fallback_provider_route(
-    display_model: &str,
-    catalog_model: &str,
-    provider: &str,
-) -> ModelRoute {
-    ModelRoute {
-        model: display_model.to_string(),
-        provider: provider.to_string(),
-        api_method: "openrouter".to_string(),
-        available: true,
-        detail: String::new(),
-        cheapness: cheapness_for_route(catalog_model, provider, "openrouter"),
     }
 }
 
@@ -669,7 +539,7 @@ pub use self::models::{
     resolve_model_capabilities, should_refresh_anthropic_model_catalog,
     should_refresh_openai_model_catalog,
 };
-use self::pricing::{cheapness_for_route, openrouter_pricing_from_model_pricing};
+use self::pricing::cheapness_for_route;
 use self::selection::{ActiveProvider, ProviderAvailability};
 
 /// MultiProvider wraps multiple providers and allows seamless model switching
