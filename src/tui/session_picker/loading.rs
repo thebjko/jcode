@@ -20,6 +20,7 @@ use super::{
 
 use super::{ResumeTarget, SessionSource};
 
+#[cfg(test)]
 const TRANSCRIPT_SEARCH_CHUNK_BYTES: usize = 64 * 1024;
 
 fn session_scan_limit() -> usize {
@@ -109,6 +110,7 @@ pub(super) fn build_search_index(
     combined.to_lowercase()
 }
 
+#[cfg(test)]
 pub(super) fn session_matches_query(session: &SessionInfo, query: &str) -> bool {
     let normalized = query.trim().to_lowercase();
     if normalized.is_empty() {
@@ -133,12 +135,14 @@ pub(super) fn session_matches_picker_query(session: &SessionInfo, query: &str) -
     normalized.is_empty() || session.search_index.contains(&normalized)
 }
 
+#[cfg(test)]
 fn session_transcript_contains_query(session: &SessionInfo, query_lower: &str) -> bool {
     transcript_paths_for_session(session)
         .into_iter()
         .any(|path| file_contains_case_insensitive_query(&path, query_lower))
 }
 
+#[cfg(test)]
 fn transcript_paths_for_session(session: &SessionInfo) -> Vec<PathBuf> {
     match &session.resume_target {
         ResumeTarget::JcodeSession { session_id } => {
@@ -159,6 +163,7 @@ fn transcript_paths_for_session(session: &SessionInfo) -> Vec<PathBuf> {
     }
 }
 
+#[cfg(test)]
 fn file_contains_case_insensitive_query(path: &Path, query_lower: &str) -> bool {
     if query_lower.is_empty() {
         return true;
@@ -177,6 +182,7 @@ fn file_contains_case_insensitive_query(path: &Path, query_lower: &str) -> bool 
         .unwrap_or(false)
 }
 
+#[cfg(test)]
 fn file_contains_ascii_case_insensitive(path: &Path, needle_lower: &[u8]) -> bool {
     let Ok(file) = File::open(path) else {
         return false;
@@ -207,6 +213,7 @@ fn file_contains_ascii_case_insensitive(path: &Path, needle_lower: &[u8]) -> boo
     }
 }
 
+#[cfg(test)]
 fn contains_ascii_case_insensitive_bytes(haystack: &[u8], needle_lower: &[u8]) -> bool {
     if needle_lower.is_empty() {
         return true;
