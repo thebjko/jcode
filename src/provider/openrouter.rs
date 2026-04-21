@@ -39,7 +39,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::task::{Context as TaskContext, Poll};
 use std::time::Instant;
 use tokio::sync::{RwLock, mpsc};
@@ -74,6 +74,7 @@ const CACHE_PIN_TTL_SECS: u64 = 60 * 60;
 
 /// Endpoints cache TTL (1 hour) - per-model provider endpoint data
 const ENDPOINTS_CACHE_TTL_SECS: u64 = 60 * 60;
+const MAX_BACKGROUND_ENDPOINT_REFRESHES: usize = 8;
 
 fn explicit_openrouter_runtime_configured() -> bool {
     [
@@ -415,6 +416,12 @@ struct EndpointRefreshTracker {
     last_attempt_unix: HashMap<String, u64>,
 }
 
+static GLOBAL_ENDPOINT_REFRESH: OnceLock<Mutex<EndpointRefreshTracker>> = OnceLock::new();
+
+fn global_endpoint_refresh() -> &'static Mutex<EndpointRefreshTracker> {
+    GLOBAL_ENDPOINT_REFRESH.get_or_init(|| Mutex::new(EndpointRefreshTracker::default()))
+}
+
 pub struct OpenRouterProvider {
     client: Client,
     model: Arc<RwLock<String>>,
@@ -572,8 +579,17 @@ impl OpenRouterProvider {
         let Ok(mut state) = self.endpoint_refresh.lock() else {
             return false;
         };
+        let Ok(mut global_state) = global_endpoint_refresh().lock() else {
+            return false;
+        };
 
         if state.in_flight.contains(model) {
+            return false;
+        }
+        if global_state.in_flight.len() >= MAX_BACKGROUND_ENDPOINT_REFRESHES {
+            return false;
+        }
+        if global_state.in_flight.contains(model) {
             return false;
         }
 
@@ -582,9 +598,18 @@ impl OpenRouterProvider {
         {
             return false;
         }
+        if let Some(last) = global_state.last_attempt_unix.get(model)
+            && now.saturating_sub(*last) < MODEL_CATALOG_REFRESH_RETRY_SECS
+        {
+            return false;
+        }
 
         state.in_flight.insert(model.to_string());
         state.last_attempt_unix.insert(model.to_string(), now);
+        global_state.in_flight.insert(model.to_string());
+        global_state
+            .last_attempt_unix
+            .insert(model.to_string(), now);
         true
     }
 
@@ -595,6 +620,9 @@ impl OpenRouterProvider {
         if let Ok(mut state) = refresh_state.lock() {
             state.in_flight.remove(model);
         }
+        if let Ok(mut global_state) = global_endpoint_refresh().lock() {
+            global_state.in_flight.remove(model);
+        }
     }
 
     fn maybe_schedule_endpoint_refresh(
@@ -602,6 +630,7 @@ impl OpenRouterProvider {
         model: &str,
         cache_age_secs: Option<u64>,
         context: &'static str,
+        notify_models_updated: bool,
     ) -> bool {
         if !self.supports_provider_features || !self.supports_model_catalog {
             return false;
@@ -646,13 +675,15 @@ impl OpenRouterProvider {
 
             match provider.fetch_endpoints(&model_name).await {
                 Ok(endpoints) => {
-                    crate::logging::info(&format!(
-                        "Refreshed OpenRouter endpoint providers in background ({}): {} via {} providers",
-                        context,
-                        model_name,
-                        endpoints.len()
-                    ));
-                    crate::bus::Bus::global().publish(crate::bus::BusEvent::ModelsUpdated);
+                    if notify_models_updated {
+                        crate::logging::info(&format!(
+                            "Refreshed OpenRouter endpoint providers in background ({}): {} via {} providers",
+                            context,
+                            model_name,
+                            endpoints.len()
+                        ));
+                        crate::bus::Bus::global().publish(crate::bus::BusEvent::ModelsUpdated);
+                    }
                 }
                 Err(error) => crate::logging::info(&format!(
                     "Failed to refresh OpenRouter endpoint providers in background ({}): {} ({})",
@@ -902,13 +933,19 @@ impl OpenRouterProvider {
         }
 
         if providers.is_empty() {
-            self.maybe_schedule_endpoint_refresh(model, None, "provider autocomplete cache miss");
+            self.maybe_schedule_endpoint_refresh(
+                model,
+                None,
+                "provider autocomplete cache miss",
+                true,
+            );
             providers = known_providers();
         } else if let Some((_, age)) = load_endpoints_disk_cache_public(model) {
             self.maybe_schedule_endpoint_refresh(
                 model,
                 Some(age),
                 "provider autocomplete stale cache",
+                true,
             );
         }
 
@@ -930,6 +967,7 @@ impl OpenRouterProvider {
                     model,
                     Some(age),
                     "provider details stale cache",
+                    true,
                 );
             }
             return endpoints
@@ -948,7 +986,7 @@ impl OpenRouterProvider {
                 .collect();
         }
 
-        self.maybe_schedule_endpoint_refresh(model, None, "provider details cache miss");
+        self.maybe_schedule_endpoint_refresh(model, None, "provider details cache miss", true);
 
         Vec::new()
     }
@@ -959,7 +997,7 @@ impl OpenRouterProvider {
         cache_age_secs: Option<u64>,
         context: &'static str,
     ) -> bool {
-        self.maybe_schedule_endpoint_refresh(model, cache_age_secs, context)
+        self.maybe_schedule_endpoint_refresh(model, cache_age_secs, context, false)
     }
 
     /// Check if OPENROUTER_API_KEY is available (env var or config file)

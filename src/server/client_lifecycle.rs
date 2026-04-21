@@ -62,7 +62,8 @@ type ChannelSubscriptions = Arc<RwLock<HashMap<String, HashMap<String, HashSet<S
 fn is_lightweight_control_request(request: &Request) -> bool {
     matches!(
         request,
-        Request::CommShare { .. }
+        Request::Ping { .. }
+            | Request::CommShare { .. }
             | Request::CommRead { .. }
             | Request::CommMessage { .. }
             | Request::CommList { .. }
@@ -125,6 +126,11 @@ async fn handle_lightweight_control_request(
     await_members_runtime: &AwaitMembersRuntime,
     swarm_mutation_runtime: &SwarmMutationRuntime,
 ) -> Result<()> {
+    if let Request::Ping { id } = request {
+        write_direct_event(&writer, &ServerEvent::Pong { id }).await?;
+        return Ok(());
+    }
+
     write_direct_event(&writer, &ServerEvent::Ack { id: request.id() }).await?;
 
     let (client_event_tx, mut client_event_rx) = mpsc::unbounded_channel::<ServerEvent>();
@@ -2590,6 +2596,11 @@ mod tests {
             self.forked.store(true, Ordering::SeqCst);
             panic!("fork should not run for lightweight control requests")
         }
+    }
+
+    #[test]
+    fn ping_request_is_lightweight_control_request() {
+        assert!(is_lightweight_control_request(&Request::Ping { id: 1 }));
     }
 
     #[tokio::test]
