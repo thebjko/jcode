@@ -71,6 +71,12 @@ pub(super) fn clear_queued_poke_messages(app: &mut App) -> usize {
     removed
 }
 
+pub(super) fn disable_auto_poke(app: &mut App) -> usize {
+    let cleared = clear_queued_poke_messages(app);
+    app.auto_poke_incomplete_todos = false;
+    cleared
+}
+
 pub(super) fn poke_status_message(app: &App) -> String {
     let incomplete = incomplete_poke_todos(app);
     let queued_followup = app
@@ -916,8 +922,7 @@ pub(super) fn handle_session_command(app: &mut App, trimmed: &str) -> bool {
                 app.push_display_message(DisplayMessage::system(poke_status_message(app)));
             }
             Ok(PokeCommand::Off) => {
-                let cleared = clear_queued_poke_messages(app);
-                app.auto_poke_incomplete_todos = false;
+                let cleared = disable_auto_poke(app);
                 app.set_status_notice("Poke: OFF");
                 app.push_display_message(DisplayMessage::system(format!(
                     "Auto-poke disabled.{}",

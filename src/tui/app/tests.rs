@@ -6906,6 +6906,34 @@ fn test_ctrl_c_requests_cancel_while_processing() {
 }
 
 #[test]
+fn test_escape_interrupt_disables_auto_poke_while_processing() {
+    let mut app = create_test_app();
+    app.is_processing = true;
+    app.auto_poke_incomplete_todos = true;
+    app.queued_messages
+        .push(super::commands::build_poke_message(&[
+            crate::todo::TodoItem {
+                id: "todo-1".to_string(),
+                content: "keep going".to_string(),
+                status: "pending".to_string(),
+                priority: "high".to_string(),
+                blocked_by: Vec::new(),
+                assigned_to: None,
+            },
+        ]));
+
+    app.handle_key(KeyCode::Esc, KeyModifiers::empty()).unwrap();
+
+    assert!(app.cancel_requested);
+    assert!(!app.auto_poke_incomplete_todos);
+    assert!(app.queued_messages.is_empty());
+    assert_eq!(
+        app.status_notice(),
+        Some("Interrupting... Auto-poke OFF".to_string())
+    );
+}
+
+#[test]
 fn test_ctrl_c_still_arms_quit_when_idle() {
     let mut app = create_test_app();
 
@@ -12736,6 +12764,38 @@ fn test_remote_prompt_jump_ctrl_esc_fallback_on_macos() {
         .unwrap();
     assert!(app.auto_scroll_paused);
     assert!(app.scroll_offset > 0);
+}
+
+#[test]
+fn test_remote_escape_interrupt_disables_auto_poke_while_processing() {
+    let mut app = create_test_app();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let mut remote = crate::tui::backend::RemoteConnection::dummy();
+
+    app.is_processing = true;
+    app.auto_poke_incomplete_todos = true;
+    app.queued_messages
+        .push(super::commands::build_poke_message(&[
+            crate::todo::TodoItem {
+                id: "todo-1".to_string(),
+                content: "keep going".to_string(),
+                status: "pending".to_string(),
+                priority: "high".to_string(),
+                blocked_by: Vec::new(),
+                assigned_to: None,
+            },
+        ]));
+
+    rt.block_on(app.handle_remote_key(KeyCode::Esc, KeyModifiers::empty(), &mut remote))
+        .unwrap();
+
+    assert!(!app.auto_poke_incomplete_todos);
+    assert!(app.queued_messages.is_empty());
+    assert_eq!(
+        app.status_notice(),
+        Some("Interrupting... Auto-poke OFF".to_string())
+    );
 }
 
 #[test]
