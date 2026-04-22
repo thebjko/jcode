@@ -3,6 +3,12 @@ use crate::message::{ContentBlock, ToolCall};
 use crate::session::Session;
 use crate::storage;
 use crate::{logging, util};
+use ::agentgrep::cli::{FindArgs, FullRegionMode, GrepArgs, OutlineArgs, SmartArgs};
+use ::agentgrep::find::{FindFile, FindResult, run_find};
+use ::agentgrep::outline::{OutlineResult, run_outline};
+use ::agentgrep::search::{FileMatches, GrepResult, run_grep};
+use ::agentgrep::smart_dsl::{Relation, SmartQuery, parse_smart_query};
+use ::agentgrep::smart_engine::{SmartFile, SmartRegion, SmartResult, run_smart};
 use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -10,10 +16,8 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
-use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-use tokio::process::Command;
 
 #[derive(Debug, Deserialize)]
 struct AgentGrepInput {
@@ -132,22 +136,11 @@ struct ExposureDescriptor {
     compaction_cutoff: Option<usize>,
 }
 
-pub struct AgentGrepTool {
-    binary_override: Option<PathBuf>,
-}
+pub struct AgentGrepTool;
 
 impl AgentGrepTool {
     pub fn new() -> Self {
-        Self {
-            binary_override: None,
-        }
-    }
-
-    #[cfg(test)]
-    fn with_binary_override(path: PathBuf) -> Self {
-        Self {
-            binary_override: Some(path),
-        }
+        Self
     }
 }
 
@@ -216,199 +209,179 @@ impl Tool for AgentGrepTool {
 
     async fn execute(&self, input: Value, ctx: ToolContext) -> Result<ToolOutput> {
         let params: AgentGrepInput = serde_json::from_value(input)?;
-        let binary = match resolve_agentgrep_binary(self.binary_override.as_deref()) {
-            Some(path) => path,
-            None => {
-                return Ok(ToolOutput::new(
-                    "agentgrep is not available. Install it or set JCODE_AGENTGREP_BIN to the agentgrep binary path.\n\nSearched PATH plus:\n- /home/jeremy/agentgrep/target/debug/agentgrep\n- /home/jeremy/agentgrep/target/release/agentgrep",
-                )
-                .with_title("agentgrep unavailable"));
-            }
-        };
-
         let context_path = maybe_write_context_json(&params, &ctx)?;
-        let args = build_agentgrep_args(&params, &ctx, context_path.as_deref())?;
-        let rendered_args = render_agentgrep_args(&args);
-        let mut command = Command::new(&binary);
-        command.args(&args);
-        if let Some(ref dir) = ctx.working_dir {
-            command.current_dir(dir);
-        }
-
+        let request = summarize_agentgrep_request(&params, &ctx, context_path.as_deref());
         let started_at = std::time::Instant::now();
-        let output = command.output().await?;
+        let outcome = execute_linked_agentgrep(&params, &ctx, context_path.as_deref());
         let elapsed_ms = started_at.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-
-        if !output.status.success() {
-            let detail = if stderr.is_empty() {
-                stdout.clone()
-            } else if stdout.is_empty() {
-                stderr.clone()
-            } else {
-                format!("{}\n\n{}", stdout, stderr)
-            };
-            logging::warn(&format!(
-                "agentgrep failure mode={} elapsed_ms={} binary={} args={} stderr={}",
-                params.mode,
-                elapsed_ms,
-                binary.display(),
-                rendered_args,
-                util::truncate_str(detail.trim(), 600)
-            ));
-            return Err(anyhow::anyhow!(
-                "agentgrep {} failed after {}ms with exit code {:?}: {}",
-                params.mode,
-                elapsed_ms,
-                output.status.code(),
-                detail.trim()
-            ));
-        }
-
-        if elapsed_ms >= 2_000 {
-            logging::warn(&format!(
-                "agentgrep slow mode={} elapsed_ms={} binary={} args={}",
-                params.mode,
-                elapsed_ms,
-                binary.display(),
-                rendered_args
-            ));
-        }
-
-        let mut rendered = if stdout.is_empty() {
-            "agentgrep completed successfully (no output)".to_string()
-        } else {
-            stdout
-        };
-        if !stderr.is_empty() {
-            rendered.push_str("\n\n[stderr]\n");
-            rendered.push_str(&stderr);
-        }
 
         if let Some(path) = context_path {
             let _ = std::fs::remove_file(path);
         }
 
-        Ok(ToolOutput::new(rendered).with_title(format!("agentgrep {}", params.mode)))
+        match outcome {
+            Ok(output) => {
+                if elapsed_ms >= 2_000 {
+                    logging::warn(&format!(
+                        "agentgrep slow mode={} elapsed_ms={} request={}",
+                        params.mode, elapsed_ms, request
+                    ));
+                }
+                Ok(output)
+            }
+            Err(err) => {
+                let detail = err.to_string();
+                let detail = util::truncate_str(detail.trim(), 600);
+                logging::warn(&format!(
+                    "agentgrep failure mode={} elapsed_ms={} request={} error={}",
+                    params.mode, elapsed_ms, request, detail
+                ));
+                Err(anyhow::anyhow!(
+                    "agentgrep {} failed after {}ms: {}",
+                    params.mode,
+                    elapsed_ms,
+                    err
+                ))
+            }
+        }
     }
 }
 
-fn build_agentgrep_args(
+fn execute_linked_agentgrep(
     params: &AgentGrepInput,
     ctx: &ToolContext,
     context_json_path: Option<&Path>,
-) -> Result<Vec<OsString>> {
-    let mut args = Vec::new();
-    let mode = params.mode.as_str();
-    match mode {
-        "grep" | "find" | "outline" => args.push(OsString::from(mode)),
-        "trace" | "smart" => args.push(OsString::from("trace")),
-        _ => {
-            return Err(anyhow::anyhow!(
-                "Unsupported agentgrep mode: {}. Use grep, find, outline, or trace.",
-                params.mode
-            ));
-        }
-    }
-
-    match mode {
+) -> Result<ToolOutput> {
+    match params.mode.as_str() {
         "grep" => {
-            let query = params
-                .query
-                .as_deref()
-                .ok_or_else(|| anyhow::anyhow!("agentgrep grep requires 'query'"))?;
-            if params.regex.unwrap_or(false) {
-                args.push(OsString::from("--regex"));
-            }
-            push_common_flags(&mut args, params, ctx);
-            args.push(OsString::from(query));
+            let args = build_grep_args(params, ctx)?;
+            let root = resolve_search_root(ctx, args.path.as_deref());
+            let result = run_grep(&root, &args).map_err(anyhow::Error::msg)?;
+            Ok(ToolOutput::new(render_grep_output(&result, &args)).with_title("agentgrep grep"))
         }
         "find" => {
-            let query = params
-                .query
-                .as_deref()
-                .ok_or_else(|| anyhow::anyhow!("agentgrep find requires 'query'"))?;
-            if params.debug_score.unwrap_or(false) {
-                args.push(OsString::from("--debug-score"));
-            }
-            if let Some(max_files) = params.max_files {
-                args.push(OsString::from("--max-files"));
-                args.push(OsString::from(max_files.to_string()));
-            }
-            push_common_flags(&mut args, params, ctx);
-            for part in query.split_whitespace() {
-                args.push(OsString::from(part));
-            }
+            let args = build_find_args(params, ctx)?;
+            let root = resolve_search_root(ctx, args.path.as_deref());
+            let result = run_find(&root, &args);
+            Ok(ToolOutput::new(render_find_output(&result, &args)).with_title("agentgrep find"))
         }
         "outline" => {
-            let file = params
-                .file
-                .as_deref()
-                .or(params.query.as_deref())
-                .or_else(|| {
-                    params
-                        .terms
-                        .as_ref()
-                        .and_then(|terms| terms.first().map(String::as_str))
-                })
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "agentgrep outline requires 'file' (or legacy 'query' / first term)"
-                    )
-                })?;
-            if let Some(path) = params.path.as_deref() {
-                args.push(OsString::from("--path"));
-                args.push(resolve_path_arg(ctx, path).into_os_string());
-            }
-            args.push(OsString::from(file));
+            let args = build_outline_args(params, ctx, context_json_path)?;
+            let root = resolve_search_root(ctx, args.path.as_deref());
+            let result = run_outline(&root, &args).map_err(anyhow::Error::msg)?;
+            Ok(ToolOutput::new(render_outline_output(&result)).with_title("agentgrep outline"))
         }
         "trace" | "smart" => {
-            let terms = trace_or_smart_terms(params)?;
-            if let Some(max_files) = params.max_files {
-                args.push(OsString::from("--max-files"));
-                args.push(OsString::from(max_files.to_string()));
-            }
-            if let Some(max_regions) = params.max_regions {
-                args.push(OsString::from("--max-regions"));
-                args.push(OsString::from(max_regions.to_string()));
-            }
-            if let Some(full_region) = params.full_region.as_deref() {
-                args.push(OsString::from("--full-region"));
-                args.push(OsString::from(full_region));
-            }
-            if params.debug_plan.unwrap_or(false) {
-                args.push(OsString::from("--debug-plan"));
-            }
-            if params.debug_score.unwrap_or(false) {
-                args.push(OsString::from("--debug-score"));
-            }
-            push_common_flags(&mut args, params, ctx);
-            if let Some(context_path) = context_json_path {
-                args.push(OsString::from("--context-json"));
-                args.push(context_path.as_os_str().to_os_string());
-            }
-            for term in &terms {
-                args.push(OsString::from(term));
-            }
+            let (args, query) = build_smart_args_and_query(params, ctx, context_json_path)?;
+            let root = resolve_search_root(ctx, args.path.as_deref());
+            let result = run_smart(&root, &query, &args).map_err(anyhow::Error::msg)?;
+            Ok(ToolOutput::new(render_smart_output(&result, &args))
+                .with_title(format!("agentgrep {}", params.mode)))
         }
-        _ => unreachable!(),
+        _ => Err(anyhow::anyhow!(
+            "Unsupported agentgrep mode: {}. Use grep, find, outline, or trace.",
+            params.mode
+        )),
     }
-
-    Ok(args)
 }
 
-fn trace_or_smart_terms(params: &AgentGrepInput) -> Result<Vec<&str>> {
+fn build_grep_args(params: &AgentGrepInput, ctx: &ToolContext) -> Result<GrepArgs> {
+    let query = params
+        .query
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("agentgrep grep requires 'query'"))?;
+    Ok(GrepArgs {
+        query,
+        regex: params.regex.unwrap_or(false),
+        file_type: params.file_type.clone(),
+        json: false,
+        paths_only: params.paths_only.unwrap_or(false),
+        hidden: params.hidden.unwrap_or(false),
+        no_ignore: params.no_ignore.unwrap_or(false),
+        path: resolved_root_string(ctx, params.path.as_deref()),
+        glob: normalized_agentgrep_glob_owned(params.glob.as_deref()),
+    })
+}
+
+fn build_find_args(params: &AgentGrepInput, ctx: &ToolContext) -> Result<FindArgs> {
+    let query = params
+        .query
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("agentgrep find requires 'query'"))?;
+    Ok(FindArgs {
+        query_parts: query.split_whitespace().map(ToOwned::to_owned).collect(),
+        file_type: params.file_type.clone(),
+        json: false,
+        paths_only: params.paths_only.unwrap_or(false),
+        debug_score: params.debug_score.unwrap_or(false),
+        max_files: params.max_files.unwrap_or(10),
+        hidden: params.hidden.unwrap_or(false),
+        no_ignore: params.no_ignore.unwrap_or(false),
+        path: resolved_root_string(ctx, params.path.as_deref()),
+        glob: normalized_agentgrep_glob_owned(params.glob.as_deref()),
+    })
+}
+
+fn build_outline_args(
+    params: &AgentGrepInput,
+    ctx: &ToolContext,
+    context_json_path: Option<&Path>,
+) -> Result<OutlineArgs> {
+    let file = outline_file_arg(params)?;
+    Ok(OutlineArgs {
+        file,
+        json: false,
+        max_items: None,
+        path: resolved_root_string(ctx, params.path.as_deref()),
+        context_json: context_json_path.map(|path| path.display().to_string()),
+    })
+}
+
+fn build_smart_args_and_query(
+    params: &AgentGrepInput,
+    ctx: &ToolContext,
+    context_json_path: Option<&Path>,
+) -> Result<(SmartArgs, SmartQuery)> {
+    let terms = trace_or_smart_terms_owned(params)?;
+    let query = parse_smart_query(&terms).map_err(|err| {
+        anyhow::anyhow!(
+            "{}\n\ntrace queries use a small DSL. Example:\n  agentgrep trace subject:auth_status relation:rendered support:ui",
+            err
+        )
+    })?;
+
+    let args = SmartArgs {
+        terms,
+        json: false,
+        max_files: params.max_files.unwrap_or(5),
+        max_regions: params.max_regions.unwrap_or(6),
+        full_region: parse_full_region_mode(params.full_region.as_deref())?,
+        debug_plan: params.debug_plan.unwrap_or(false),
+        debug_score: params.debug_score.unwrap_or(false),
+        paths_only: params.paths_only.unwrap_or(false),
+        path: resolved_root_string(ctx, params.path.as_deref()),
+        file_type: params.file_type.clone(),
+        glob: normalized_agentgrep_glob_owned(params.glob.as_deref()),
+        hidden: params.hidden.unwrap_or(false),
+        no_ignore: params.no_ignore.unwrap_or(false),
+        context_json: context_json_path.map(|path| path.display().to_string()),
+    };
+
+    Ok((args, query))
+}
+
+fn trace_or_smart_terms_owned(params: &AgentGrepInput) -> Result<Vec<String>> {
     if let Some(terms) = params.terms.as_ref().filter(|terms| !terms.is_empty()) {
-        return Ok(terms.iter().map(String::as_str).collect());
+        return Ok(terms.clone());
     }
 
     if params.mode == "smart"
         && let Some(query) = params.query.as_deref()
     {
-        let split_terms: Vec<&str> = query
+        let split_terms: Vec<String> = query
             .split_whitespace()
             .filter(|term| !term.is_empty())
+            .map(ToOwned::to_owned)
             .collect();
         if !split_terms.is_empty() {
             return Ok(split_terms);
@@ -426,6 +399,378 @@ fn trace_or_smart_terms(params: &AgentGrepInput) -> Result<Vec<&str>> {
         params.mode,
         field_hint
     ))
+}
+
+fn outline_file_arg(params: &AgentGrepInput) -> Result<String> {
+    params
+        .file
+        .clone()
+        .or_else(|| params.query.clone())
+        .or_else(|| {
+            params
+                .terms
+                .as_ref()
+                .and_then(|terms| terms.first().cloned())
+        })
+        .ok_or_else(|| {
+            anyhow::anyhow!("agentgrep outline requires 'file' (or legacy 'query' / first term)")
+        })
+}
+
+fn parse_full_region_mode(value: Option<&str>) -> Result<FullRegionMode> {
+    match value.unwrap_or("auto").trim().to_ascii_lowercase().as_str() {
+        "auto" => Ok(FullRegionMode::Auto),
+        "always" => Ok(FullRegionMode::Always),
+        "never" => Ok(FullRegionMode::Never),
+        other => Err(anyhow::anyhow!(
+            "agentgrep trace full_region must be one of: auto, always, never; got {other}"
+        )),
+    }
+}
+
+fn resolved_root_string(ctx: &ToolContext, path: Option<&str>) -> Option<String> {
+    path.map(|path| resolve_path_arg(ctx, path).display().to_string())
+}
+
+fn resolve_search_root(ctx: &ToolContext, path: Option<&str>) -> PathBuf {
+    path.map(PathBuf::from)
+        .or_else(|| ctx.working_dir.clone())
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+}
+
+fn summarize_agentgrep_request(
+    params: &AgentGrepInput,
+    ctx: &ToolContext,
+    context_json_path: Option<&Path>,
+) -> String {
+    let mut parts = vec![format!("mode={}", params.mode)];
+    if let Some(query) = params.query.as_deref() {
+        parts.push(format!("query={}", util::truncate_str(query, 80)));
+    }
+    if let Some(file) = params.file.as_deref() {
+        parts.push(format!("file={file}"));
+    }
+    if let Some(terms) = params.terms.as_ref() {
+        parts.push(format!(
+            "terms={}",
+            util::truncate_str(&terms.join(" "), 80)
+        ));
+    }
+    if let Some(path) = resolved_root_string(ctx, params.path.as_deref()) {
+        parts.push(format!("root={path}"));
+    }
+    if let Some(glob) = normalized_agentgrep_glob(params.glob.as_deref()) {
+        parts.push(format!("glob={glob}"));
+    }
+    if let Some(file_type) = params.file_type.as_deref() {
+        parts.push(format!("type={file_type}"));
+    }
+    if params.paths_only.unwrap_or(false) {
+        parts.push("paths_only=true".to_string());
+    }
+    if context_json_path.is_some() {
+        parts.push("context_json=true".to_string());
+    }
+    parts.join(" ")
+}
+
+fn render_grep_output(result: &GrepResult, args: &GrepArgs) -> String {
+    if args.paths_only {
+        return result
+            .files
+            .iter()
+            .map(|file| file.path.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+    }
+
+    let mut lines = vec![
+        format!("query: {}", result.query),
+        format!(
+            "matches: {} in {} files",
+            result.total_matches, result.total_files
+        ),
+    ];
+
+    for file in &result.files {
+        render_grep_file(file, &mut lines);
+    }
+
+    lines.join("\n")
+}
+
+fn render_grep_file(file: &FileMatches, lines: &mut Vec<String>) {
+    lines.push(String::new());
+    lines.push(file.path.clone());
+    if file.total_symbols > 0 {
+        lines.push(format!(
+            "  symbols: {} total, {} matched, {} other",
+            file.total_symbols,
+            file.matched_symbol_count,
+            file.total_symbols.saturating_sub(file.matched_symbol_count)
+        ));
+    } else {
+        lines.push("  symbols: no structural items detected".to_string());
+    }
+    for group in &file.groups {
+        match (group.start_line, group.end_line) {
+            (Some(start_line), Some(end_line)) => lines.push(format!(
+                "    - {} {} @ {}-{}",
+                group.kind, group.label, start_line, end_line
+            )),
+            _ => lines.push(format!("    - {}", group.label)),
+        }
+        for line_match in group.resolved_matches(&file.matches) {
+            lines.push(format!(
+                "      - @ {} {}",
+                line_match.line_number, line_match.line_text
+            ));
+        }
+    }
+    if !file.other_symbols.is_empty() {
+        let mut summary = file
+            .other_symbols
+            .iter()
+            .map(|item| {
+                format!(
+                    "{} {} @ {}-{}",
+                    item.kind, item.label, item.start_line, item.end_line
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        if file.other_symbols_omitted_count > 0 {
+            if !summary.is_empty() {
+                summary.push_str("; ");
+            }
+            summary.push_str(&format!("... {} more", file.other_symbols_omitted_count));
+        }
+        lines.push(format!("    - other: {summary}"));
+    }
+}
+
+fn render_find_output(result: &FindResult, args: &FindArgs) -> String {
+    if args.paths_only {
+        return result
+            .files
+            .iter()
+            .map(|file| file.path.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+    }
+
+    let mut lines = vec![
+        format!("query: {}", result.query),
+        format!("top files: {}", result.files.len()),
+    ];
+
+    for (idx, file) in result.files.iter().enumerate() {
+        render_find_file(idx, file, args, &mut lines);
+    }
+
+    lines.join("\n")
+}
+
+fn render_find_file(idx: usize, file: &FindFile, args: &FindArgs, lines: &mut Vec<String>) {
+    lines.push(String::new());
+    lines.push(format!("{}. {}", idx + 1, file.path));
+    lines.push(format!("   role: {}", file.role));
+    lines.push("   why:".to_string());
+    for reason in &file.why {
+        lines.push(format!("     - {reason}"));
+    }
+    if args.debug_score {
+        lines.push(format!("   score: {}", file.score));
+    }
+    lines.push("   structure:".to_string());
+    for item in &file.structure.items {
+        lines.push(format!(
+            "     - {} {} @ {}-{} ({} lines)",
+            item.kind, item.label, item.start_line, item.end_line, item.line_count
+        ));
+    }
+    if file.structure.omitted_count > 0 {
+        lines.push(format!(
+            "     ... {} more symbols",
+            file.structure.omitted_count
+        ));
+    }
+}
+
+fn render_outline_output(result: &OutlineResult) -> String {
+    let mut lines = vec![
+        format!("file: {}", result.path),
+        format!("language: {}", result.language),
+        format!("role: {}", result.role),
+        format!("lines: {}", result.total_lines),
+        format!(
+            "symbols: {}",
+            result.structure.items.len() + result.structure.omitted_count
+        ),
+        String::new(),
+        "structure:".to_string(),
+    ];
+
+    if result.structure.items.is_empty() {
+        lines.push("  (no structural items detected)".to_string());
+    } else {
+        for item in &result.structure.items {
+            lines.push(format!(
+                "  - {} {} @ {}-{} ({} lines)",
+                item.kind, item.label, item.start_line, item.end_line, item.line_count
+            ));
+        }
+        if result.structure.omitted_count > 0 {
+            lines.push(format!(
+                "  ... {} more symbols",
+                result.structure.omitted_count
+            ));
+        }
+    }
+    if let Some(note) = &result.context_applied {
+        lines.push(String::new());
+        lines.push(format!("context: {note}"));
+    }
+
+    lines.join("\n")
+}
+
+fn render_smart_output(result: &SmartResult, args: &SmartArgs) -> String {
+    if args.paths_only {
+        return result
+            .files
+            .iter()
+            .map(|file| file.path.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+    }
+
+    let mut lines = Vec::new();
+    if args.debug_plan {
+        lines.extend(render_debug_plan(result));
+        lines.push(String::new());
+    }
+    lines.push("query parameters:".to_string());
+    lines.push(format!("  subject: {}", result.query.subject));
+    lines.push(format!("  relation: {}", result.query.relation.as_str()));
+    if !result.query.support.is_empty() {
+        lines.push(format!("  support: {}", result.query.support.join(", ")));
+    }
+    if let Some(kind) = &result.query.kind {
+        lines.push(format!("  kind: {kind}"));
+    }
+    if let Some(path_hint) = &result.query.path_hint {
+        lines.push(format!("  path_hint: {path_hint}"));
+    }
+    lines.push(String::new());
+    lines.push(format!(
+        "top results: {} files, {} regions",
+        result.summary.total_files, result.summary.total_regions
+    ));
+    if result.files.is_empty() {
+        lines.push("no results found for the current trace query and scope".to_string());
+    }
+    if let Some(best_file) = &result.summary.best_file {
+        lines.push(format!("best answer likely in {best_file}"));
+    }
+    for (idx, file) in result.files.iter().enumerate() {
+        render_smart_file(idx, file, args, &mut lines);
+    }
+
+    lines.join("\n")
+}
+
+fn render_debug_plan(result: &SmartResult) -> Vec<String> {
+    let relation_terms = match result.query.relation {
+        Relation::Rendered => "render, draw, ui, widget, view",
+        Relation::CalledFrom => "call, invoke, dispatch",
+        Relation::TriggeredFrom => "trigger, dispatch, schedule",
+        Relation::Populated => "set, assign, insert, push, build",
+        Relation::ComesFrom => "source, load, parse, read, fetch",
+        Relation::Handled => "handle, handler, event, dispatch",
+        Relation::Defined => "fn, struct, enum, class, def",
+        Relation::Implementation => "impl, register, wire, tool",
+        _ => result.query.relation.as_str(),
+    };
+    let mut lines = vec![
+        "debug plan:".to_string(),
+        "  mode: trace".to_string(),
+        format!("  subject: {}", result.query.subject),
+        format!("  relation: {}", result.query.relation.as_str()),
+        format!("  relation_terms: {relation_terms}"),
+    ];
+    if let Some(kind) = &result.query.kind {
+        lines.push(format!("  kind filter: {kind}"));
+    }
+    if let Some(path_hint) = &result.query.path_hint {
+        lines.push(format!("  path hint: {path_hint}"));
+    }
+    if !result.query.support.is_empty() {
+        lines.push(format!(
+            "  support terms: {}",
+            result.query.support.join(", ")
+        ));
+    }
+    lines
+}
+
+fn render_smart_file(idx: usize, file: &SmartFile, args: &SmartArgs, lines: &mut Vec<String>) {
+    lines.push(String::new());
+    lines.push(format!("{}. {}", idx + 1, file.path));
+    lines.push(format!("   role: {}", file.role));
+    lines.push("   why:".to_string());
+    for reason in &file.why {
+        lines.push(format!("     - {reason}"));
+    }
+    if args.debug_score {
+        lines.push(format!("   score: {}", file.score));
+    }
+    lines.push("   structure:".to_string());
+    for item in &file.structure.items {
+        lines.push(format!(
+            "     - {} {} @ {}-{} ({} lines)",
+            item.kind, item.label, item.start_line, item.end_line, item.line_count
+        ));
+    }
+    if file.structure.omitted_count > 0 {
+        lines.push(format!(
+            "     ... {} more symbols",
+            file.structure.omitted_count
+        ));
+    }
+    if let Some(note) = &file.context_applied {
+        lines.push(format!("   context: {note}"));
+    }
+    lines.push("   regions:".to_string());
+    for region in &file.regions {
+        render_smart_region(region, args.debug_score, lines);
+    }
+}
+
+fn render_smart_region(region: &SmartRegion, debug_score: bool, lines: &mut Vec<String>) {
+    lines.push(format!(
+        "     - {} @ {}-{} ({} lines)",
+        region.label, region.start_line, region.end_line, region.line_count
+    ));
+    lines.push(format!("       kind: {}", region.kind));
+    if debug_score {
+        lines.push(format!("       score: {}", region.score));
+    }
+    if region.full_region {
+        lines.push("       full region:".to_string());
+    } else {
+        lines.push("       snippet:".to_string());
+    }
+    for line in region.body.lines() {
+        lines.push(format!("         {line}"));
+    }
+    lines.push("       why:".to_string());
+    for reason in &region.why {
+        lines.push(format!("         - {reason}"));
+    }
+    if let Some(note) = &region.context_applied {
+        lines.push(format!("       context: {note}"));
+    }
 }
 
 fn maybe_write_context_json(params: &AgentGrepInput, ctx: &ToolContext) -> Result<Option<PathBuf>> {
@@ -1447,30 +1792,6 @@ fn leak_str(value: String) -> &'static str {
     Box::leak(value.into_boxed_str())
 }
 
-fn push_common_flags(args: &mut Vec<OsString>, params: &AgentGrepInput, ctx: &ToolContext) {
-    if params.paths_only.unwrap_or(false) {
-        args.push(OsString::from("--paths-only"));
-    }
-    if params.hidden.unwrap_or(false) {
-        args.push(OsString::from("--hidden"));
-    }
-    if params.no_ignore.unwrap_or(false) {
-        args.push(OsString::from("--no-ignore"));
-    }
-    if let Some(file_type) = params.file_type.as_deref() {
-        args.push(OsString::from("--type"));
-        args.push(OsString::from(file_type));
-    }
-    if let Some(glob) = normalized_agentgrep_glob(params.glob.as_deref()) {
-        args.push(OsString::from("--glob"));
-        args.push(OsString::from(glob));
-    }
-    if let Some(path) = params.path.as_deref() {
-        args.push(OsString::from("--path"));
-        args.push(resolve_path_arg(ctx, path).into_os_string());
-    }
-}
-
 fn resolve_path_arg(ctx: &ToolContext, path: &str) -> PathBuf {
     ctx.resolve_path(Path::new(path))
 }
@@ -1488,74 +1809,12 @@ fn normalized_agentgrep_glob(glob: Option<&str>) -> Option<&str> {
     Some(glob)
 }
 
+fn normalized_agentgrep_glob_owned(glob: Option<&str>) -> Option<String> {
+    normalized_agentgrep_glob(glob).map(ToOwned::to_owned)
+}
+
 fn is_match_all_glob(glob: &str) -> bool {
     matches!(glob, "*" | "**" | "**/*" | "./*" | "./**" | "./**/*")
-}
-
-fn render_agentgrep_args(args: &[OsString]) -> String {
-    args.iter()
-        .map(|arg| arg.to_string_lossy().into_owned())
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-fn resolve_agentgrep_binary(override_path: Option<&Path>) -> Option<PathBuf> {
-    if let Some(path) = override_path {
-        if path.exists() {
-            return Some(path.to_path_buf());
-        }
-        return None;
-    }
-
-    if let Some(path) = std::env::var_os("JCODE_AGENTGREP_BIN") {
-        let path = PathBuf::from(path);
-        if path.exists() {
-            return Some(path);
-        }
-    }
-
-    if let Some(path) = find_in_path(binary_name()) {
-        return Some(path);
-    }
-
-    default_agentgrep_candidates()
-        .into_iter()
-        .find(|path| path.exists())
-}
-
-fn binary_name() -> &'static str {
-    #[cfg(windows)]
-    {
-        "agentgrep.exe"
-    }
-    #[cfg(not(windows))]
-    {
-        "agentgrep"
-    }
-}
-
-fn default_agentgrep_candidates() -> Vec<PathBuf> {
-    vec![
-        PathBuf::from(format!(
-            "/home/jeremy/agentgrep/target/debug/{}",
-            binary_name()
-        )),
-        PathBuf::from(format!(
-            "/home/jeremy/agentgrep/target/release/{}",
-            binary_name()
-        )),
-    ]
-}
-
-fn find_in_path(binary: &str) -> Option<PathBuf> {
-    let paths = std::env::var_os("PATH")?;
-    for dir in std::env::split_paths(&paths) {
-        let candidate = dir.join(binary);
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-    }
-    None
 }
 
 #[cfg(test)]

@@ -24,7 +24,7 @@ fn test_exposure(message_index: usize, total_messages: usize) -> ExposureDescrip
 }
 
 #[test]
-fn build_args_for_grep_includes_scope_flags() {
+fn build_grep_args_includes_scope_flags() {
     let ctx = test_ctx(Path::new("/tmp/root"));
     let params = AgentGrepInput {
         mode: "grep".to_string(),
@@ -45,32 +45,19 @@ fn build_args_for_grep_includes_scope_flags() {
         paths_only: Some(true),
     };
 
-    let args = build_agentgrep_args(&params, &ctx, None).unwrap();
-    let rendered: Vec<String> = args
-        .iter()
-        .map(|arg| arg.to_string_lossy().to_string())
-        .collect();
-    assert_eq!(
-        rendered,
-        vec![
-            "grep",
-            "--regex",
-            "--paths-only",
-            "--hidden",
-            "--no-ignore",
-            "--type",
-            "rs",
-            "--glob",
-            "src/**/*.rs",
-            "--path",
-            "/tmp/root/src",
-            "auth_status"
-        ]
-    );
+    let args = build_grep_args(&params, &ctx).unwrap();
+    assert_eq!(args.query, "auth_status");
+    assert!(args.regex);
+    assert_eq!(args.file_type.as_deref(), Some("rs"));
+    assert!(args.paths_only);
+    assert!(args.hidden);
+    assert!(args.no_ignore);
+    assert_eq!(args.path.as_deref(), Some("/tmp/root/src"));
+    assert_eq!(args.glob.as_deref(), Some("src/**/*.rs"));
 }
 
 #[test]
-fn build_args_for_grep_drops_match_all_glob() {
+fn build_grep_args_drops_match_all_glob() {
     let ctx = test_ctx(Path::new("/tmp/root"));
     let params = AgentGrepInput {
         mode: "grep".to_string(),
@@ -91,19 +78,15 @@ fn build_args_for_grep_drops_match_all_glob() {
         paths_only: None,
     };
 
-    let args = build_agentgrep_args(&params, &ctx, None).unwrap();
-    let rendered: Vec<String> = args
-        .iter()
-        .map(|arg| arg.to_string_lossy().to_string())
-        .collect();
-    assert_eq!(
-        rendered,
-        vec!["grep", "--type", "rs", "--path", "/tmp/root/.", "agentgrep"]
-    );
+    let args = build_grep_args(&params, &ctx).unwrap();
+    assert_eq!(args.query, "agentgrep");
+    assert_eq!(args.file_type.as_deref(), Some("rs"));
+    assert_eq!(args.path.as_deref(), Some("/tmp/root/."));
+    assert_eq!(args.glob, None);
 }
 
 #[test]
-fn build_args_for_smart_uses_terms() {
+fn build_smart_args_uses_terms() {
     let ctx = test_ctx(Path::new("/workspace"));
     let params = AgentGrepInput {
         mode: "smart".to_string(),
@@ -128,36 +111,25 @@ fn build_args_for_smart_uses_terms() {
         paths_only: None,
     };
 
-    let args = build_agentgrep_args(&params, &ctx, None).unwrap();
-    let rendered: Vec<String> = args
-        .iter()
-        .map(|arg| arg.to_string_lossy().to_string())
-        .collect();
+    let (args, query) = build_smart_args_and_query(&params, &ctx, None).unwrap();
     assert_eq!(
-        rendered,
-        vec![
-            "trace",
-            "--max-files",
-            "3",
-            "--max-regions",
-            "4",
-            "--full-region",
-            "auto",
-            "--debug-plan",
-            "--debug-score",
-            "--type",
-            "rs",
-            "--path",
-            "/workspace/repo",
-            "subject:auth_status",
-            "relation:rendered",
-            "path:src/tui"
-        ]
+        args.terms,
+        vec!["subject:auth_status", "relation:rendered", "path:src/tui"]
     );
+    assert_eq!(args.max_files, 3);
+    assert_eq!(args.max_regions, 4);
+    assert!(matches!(args.full_region, FullRegionMode::Auto));
+    assert!(args.debug_plan);
+    assert!(args.debug_score);
+    assert_eq!(args.file_type.as_deref(), Some("rs"));
+    assert_eq!(args.path.as_deref(), Some("/workspace/repo"));
+    assert_eq!(query.subject, "auth_status");
+    assert_eq!(query.relation.as_str(), "rendered");
+    assert_eq!(query.path_hint.as_deref(), Some("src/tui"));
 }
 
 #[test]
-fn build_args_for_smart_falls_back_to_query_terms() {
+fn build_smart_args_falls_back_to_query_terms() {
     let ctx = test_ctx(Path::new("/workspace"));
     let params = AgentGrepInput {
         mode: "smart".to_string(),
@@ -178,27 +150,10 @@ fn build_args_for_smart_falls_back_to_query_terms() {
         paths_only: None,
     };
 
-    let args = build_agentgrep_args(&params, &ctx, None).unwrap();
-    let rendered: Vec<String> = args
-        .iter()
-        .map(|arg| arg.to_string_lossy().to_string())
-        .collect();
+    let (args, _query) = build_smart_args_and_query(&params, &ctx, None).unwrap();
     assert_eq!(
-        rendered,
+        args.terms,
         vec![
-            "trace",
-            "--max-files",
-            "3",
-            "--max-regions",
-            "4",
-            "--full-region",
-            "auto",
-            "--debug-plan",
-            "--debug-score",
-            "--type",
-            "rs",
-            "--path",
-            "/workspace/repo",
             "subject:auth_status",
             "relation:rendered",
             "path:src/tui",
@@ -209,7 +164,6 @@ fn build_args_for_smart_falls_back_to_query_terms() {
 
 #[test]
 fn build_args_for_trace_still_requires_terms() {
-    let ctx = test_ctx(Path::new("/workspace"));
     let params = AgentGrepInput {
         mode: "trace".to_string(),
         query: Some("subject:auth_status relation:rendered".to_string()),
@@ -229,7 +183,7 @@ fn build_args_for_trace_still_requires_terms() {
         paths_only: None,
     };
 
-    let error = build_agentgrep_args(&params, &ctx, None).unwrap_err();
+    let error = trace_or_smart_terms_owned(&params).unwrap_err();
     assert_eq!(
         error.to_string(),
         "agentgrep trace requires non-empty 'terms'"
@@ -274,7 +228,7 @@ fn schema_only_advertises_common_public_fields() {
 }
 
 #[test]
-fn build_args_for_outline_accepts_file_field() {
+fn build_outline_args_accepts_file_field() {
     let ctx = test_ctx(Path::new("/workspace"));
     let params = AgentGrepInput {
         mode: "outline".to_string(),
@@ -295,94 +249,56 @@ fn build_args_for_outline_accepts_file_field() {
         paths_only: None,
     };
 
-    let args = build_agentgrep_args(&params, &ctx, None).unwrap();
-    let rendered: Vec<String> = args
-        .iter()
-        .map(|arg| arg.to_string_lossy().to_string())
-        .collect();
-    assert_eq!(
-        rendered,
-        vec![
-            "outline",
-            "--path",
-            "/workspace/repo",
-            "src/tool/agentgrep.rs"
-        ]
-    );
+    let args = build_outline_args(&params, &ctx, None).unwrap();
+    assert_eq!(args.file, "src/tool/agentgrep.rs");
+    assert_eq!(args.path.as_deref(), Some("/workspace/repo"));
 }
 
 #[tokio::test]
-async fn missing_binary_returns_helpful_output() {
+async fn execute_runs_linked_grep() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let tool = AgentGrepTool::with_binary_override(temp.path().join("missing-agentgrep"));
-    let ctx = test_ctx(temp.path());
-    let output = tool
-        .execute(json!({"mode": "grep", "query": "lsp"}), ctx)
-        .await
-        .expect("tool output");
-    assert!(output.output.contains("agentgrep is not available"));
-}
+    fs::create_dir_all(temp.path().join("src")).expect("mkdir");
+    fs::write(
+        temp.path().join("src/app.rs"),
+        "pub fn auth_status() {}\nfn render_status_bar() {}\n",
+    )
+    .expect("write file");
 
-#[cfg(unix)]
-#[tokio::test]
-async fn execute_runs_configured_binary() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let temp = tempfile::tempdir().expect("tempdir");
-    let script = temp.path().join("fake-agentgrep");
-    fs::write(&script, "#!/usr/bin/env bash\nprintf 'args:%s\n' \"$*\"\n").expect("write script");
-    let mut perms = fs::metadata(&script).expect("metadata").permissions();
-    perms.set_mode(0o755);
-    fs::set_permissions(&script, perms).expect("chmod");
-
-    let tool = AgentGrepTool::with_binary_override(script);
+    let tool = AgentGrepTool::new();
     let ctx = test_ctx(temp.path());
     let output = tool
         .execute(
-            json!({
-                "mode": "smart",
-                "terms": ["subject:lsp", "relation:implementation"],
-                "path": "repo",
-                "max_files": 2,
-                "max_regions": 3,
-                "debug_plan": true
-            }),
+            json!({"mode": "grep", "query": "auth_status", "path": ".", "type": "rs"}),
             ctx,
         )
         .await
-        .expect("agentgrep execution");
-    assert!(
-        output
-            .output
-            .contains("args:trace --max-files 2 --max-regions 3 --debug-plan --path")
-    );
-    assert!(
-        output
-            .output
-            .contains("subject:lsp relation:implementation")
-    );
+        .expect("tool output");
+    assert!(output.output.contains("query: auth_status"));
+    assert!(output.output.contains("src/app.rs"));
+    assert!(output.output.contains("@ 1 pub fn auth_status() {}"));
 }
 
-#[cfg(unix)]
 #[tokio::test]
 async fn execute_smart_accepts_query_fallback() {
-    use std::os::unix::fs::PermissionsExt;
-
     let temp = tempfile::tempdir().expect("tempdir");
-    let script = temp.path().join("fake-agentgrep");
-    fs::write(&script, "#!/usr/bin/env bash\nprintf 'args:%s\n' \"$*\"\n").expect("write script");
-    let mut perms = fs::metadata(&script).expect("metadata").permissions();
-    perms.set_mode(0o755);
-    fs::set_permissions(&script, perms).expect("chmod");
+    fs::create_dir_all(temp.path().join("src/tool")).expect("mkdir");
+    fs::write(
+        temp.path().join("src/tool/lsp.rs"),
+        r#"pub struct LspTool;
+impl LspTool {}
+fn execute() { println!("implementation"); }
+"#,
+    )
+    .expect("write file");
 
-    let tool = AgentGrepTool::with_binary_override(script);
+    let tool = AgentGrepTool::new();
     let ctx = test_ctx(temp.path());
     let output = tool
         .execute(
             json!({
                 "mode": "smart",
                 "query": "subject:lsp relation:implementation path:src/tool",
-                "path": "repo",
+                "path": ".",
                 "max_files": 2,
                 "max_regions": 3,
                 "debug_plan": true
@@ -391,16 +307,9 @@ async fn execute_smart_accepts_query_fallback() {
         )
         .await
         .expect("agentgrep execution");
-    assert!(
-        output
-            .output
-            .contains("args:trace --max-files 2 --max-regions 3 --debug-plan --path")
-    );
-    assert!(
-        output
-            .output
-            .contains("subject:lsp relation:implementation path:src/tool")
-    );
+    assert!(output.output.contains("debug plan:"));
+    assert!(output.output.contains("subject: lsp"));
+    assert!(output.output.contains("relation: implementation"));
 }
 
 #[test]
