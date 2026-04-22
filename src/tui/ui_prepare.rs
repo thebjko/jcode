@@ -444,10 +444,10 @@ fn prepare_messages_inner(app: &dyn TuiState, width: u16, height: u16) -> Prepar
     }
 
     PreparedChatFrame::from_sections(vec![
-        header_prepared,
-        body_prepared,
-        batch_progress_prepared,
-        streaming_prepared,
+        (PreparedSectionKind::Header, header_prepared),
+        (PreparedSectionKind::Body, body_prepared),
+        (PreparedSectionKind::BatchProgress, batch_progress_prepared),
+        (PreparedSectionKind::Streaming, streaming_prepared),
     ])
 }
 

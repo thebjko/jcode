@@ -308,6 +308,8 @@ fn test_flicker_frame_history_detects_same_state_hash_change() {
         content_width: 89,
         chat_scrollbar_visible: true,
         visible_hash: 111,
+        visible_streaming_hash: 0,
+        visible_batch_progress_hash: 0,
         total_ms: 5.0,
         prepare_ms: 2.0,
         draw_ms: 1.5,
@@ -331,6 +333,8 @@ fn test_flicker_frame_history_detects_same_state_hash_change() {
         content_width: 89,
         chat_scrollbar_visible: true,
         visible_hash: 222,
+        visible_streaming_hash: 0,
+        visible_batch_progress_hash: 0,
         total_ms: 5.5,
         prepare_ms: 2.2,
         draw_ms: 1.6,
@@ -371,6 +375,8 @@ fn test_flicker_frame_history_detects_layout_oscillation() {
             content_width,
             chat_scrollbar_visible: true,
             visible_hash,
+            visible_streaming_hash: 0,
+            visible_batch_progress_hash: 0,
             total_ms: 6.0,
             prepare_ms: 2.0,
             draw_ms: 1.0,
@@ -414,6 +420,8 @@ fn test_flicker_frame_history_detects_layout_feedback_oscillation() {
             content_width: 21,
             chat_scrollbar_visible: false,
             visible_hash: 111,
+            visible_streaming_hash: 0,
+            visible_batch_progress_hash: 0,
             total_ms: 4.0,
             prepare_ms: 1.0,
             draw_ms: 1.0,
@@ -437,6 +445,8 @@ fn test_flicker_frame_history_detects_layout_feedback_oscillation() {
             content_width: 20,
             chat_scrollbar_visible: true,
             visible_hash: 222,
+            visible_streaming_hash: 0,
+            visible_batch_progress_hash: 0,
             total_ms: 4.2,
             prepare_ms: 1.1,
             draw_ms: 1.0,
@@ -460,6 +470,8 @@ fn test_flicker_frame_history_detects_layout_feedback_oscillation() {
             content_width: 21,
             chat_scrollbar_visible: false,
             visible_hash: 111,
+            visible_streaming_hash: 0,
+            visible_batch_progress_hash: 0,
             total_ms: 4.1,
             prepare_ms: 1.0,
             draw_ms: 1.0,
@@ -504,6 +516,8 @@ fn notification_spans_include_recent_flicker_warning_and_log_hint() {
         content_width: 89,
         chat_scrollbar_visible: true,
         visible_hash: 111,
+        visible_streaming_hash: 0,
+        visible_batch_progress_hash: 0,
         total_ms: 5.0,
         prepare_ms: 2.0,
         draw_ms: 1.5,
@@ -527,6 +541,8 @@ fn notification_spans_include_recent_flicker_warning_and_log_hint() {
         content_width: 89,
         chat_scrollbar_visible: true,
         visible_hash: 222,
+        visible_streaming_hash: 0,
+        visible_batch_progress_hash: 0,
         total_ms: 5.5,
         prepare_ms: 2.2,
         draw_ms: 1.6,
@@ -562,6 +578,124 @@ fn notification_spans_include_recent_flicker_warning_and_log_hint() {
     assert!(target.content.contains("client:flicker-frames 32"));
 
     clear_flicker_frame_history_for_tests();
+}
+
+#[test]
+fn test_flicker_frame_history_ignores_visible_batch_progress_updates() {
+    clear_flicker_frame_history_for_tests();
+    record_flicker_frame_sample(FlickerFrameSample {
+        timestamp_ms: 40,
+        session_id: Some("session_test".to_string()),
+        session_name: Some("test".to_string()),
+        display_messages_version: 12,
+        diff_mode: "Off".to_string(),
+        centered: false,
+        is_processing: true,
+        auto_scroll_paused: false,
+        scroll: 100,
+        visible_end: 120,
+        visible_lines: 20,
+        total_wrapped_lines: 1000,
+        prompt_preview_lines: 0,
+        messages_area_width: 90,
+        messages_area_height: 24,
+        content_width: 89,
+        chat_scrollbar_visible: true,
+        visible_hash: 111,
+        visible_streaming_hash: 0,
+        visible_batch_progress_hash: 1,
+        total_ms: 5.0,
+        prepare_ms: 2.0,
+        draw_ms: 1.5,
+    });
+    record_flicker_frame_sample(FlickerFrameSample {
+        timestamp_ms: 41,
+        session_id: Some("session_test".to_string()),
+        session_name: Some("test".to_string()),
+        display_messages_version: 12,
+        diff_mode: "Off".to_string(),
+        centered: false,
+        is_processing: true,
+        auto_scroll_paused: false,
+        scroll: 100,
+        visible_end: 120,
+        visible_lines: 20,
+        total_wrapped_lines: 1000,
+        prompt_preview_lines: 0,
+        messages_area_width: 90,
+        messages_area_height: 24,
+        content_width: 89,
+        chat_scrollbar_visible: true,
+        visible_hash: 222,
+        visible_streaming_hash: 0,
+        visible_batch_progress_hash: 2,
+        total_ms: 5.1,
+        prepare_ms: 2.0,
+        draw_ms: 1.5,
+    });
+
+    let payload = debug_flicker_frame_history(8);
+    assert_eq!(payload["buffered_samples"], 2);
+    assert_eq!(payload["buffered_events"], 0);
+}
+
+#[test]
+fn test_flicker_frame_history_ignores_visible_streaming_updates() {
+    clear_flicker_frame_history_for_tests();
+    record_flicker_frame_sample(FlickerFrameSample {
+        timestamp_ms: 50,
+        session_id: Some("session_test".to_string()),
+        session_name: Some("test".to_string()),
+        display_messages_version: 13,
+        diff_mode: "Off".to_string(),
+        centered: false,
+        is_processing: true,
+        auto_scroll_paused: false,
+        scroll: 100,
+        visible_end: 120,
+        visible_lines: 20,
+        total_wrapped_lines: 1000,
+        prompt_preview_lines: 0,
+        messages_area_width: 90,
+        messages_area_height: 24,
+        content_width: 89,
+        chat_scrollbar_visible: true,
+        visible_hash: 111,
+        visible_streaming_hash: 1,
+        visible_batch_progress_hash: 0,
+        total_ms: 5.0,
+        prepare_ms: 2.0,
+        draw_ms: 1.5,
+    });
+    record_flicker_frame_sample(FlickerFrameSample {
+        timestamp_ms: 51,
+        session_id: Some("session_test".to_string()),
+        session_name: Some("test".to_string()),
+        display_messages_version: 13,
+        diff_mode: "Off".to_string(),
+        centered: false,
+        is_processing: true,
+        auto_scroll_paused: false,
+        scroll: 100,
+        visible_end: 120,
+        visible_lines: 20,
+        total_wrapped_lines: 1000,
+        prompt_preview_lines: 0,
+        messages_area_width: 90,
+        messages_area_height: 24,
+        content_width: 89,
+        chat_scrollbar_visible: true,
+        visible_hash: 222,
+        visible_streaming_hash: 2,
+        visible_batch_progress_hash: 0,
+        total_ms: 5.1,
+        prepare_ms: 2.0,
+        draw_ms: 1.5,
+    });
+
+    let payload = debug_flicker_frame_history(8);
+    assert_eq!(payload["buffered_samples"], 2);
+    assert_eq!(payload["buffered_events"], 0);
 }
 
 #[test]

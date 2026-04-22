@@ -219,6 +219,22 @@ pub(super) fn draw_messages(
         content_area.width,
         prompt_preview_lines,
     );
+    let visible_streaming_hash =
+        if prepared.visible_intersects_section(PreparedSectionKind::Streaming, scroll, visible_end)
+        {
+            super::hash_text_for_cache(app.streaming_text())
+        } else {
+            0
+        };
+    let visible_batch_progress_hash = if prepared.visible_intersects_section(
+        PreparedSectionKind::BatchProgress,
+        scroll,
+        visible_end,
+    ) {
+        super::prepare::active_batch_progress_hash(app)
+    } else {
+        0
+    };
     let content_margins = compute_visible_margins(
         &visible_lines,
         &visible_user_indices,
@@ -283,6 +299,8 @@ pub(super) fn draw_messages(
         badge_assignments.len(),
         content_area.width,
         stability_hash,
+        visible_streaming_hash,
+        visible_batch_progress_hash,
     );
 
     let now_ms = app.now_millis();

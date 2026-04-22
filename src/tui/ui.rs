@@ -427,9 +427,18 @@ struct PreparedMessages {
 
 #[derive(Clone)]
 struct PreparedSection {
+    kind: PreparedSectionKind,
     prepared: Arc<PreparedMessages>,
     line_start: usize,
     raw_start: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PreparedSectionKind {
+    Body,
+    Header,
+    BatchProgress,
+    Streaming,
 }
 
 #[derive(Clone)]
@@ -448,10 +457,10 @@ struct PreparedChatFrame {
 
 impl PreparedChatFrame {
     fn from_single(prepared: Arc<PreparedMessages>) -> Self {
-        Self::from_sections(vec![prepared])
+        Self::from_sections(vec![(PreparedSectionKind::Body, prepared)])
     }
 
-    fn from_sections(sections: Vec<Arc<PreparedMessages>>) -> Self {
+    fn from_sections(sections: Vec<(PreparedSectionKind, Arc<PreparedMessages>)>) -> Self {
         let mut prepared_sections = Vec::new();
         let mut line_start = 0usize;
         let mut raw_start = 0usize;
@@ -463,7 +472,7 @@ impl PreparedChatFrame {
         let mut edit_tool_ranges = Vec::new();
         let mut copy_targets = Vec::new();
 
-        for prepared in sections {
+        for (kind, prepared) in sections {
             if prepared.wrapped_lines.is_empty()
                 && prepared.raw_plain_lines.is_empty()
                 && prepared.image_regions.is_empty()
@@ -513,6 +522,7 @@ impl PreparedChatFrame {
                 badge_line: target.badge_line + line_start,
             }));
             prepared_sections.push(PreparedSection {
+                kind,
                 prepared: prepared.clone(),
                 line_start,
                 raw_start,
@@ -541,6 +551,26 @@ impl PreparedChatFrame {
 
     fn wrapped_plain_line_count(&self) -> usize {
         self.total_wrapped_lines
+    }
+
+    fn visible_intersects_section(
+        &self,
+        kind: PreparedSectionKind,
+        start: usize,
+        end: usize,
+    ) -> bool {
+        if end <= start {
+            return false;
+        }
+
+        self.sections.iter().any(|section| {
+            if section.kind != kind {
+                return false;
+            }
+            let section_start = section.line_start;
+            let section_end = section_start + section.prepared.wrapped_lines.len();
+            section_start < end && start < section_end
+        })
     }
 
     fn line_section(&self, abs_line: usize) -> Option<(&PreparedSection, usize)> {
@@ -1425,6 +1455,8 @@ struct FramePerfStats {
     viewport_visible_copy_targets: usize,
     viewport_content_width: u16,
     viewport_stability_hash: u64,
+    viewport_visible_streaming_hash: u64,
+    viewport_visible_batch_progress_hash: u64,
     chat_area_width: u16,
     chat_area_height: u16,
     messages_area_width: u16,
@@ -1481,6 +1513,8 @@ struct FlickerFrameSample {
     content_width: u16,
     chat_scrollbar_visible: bool,
     visible_hash: u64,
+    visible_streaming_hash: u64,
+    visible_batch_progress_hash: u64,
     total_ms: f64,
     prepare_ms: f64,
     draw_ms: f64,
@@ -1678,6 +1712,8 @@ fn note_viewport_metrics(
     visible_copy_targets: usize,
     content_width: u16,
     stability_hash: u64,
+    visible_streaming_hash: u64,
+    visible_batch_progress_hash: u64,
 ) {
     with_frame_perf_stats_mut(|stats| {
         stats.viewport_scroll = scroll;
@@ -1689,6 +1725,8 @@ fn note_viewport_metrics(
         stats.viewport_visible_copy_targets = visible_copy_targets;
         stats.viewport_content_width = content_width;
         stats.viewport_stability_hash = stability_hash;
+        stats.viewport_visible_streaming_hash = visible_streaming_hash;
+        stats.viewport_visible_batch_progress_hash = visible_batch_progress_hash;
     });
 }
 
@@ -1724,6 +1762,8 @@ fn same_flicker_state_key(a: &FlickerFrameSample, b: &FlickerFrameSample) -> boo
         && a.prompt_preview_lines == b.prompt_preview_lines
         && a.messages_area_width == b.messages_area_width
         && a.messages_area_height == b.messages_area_height
+        && a.visible_streaming_hash == b.visible_streaming_hash
+        && a.visible_batch_progress_hash == b.visible_batch_progress_hash
 }
 
 fn same_flicker_context_key(a: &FlickerFrameSample, b: &FlickerFrameSample) -> bool {
@@ -1900,6 +1940,8 @@ fn finalize_frame_metrics(
         content_width: perf.viewport_content_width,
         chat_scrollbar_visible: perf.chat_scrollbar_visible,
         visible_hash: perf.viewport_stability_hash,
+        visible_streaming_hash: perf.viewport_visible_streaming_hash,
+        visible_batch_progress_hash: perf.viewport_visible_batch_progress_hash,
         total_ms,
         prepare_ms: prep_elapsed.as_secs_f64() * 1000.0,
         draw_ms: draw_elapsed.as_secs_f64() * 1000.0,
