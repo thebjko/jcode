@@ -77,6 +77,14 @@ impl App {
         }
     }
 
+    pub(super) fn has_streaming_footer_stats(&self) -> bool {
+        self.streaming_input_tokens > 0
+            || self.streaming_output_tokens > 0
+            || self.streaming_cache_read_tokens.is_some()
+            || self.streaming_cache_creation_tokens.is_some()
+            || self.compute_streaming_tps().is_some()
+    }
+
     pub(super) fn push_turn_footer(&mut self, duration: Option<f32>) {
         self.log_cache_miss_if_unexpected();
 

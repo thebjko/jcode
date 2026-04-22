@@ -9344,6 +9344,72 @@ fn test_remote_done_auto_pokes_again_when_todos_remain() {
 }
 
 #[test]
+fn test_remote_done_shows_footer_after_final_tool_result_without_trailing_text() {
+    let mut app = create_test_app();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let mut remote = crate::tui::backend::RemoteConnection::dummy();
+
+    app.is_processing = true;
+    app.auto_poke_incomplete_todos = false;
+    app.status = ProcessingStatus::Streaming;
+    app.current_message_id = Some(42);
+    app.processing_started = Some(Instant::now());
+    app.visible_turn_started = Some(Instant::now());
+
+    app.handle_server_event(
+        crate::protocol::ServerEvent::ToolStart {
+            id: "tool_read".to_string(),
+            name: "read".to_string(),
+        },
+        &mut remote,
+    );
+    app.handle_server_event(
+        crate::protocol::ServerEvent::ToolInput {
+            delta: r#"{"file_path":"src/main.rs","start_line":1,"end_line":2}"#.to_string(),
+        },
+        &mut remote,
+    );
+    app.handle_server_event(
+        crate::protocol::ServerEvent::ToolExec {
+            id: "tool_read".to_string(),
+            name: "read".to_string(),
+        },
+        &mut remote,
+    );
+    app.handle_server_event(
+        crate::protocol::ServerEvent::TokenUsage {
+            input: 123,
+            output: 45,
+            cache_read_input: None,
+            cache_creation_input: None,
+        },
+        &mut remote,
+    );
+    app.handle_server_event(
+        crate::protocol::ServerEvent::ToolDone {
+            id: "tool_read".to_string(),
+            name: "read".to_string(),
+            output: "1 fn main() {}".to_string(),
+            error: None,
+        },
+        &mut remote,
+    );
+
+    app.handle_server_event(crate::protocol::ServerEvent::Done { id: 42 }, &mut remote);
+
+    let footers: Vec<&DisplayMessage> = app
+        .display_messages()
+        .iter()
+        .filter(|msg| msg.role == "meta")
+        .collect();
+    assert!(
+        footers.iter().any(|msg| msg.content.contains("↑123 ↓45")),
+        "footer not found"
+    );
+}
+
+#[test]
 fn test_remote_auto_poke_followup_preserves_visible_timer_and_stays_hidden() {
     with_temp_jcode_home(|| {
         let mut app = create_test_app();
@@ -12303,6 +12369,34 @@ fn create_tool_error_copy_test_app() -> (App, ratatui::Terminal<ratatui::backend
     (app, terminal)
 }
 
+fn create_tool_failed_output_copy_test_app(
+) -> (App, ratatui::Terminal<ratatui::backend::TestBackend>) {
+    let mut app = create_test_app();
+    app.display_messages = vec![
+        DisplayMessage::user("Run the command"),
+        DisplayMessage::tool(
+            "cat: /root/secret: Permission denied\n\nExit code: 1",
+            crate::message::ToolCall {
+                id: "tool_1".to_string(),
+                name: "bash".to_string(),
+                input: serde_json::json!({"command": "cat /root/secret"}),
+                intent: None,
+            },
+        ),
+    ];
+    app.bump_display_messages_version();
+    app.scroll_offset = 0;
+    app.auto_scroll_paused = false;
+    app.is_processing = false;
+    app.streaming_text.clear();
+    app.status = ProcessingStatus::Idle;
+    app.session.short_name = Some("test".to_string());
+
+    let backend = ratatui::backend::TestBackend::new(100, 30);
+    let terminal = ratatui::Terminal::new(backend).expect("failed to create test terminal");
+    (app, terminal)
+}
+
 /// Get the configured scroll up key binding (code, modifiers).
 fn scroll_up_key(app: &App) -> (KeyCode, KeyModifiers) {
     (
@@ -13198,6 +13292,31 @@ fn test_local_tool_error_copy_badge_shortcut_supported() {
         .unwrap();
 
     assert_eq!(app.status_notice(), Some("Copied error".to_string()));
+
+    let text = render_and_snap(&app, &mut terminal);
+    assert!(
+        text.contains("Copied!"),
+        "expected inline copied feedback: {}",
+        text
+    );
+}
+
+#[test]
+fn test_local_tool_failed_output_copy_badge_shortcut_supported() {
+    let _render_lock = scroll_render_test_lock();
+    let (mut app, mut terminal) = create_tool_failed_output_copy_test_app();
+
+    let initial = render_and_snap(&app, &mut terminal);
+    assert!(
+        initial.contains("[S]"),
+        "expected visible failed tool output copy badge: {}",
+        initial
+    );
+
+    app.handle_key(KeyCode::Char('S'), KeyModifiers::ALT)
+        .unwrap();
+
+    assert_eq!(app.status_notice(), Some("Copied output".to_string()));
 
     let text = render_and_snap(&app, &mut terminal);
     assert!(

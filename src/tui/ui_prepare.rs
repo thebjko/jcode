@@ -85,13 +85,25 @@ fn is_error_copy_content(content: &str) -> bool {
 }
 
 fn error_copy_target(content: &str, rendered_line_count: usize) -> Option<RawCopyTarget> {
+    copy_target_for_kind(CopyTargetKind::Error, content, rendered_line_count)
+}
+
+fn tool_output_copy_target(content: &str, rendered_line_count: usize) -> Option<RawCopyTarget> {
+    copy_target_for_kind(CopyTargetKind::ToolOutput, content, rendered_line_count)
+}
+
+fn copy_target_for_kind(
+    kind: CopyTargetKind,
+    content: &str,
+    rendered_line_count: usize,
+) -> Option<RawCopyTarget> {
     let content = content.trim();
     if content.is_empty() {
         return None;
     }
 
     Some(RawCopyTarget {
-        kind: CopyTargetKind::Error,
+        kind,
         content: content.to_string(),
         start_raw_line: 0,
         end_raw_line: rendered_line_count.max(1),
@@ -120,6 +132,19 @@ fn assistant_message_copy_targets(
     }
 
     crate::tui::markdown::extract_copy_targets_from_rendered_lines(rendered_lines)
+}
+
+fn tool_message_copy_target(
+    msg: &DisplayMessage,
+    rendered_line_count: usize,
+) -> Option<RawCopyTarget> {
+    if is_error_copy_content(&msg.content) {
+        return error_copy_target(&msg.content, rendered_line_count);
+    }
+    if tools_ui::tool_output_looks_failed(&msg.content) {
+        return tool_output_copy_target(&msg.content, rendered_line_count);
+    }
+    None
 }
 
 fn empty_prepared_messages() -> PreparedMessages {
@@ -599,9 +624,7 @@ pub(super) fn prepare_body_incremental(
                 let tool_start_line = new_lines.len();
                 let cached =
                     get_cached_message_lines(msg, width, app.diff_mode(), render_tool_message);
-                if is_error_copy_content(&msg.content)
-                    && let Some(target) = error_copy_target(&msg.content, cached.len())
-                {
+                if let Some(target) = tool_message_copy_target(msg, cached.len()) {
                     new_copy_targets.push(offset_copy_target(target, tool_start_line));
                 }
                 for line in cached {
@@ -1076,9 +1099,7 @@ pub(super) fn prepare_body(
                 let tool_start_line = lines.len();
                 let cached =
                     get_cached_message_lines(msg, width, app.diff_mode(), render_tool_message);
-                if is_error_copy_content(&msg.content)
-                    && let Some(target) = error_copy_target(&msg.content, cached.len())
-                {
+                if let Some(target) = tool_message_copy_target(msg, cached.len()) {
                     copy_targets.push(offset_copy_target(target, tool_start_line));
                 }
                 for line in cached {

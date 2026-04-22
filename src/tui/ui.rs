@@ -364,6 +364,7 @@ struct ImageRegion {
 pub(crate) enum CopyTargetKind {
     CodeBlock { language: Option<String> },
     Error,
+    ToolOutput,
 }
 
 impl CopyTargetKind {
@@ -375,6 +376,7 @@ impl CopyTargetKind {
                 .unwrap_or("code")
                 .to_string(),
             Self::Error => "error".to_string(),
+            Self::ToolOutput => "output".to_string(),
         }
     }
 
@@ -388,6 +390,7 @@ impl CopyTargetKind {
                 format!("Copied {}", label)
             }
             Self::Error => "Copied error".to_string(),
+            Self::ToolOutput => "Copied output".to_string(),
         }
     }
 }
@@ -659,6 +662,7 @@ fn estimate_copy_target_kind_bytes(kind: &CopyTargetKind) -> usize {
             language.as_ref().map(|value| value.capacity()).unwrap_or(0)
         }
         CopyTargetKind::Error => 0,
+        CopyTargetKind::ToolOutput => 0,
     }
 }
 

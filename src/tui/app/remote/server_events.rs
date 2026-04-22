@@ -298,6 +298,9 @@ pub(in crate::tui::app) fn handle_server_event(
                         tool_data: None,
                     });
                     app.push_turn_footer(duration);
+                } else if app.has_streaming_footer_stats() {
+                    let duration = app.display_turn_duration_secs();
+                    app.push_turn_footer(duration);
                 }
                 crate::tui::mermaid::clear_streaming_preview_diagram();
                 app.is_processing = false;

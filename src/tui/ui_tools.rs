@@ -40,6 +40,46 @@ pub(crate) fn is_edit_tool_name(name: &str) -> bool {
     )
 }
 
+fn parse_nonzero_exit_code_line(line: &str) -> bool {
+    let trimmed = line.trim();
+    if let Some(rest) = trimmed.strip_prefix("Exit code:") {
+        return rest
+            .trim()
+            .parse::<i32>()
+            .map(|code| code != 0)
+            .unwrap_or(false);
+    }
+    if let Some(rest) = trimmed.strip_prefix("--- Command finished with exit code:") {
+        return rest
+            .trim()
+            .trim_end_matches('-')
+            .trim()
+            .parse::<i32>()
+            .map(|code| code != 0)
+            .unwrap_or(false);
+    }
+    false
+}
+
+pub(crate) fn tool_output_looks_failed(content: &str) -> bool {
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.starts_with("error:") || lower.starts_with("failed:") {
+        return true;
+    }
+
+    trimmed.lines().any(|line| {
+        let line = line.trim();
+        parse_nonzero_exit_code_line(line)
+            || line.eq_ignore_ascii_case("Status: failed")
+            || line.eq_ignore_ascii_case("failed to start")
+            || line.eq_ignore_ascii_case("terminated")
+    })
+}
+
 /// Parse batch result content to determine per-sub-call success/error.
 /// Returns a Vec<bool> where `true` means that sub-call errored.
 /// The batch output format is:

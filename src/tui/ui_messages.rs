@@ -961,9 +961,7 @@ pub(crate) fn render_tool_message(
         }
     }
 
-    let is_error = msg.content.starts_with("Error:")
-        || msg.content.starts_with("error:")
-        || msg.content.starts_with("Failed:");
+    let is_error = tools_ui::tool_output_looks_failed(&msg.content);
 
     let (icon, icon_color) = if is_error {
         ("✗", rgb(220, 100, 100))

@@ -763,6 +763,8 @@ impl App {
                         title: None,
                         tool_data: None,
                     });
+                }
+                if self.has_streaming_footer_stats() {
                     self.push_turn_footer(duration);
                 }
             }
