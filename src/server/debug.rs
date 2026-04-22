@@ -108,13 +108,13 @@ async fn resolve_transcript_target_session(
         return Ok(session_id);
     }
 
-    if let Ok(Some(session_id)) = crate::dictation::last_focused_session()
+    if let Ok(Some(session_id)) = crate::dictation::focused_jcode_session()
         && live_sessions.contains(&session_id)
     {
         return Ok(session_id);
     }
 
-    if let Ok(Some(session_id)) = crate::dictation::focused_jcode_session()
+    if let Ok(Some(session_id)) = crate::dictation::last_focused_session()
         && live_sessions.contains(&session_id)
     {
         return Ok(session_id);
@@ -600,6 +600,7 @@ mod transcript_routing_tests {
     use crate::protocol::ServerEvent;
     use crate::server::SwarmMember;
     use std::collections::HashMap;
+    use std::ffi::OsString;
     use std::sync::Arc;
     use std::time::Instant;
     use tokio::sync::{RwLock, mpsc};
@@ -641,6 +642,79 @@ mod transcript_routing_tests {
             current_tool_name: None,
             disconnect_tx: mpsc::unbounded_channel().0,
         }
+    }
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set<K: AsRef<std::ffi::OsStr>>(key: &'static str, value: K) -> Self {
+            let previous = std::env::var_os(key);
+            crate::env::set_var(key, value);
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(previous) = &self.previous {
+                crate::env::set_var(self.key, previous);
+            } else {
+                crate::env::remove_var(self.key);
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    struct ChildGuard(std::process::Child);
+
+    #[cfg(target_os = "linux")]
+    impl ChildGuard {
+        fn spawn_named(name: &str) -> Self {
+            let child = std::process::Command::new("python3")
+                .args([
+                    "-c",
+                    "import ctypes, sys, time; libc = ctypes.CDLL(None); libc.prctl(15, sys.argv[1].encode(), 0, 0, 0); time.sleep(30)",
+                    name,
+                ])
+                .spawn()
+                .expect("spawn named helper process");
+            Self(child)
+        }
+
+        fn pid(&self) -> u32 {
+            self.0.id()
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    impl Drop for ChildGuard {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn install_fake_niri(bin_dir: &std::path::Path, pid: u32, title: &str) {
+        use std::os::unix::fs::PermissionsExt;
+
+        std::fs::create_dir_all(bin_dir).expect("create fake bin dir");
+        let script = bin_dir.join("niri");
+        let json = serde_json::json!({
+            "pid": pid,
+            "title": title,
+            "app_id": "kitty"
+        });
+        std::fs::write(&script, format!("#!/bin/sh\nprintf '%s\\n' '{}'\n", json))
+            .expect("write fake niri script");
+        let mut perms = std::fs::metadata(&script)
+            .expect("fake niri metadata")
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script, perms).expect("chmod fake niri");
     }
 
     #[tokio::test]
@@ -806,6 +880,62 @@ mod transcript_routing_tests {
         .expect("resolve live tui session");
 
         assert_eq!(resolved, "session_tui");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn resolve_transcript_target_session_prefers_current_niri_focused_session_over_last_focused()
+     {
+        let _guard = crate::storage::lock_test_env();
+        let temp = tempfile::TempDir::new().expect("tempdir");
+        let _home = EnvVarGuard::set("JCODE_HOME", temp.path());
+
+        let active_dir = temp.path().join("active_pids");
+        std::fs::create_dir_all(&active_dir).expect("create active_pids");
+
+        let fox = "session_fox_100";
+        let swan = "session_swan_200";
+        std::fs::write(active_dir.join(fox), "111").expect("write fox active pid");
+        std::fs::write(active_dir.join(swan), "222").expect("write swan active pid");
+        crate::dictation::remember_last_focused_session(fox).expect("remember fox session");
+
+        let focused_process = ChildGuard::spawn_named("jcode:d:swan");
+        let bin_dir = temp.path().join("bin");
+        install_fake_niri(
+            &bin_dir,
+            focused_process.pid(),
+            "🦢 jcode/cliff Swan [self-dev]",
+        );
+        let prev_path = std::env::var_os("PATH").unwrap_or_default();
+        let mut path = OsString::from(bin_dir.as_os_str());
+        path.push(":");
+        path.push(prev_path);
+        let _path = EnvVarGuard::set("PATH", path);
+
+        let now = Instant::now();
+        let client_connections = Arc::new(RwLock::new(HashMap::from([
+            (
+                "conn-fox".to_string(),
+                connection(fox, "debug-fox", now - std::time::Duration::from_secs(30)),
+            ),
+            ("conn-swan".to_string(), connection(swan, "debug-swan", now)),
+        ])));
+        let client_debug_state = Arc::new(RwLock::new(ClientDebugState::default()));
+        let swarm_members = Arc::new(RwLock::new(HashMap::from([
+            (fox.to_string(), live_member(fox, "conn-fox")),
+            (swan.to_string(), live_member(swan, "conn-swan")),
+        ])));
+
+        let resolved = resolve_transcript_target_session(
+            None,
+            &client_connections,
+            &client_debug_state,
+            &swarm_members,
+        )
+        .await
+        .expect("resolve transcript target from focused session");
+
+        assert_eq!(resolved, swan);
     }
 }
 
