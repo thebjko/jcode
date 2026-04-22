@@ -318,6 +318,11 @@ fn wait_for_reload_handoff_event_blocking(
     unsafe {
         let fd = libc::inotify_init1(libc::IN_CLOEXEC);
         if fd < 0 {
+            crate::logging::warn(&format!(
+                "wait_for_reload_handoff_event_blocking: inotify_init1 failed: {} ({})",
+                std::io::Error::last_os_error(),
+                crate::util::process_fd_diagnostic_snapshot()
+            ));
             return;
         }
 

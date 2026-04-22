@@ -1,5 +1,10 @@
 use std::path::Path;
 
+fn desired_nofile_soft_limit(current: u64, hard: u64, minimum: u64) -> Option<u64> {
+    let desired = current.max(minimum).min(hard);
+    (desired > current).then_some(desired)
+}
+
 /// Create a symlink (Unix) or copy the file (Windows).
 ///
 /// On Windows, symlinks require elevated privileges or Developer Mode,
@@ -81,6 +86,57 @@ pub fn set_permissions_executable(path: &Path) -> std::io::Result<()> {
     {
         let _ = path;
         Ok(())
+    }
+}
+
+/// Best-effort increase of the current process soft `RLIMIT_NOFILE` on Unix.
+///
+/// This helps jcode survive short-lived reload/connect spikes even when it was
+/// launched from a shell with a conservative `ulimit -n` like 1024.
+pub fn raise_nofile_limit_best_effort(minimum_soft_limit: u64) {
+    #[cfg(unix)]
+    {
+        let mut limit = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) } != 0 {
+            crate::logging::warn(&format!(
+                "Failed to read RLIMIT_NOFILE: {}",
+                std::io::Error::last_os_error()
+            ));
+            return;
+        }
+
+        let current = limit.rlim_cur as u64;
+        let hard = limit.rlim_max as u64;
+        let Some(desired) = desired_nofile_soft_limit(current, hard, minimum_soft_limit) else {
+            return;
+        };
+
+        let updated = libc::rlimit {
+            rlim_cur: desired as libc::rlim_t,
+            rlim_max: limit.rlim_max,
+        };
+        if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &updated) } == 0 {
+            crate::logging::info(&format!(
+                "Raised RLIMIT_NOFILE soft limit from {} to {} (hard={})",
+                current, desired, hard
+            ));
+        } else {
+            crate::logging::warn(&format!(
+                "Failed to raise RLIMIT_NOFILE from {} toward {} (hard={}): {}",
+                current,
+                desired,
+                hard,
+                std::io::Error::last_os_error()
+            ));
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = minimum_soft_limit;
     }
 }
 
@@ -259,7 +315,13 @@ pub fn replace_process(cmd: &mut std::process::Command) -> std::io::Error {
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
-        cmd.exec()
+        let err = cmd.exec();
+        crate::logging::error(&format!(
+            "replace_process failed: {} ({})",
+            err,
+            crate::util::process_fd_diagnostic_snapshot()
+        ));
+        err
     }
     #[cfg(windows)]
     {
@@ -272,6 +334,15 @@ pub fn replace_process(cmd: &mut std::process::Command) -> std::io::Error {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn desired_nofile_soft_limit_only_raises_when_possible() {
+        assert_eq!(desired_nofile_soft_limit(1024, 524_288, 8192), Some(8192));
+        assert_eq!(desired_nofile_soft_limit(8192, 524_288, 8192), None);
+        assert_eq!(desired_nofile_soft_limit(1024, 4096, 8192), Some(4096));
+    }
+
     #[cfg(unix)]
     #[test]
     fn spawn_detached_creates_new_session() {

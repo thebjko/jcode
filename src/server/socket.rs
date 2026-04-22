@@ -60,6 +60,11 @@ pub async fn connect_socket(path: &std::path::Path) -> Result<Stream> {
                 path.display()
             )
         }
+        Err(err) if err.raw_os_error() == Some(libc::EMFILE) => Err(anyhow::anyhow!(
+            "{} ({})",
+            err,
+            crate::util::process_fd_diagnostic_snapshot()
+        )),
         Err(err) => Err(err.into()),
     }
 }
