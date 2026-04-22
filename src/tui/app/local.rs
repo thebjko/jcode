@@ -11,7 +11,11 @@ use crate::session::StoredDisplayRole;
 use anyhow::Result;
 use crossterm::event::{Event, EventStream, KeyEventKind};
 use ratatui::DefaultTerminal;
+use std::time::{Duration, Instant};
 use tokio::sync::broadcast::error::RecvError;
+
+const BACKGROUND_PROGRESS_NOTICE_MIN_INTERVAL: Duration = Duration::from_millis(400);
+const BACKGROUND_PROGRESS_IDENTICAL_NOTICE_TTL: Duration = Duration::from_secs(2);
 
 pub(super) async fn process_turn_with_input(
     app: &mut App,
@@ -307,11 +311,28 @@ fn handle_background_task_progress(app: &mut App, event: BackgroundTaskProgressE
         return;
     }
 
-    app.set_status_notice(format!(
+    let notice = format!(
         "Background task · {} · {}",
         event.tool_name,
         crate::background::format_progress_summary(&event.progress)
-    ));
+    );
+    maybe_set_background_progress_notice(app, notice);
+}
+
+fn maybe_set_background_progress_notice(app: &mut App, notice: String) {
+    let now = Instant::now();
+    if let Some((current, at)) = app.status_notice.as_ref() {
+        let age = now.saturating_duration_since(*at);
+        if current == &notice && age < BACKGROUND_PROGRESS_IDENTICAL_NOTICE_TTL {
+            return;
+        }
+        if current.starts_with("Background task ·") && age < BACKGROUND_PROGRESS_NOTICE_MIN_INTERVAL
+        {
+            return;
+        }
+    }
+
+    app.set_status_notice(notice);
 }
 
 fn handle_input_shell_completed(app: &mut App, shell: InputShellCompleted) {

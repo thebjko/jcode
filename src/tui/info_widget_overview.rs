@@ -150,7 +150,7 @@ fn compact_background_height(data: &InfoWidgetData) -> u16 {
     if let Some(info) = &data.background_info
         && (info.running_count > 0 || info.memory_agent_active)
     {
-        return 1;
+        return 1 + u16::from(info.progress_detail.is_some());
     }
     0
 }

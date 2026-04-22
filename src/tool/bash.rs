@@ -29,9 +29,29 @@ fn progress_ratio_regex() -> &'static regex::Regex {
     static REGEX: OnceLock<regex::Regex> = OnceLock::new();
     REGEX.get_or_init(|| {
         regex::Regex::new(
-            r"(?i)\b(?P<current>\d{1,6})\s*/\s*(?P<total>\d{1,6})\b(?:\s*(?P<unit>tests?|steps?|files?|items?|cases?|tasks?|targets?|chunks?|batches?|examples?))?",
+            r"(?i)\b(?P<current>\d{1,6})\s*/\s*(?P<total>\d{1,6})\b(?:\s*(?P<unit>tests?|steps?|files?|items?|cases?|tasks?|targets?|chunks?|batches?|examples?|crates?|modules?|packages?|workers?))?",
         )
         .expect("valid progress ratio regex")
+    })
+}
+
+fn progress_of_regex() -> &'static regex::Regex {
+    static REGEX: OnceLock<regex::Regex> = OnceLock::new();
+    REGEX.get_or_init(|| {
+        regex::Regex::new(
+            r"(?i)\b(?P<current>\d{1,6})\s+of\s+(?P<total>\d{1,6})\b(?:\s+(?P<unit>tests?|steps?|files?|items?|cases?|tasks?|targets?|chunks?|batches?|examples?|crates?|modules?|packages?|workers?))?",
+        )
+        .expect("valid progress of regex")
+    })
+}
+
+fn progress_byte_ratio_regex() -> &'static regex::Regex {
+    static REGEX: OnceLock<regex::Regex> = OnceLock::new();
+    REGEX.get_or_init(|| {
+        regex::Regex::new(
+            r"(?i)\b(?P<current>\d+(?:\.\d+)?)\s*/\s*(?P<total>\d+(?:\.\d+)?)\s*(?P<unit>bytes?|[kmgt]i?b)\b",
+        )
+        .expect("valid progress byte ratio regex")
     })
 }
 
@@ -108,6 +128,33 @@ fn progress_message_from_line(line: &str, matched_fragment: &str) -> Option<Stri
     }
 }
 
+fn progress_from_counts(
+    trimmed: &str,
+    matched: &str,
+    current: u64,
+    total: u64,
+    unit: Option<String>,
+) -> Option<BackgroundTaskProgress> {
+    if total < 2 || current > total {
+        return None;
+    }
+
+    Some(
+        BackgroundTaskProgress {
+            kind: BackgroundTaskProgressKind::Determinate,
+            percent: None,
+            message: progress_message_from_line(trimmed, matched),
+            current: Some(current),
+            total: Some(total),
+            unit,
+            eta_seconds: None,
+            updated_at: Utc::now().to_rfc3339(),
+            source: BackgroundTaskProgressSource::ParsedOutput,
+        }
+        .normalize(),
+    )
+}
+
 fn parse_heuristic_progress(line: &str) -> Option<BackgroundTaskProgress> {
     let trimmed = line.trim();
     if trimmed.is_empty() {
@@ -117,15 +164,45 @@ fn parse_heuristic_progress(line: &str) -> Option<BackgroundTaskProgress> {
     if let Some(captures) = progress_ratio_regex().captures(trimmed) {
         let current = captures.name("current")?.as_str().parse::<u64>().ok()?;
         let total = captures.name("total")?.as_str().parse::<u64>().ok()?;
-        if total >= 2 && current <= total {
+        let matched = captures.get(0)?.as_str();
+        return progress_from_counts(
+            trimmed,
+            matched,
+            current,
+            total,
+            captures
+                .name("unit")
+                .map(|unit| unit.as_str().to_ascii_lowercase()),
+        );
+    }
+
+    if let Some(captures) = progress_of_regex().captures(trimmed) {
+        let current = captures.name("current")?.as_str().parse::<u64>().ok()?;
+        let total = captures.name("total")?.as_str().parse::<u64>().ok()?;
+        let matched = captures.get(0)?.as_str();
+        return progress_from_counts(
+            trimmed,
+            matched,
+            current,
+            total,
+            captures
+                .name("unit")
+                .map(|unit| unit.as_str().to_ascii_lowercase()),
+        );
+    }
+
+    if let Some(captures) = progress_byte_ratio_regex().captures(trimmed) {
+        let current = captures.name("current")?.as_str().parse::<f64>().ok()?;
+        let total = captures.name("total")?.as_str().parse::<f64>().ok()?;
+        if total > 0.0 && current <= total {
             let matched = captures.get(0)?.as_str();
             return Some(
                 BackgroundTaskProgress {
                     kind: BackgroundTaskProgressKind::Determinate,
-                    percent: None,
+                    percent: Some(((current / total) * 100.0) as f32),
                     message: progress_message_from_line(trimmed, matched),
-                    current: Some(current),
-                    total: Some(total),
+                    current: None,
+                    total: None,
                     unit: captures
                         .name("unit")
                         .map(|unit| unit.as_str().to_ascii_lowercase()),
@@ -1101,6 +1178,27 @@ mod tests {
         assert_eq!(progress.source, BackgroundTaskProgressSource::ParsedOutput);
     }
 
+    #[test]
+    fn test_parse_heuristic_progress_handles_of_output() {
+        let progress = parse_heuristic_progress("Downloaded 3 of 12 crates")
+            .expect("heuristic of progress should parse");
+
+        assert_eq!(progress.current, Some(3));
+        assert_eq!(progress.total, Some(12));
+        assert_eq!(progress.percent, Some(25.0));
+        assert_eq!(progress.unit.as_deref(), Some("crates"));
+    }
+
+    #[test]
+    fn test_parse_heuristic_progress_handles_byte_ratio_output() {
+        let progress = parse_heuristic_progress("Downloaded 1.5/3.0 GiB")
+            .expect("heuristic byte ratio progress should parse");
+
+        assert_eq!(progress.percent, Some(50.0));
+        assert_eq!(progress.unit.as_deref(), Some("gib"));
+        assert_eq!(progress.source, BackgroundTaskProgressSource::ParsedOutput);
+    }
+
     #[tokio::test]
     async fn test_background_command_progress_marker_updates_status_and_stays_out_of_output() {
         let tool = BashTool::new();
@@ -1204,6 +1302,52 @@ mod tests {
         assert!(
             saw_progress,
             "expected heuristic progress to be recorded for {task_id}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_background_command_byte_ratio_output_updates_progress() {
+        let tool = BashTool::new();
+        let ctx = make_ctx(None);
+
+        let result = tool
+            .execute(
+                json!({
+                    "command": "printf '%s\n' 'Downloaded 1.5/3.0 GiB'; sleep 0.1; echo done",
+                    "run_in_background": true,
+                    "notify": false,
+                    "wake": false,
+                }),
+                ctx,
+            )
+            .await
+            .expect("background command should start");
+
+        let metadata = result.metadata.expect("expected metadata");
+        let task_id = metadata["task_id"]
+            .as_str()
+            .expect("task id should be present")
+            .to_string();
+
+        let mut saw_progress = false;
+        for _ in 0..50 {
+            let status = crate::background::global()
+                .status(&task_id)
+                .await
+                .expect("status should exist");
+            if let Some(progress) = status.progress {
+                saw_progress = true;
+                assert_eq!(progress.percent, Some(50.0));
+                assert_eq!(progress.unit.as_deref(), Some("gib"));
+                assert_eq!(progress.source, BackgroundTaskProgressSource::ParsedOutput);
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+
+        assert!(
+            saw_progress,
+            "expected byte-ratio progress to be recorded for {task_id}"
         );
     }
 }

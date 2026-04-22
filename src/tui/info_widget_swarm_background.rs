@@ -42,11 +42,11 @@ pub(super) fn render_background_widget(data: &InfoWidgetData, _inner: Rect) -> V
         return Vec::new();
     };
 
-    render_background_line(info).into_iter().collect()
+    render_background_lines(info)
 }
 
 pub(super) fn render_background_compact(info: &BackgroundInfo) -> Vec<Line<'static>> {
-    render_background_line(info).into_iter().collect()
+    render_background_lines(info)
 }
 
 fn swarm_member_label(member: &SwarmMemberStatus) -> String {
@@ -130,12 +130,26 @@ fn render_swarm_name_line(name: &str, max_name_len: usize) -> Line<'static> {
     ])
 }
 
-fn render_background_line(info: &BackgroundInfo) -> Option<Line<'static>> {
-    let summary = background_summary(info)?;
-    Some(Line::from(vec![
+fn render_background_lines(info: &BackgroundInfo) -> Vec<Line<'static>> {
+    let Some(summary) = background_summary(info) else {
+        return Vec::new();
+    };
+    let mut lines = vec![Line::from(vec![
         Span::styled("⏳ ", Style::default().fg(rgb(180, 140, 255))),
         Span::styled(summary, Style::default().fg(rgb(160, 160, 170))),
-    ]))
+    ])];
+
+    if let Some(detail) = info.progress_detail.as_deref() {
+        lines.push(Line::from(vec![
+            Span::styled("   ", Style::default().fg(rgb(100, 100, 110))),
+            Span::styled(
+                truncate_smart(detail, 40),
+                Style::default().fg(rgb(180, 180, 190)),
+            ),
+        ]));
+    }
+
+    lines
 }
 
 fn background_summary(info: &BackgroundInfo) -> Option<String> {
@@ -158,8 +172,10 @@ fn background_summary(info: &BackgroundInfo) -> Option<String> {
                 parts.push(format!("bg:{}", task_str));
             }
         }
-        if let Some(progress) = info.progress_summary.as_deref() {
-            parts.push(format!("{}", truncate_smart(progress, 18)));
+        if info.progress_detail.is_none() {
+            if let Some(progress) = info.progress_summary.as_deref() {
+                parts.push(format!("{}", truncate_smart(progress, 18)));
+            }
         }
     }
 

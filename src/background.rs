@@ -117,6 +117,25 @@ pub fn format_progress_display(progress: &BackgroundTaskProgress, width: usize) 
     }
 }
 
+fn progress_equivalent(a: &BackgroundTaskProgress, b: &BackgroundTaskProgress) -> bool {
+    a.kind == b.kind
+        && a.percent == b.percent
+        && a.message == b.message
+        && a.current == b.current
+        && a.total == b.total
+        && a.unit == b.unit
+        && a.eta_seconds == b.eta_seconds
+        && a.source == b.source
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct RunningBackgroundProgress {
+    pub task_id: String,
+    pub tool_name: String,
+    pub summary: String,
+    pub detail: String,
+}
+
 /// Information returned when a background task is started
 #[derive(Debug, Clone, Serialize)]
 pub struct BackgroundTaskInfo {
@@ -735,6 +754,23 @@ impl BackgroundTaskManager {
         };
 
         let progress = progress.normalize();
+        if let Some(existing) = status.progress.as_ref() {
+            if progress_equivalent(existing, &progress) {
+                return Ok(Some(status));
+            }
+
+            let existing_is_more_determinate = existing.percent.is_some()
+                || matches!((existing.current, existing.total), (_, Some(total)) if total > 0);
+            let new_is_less_determinate = progress.percent.is_none()
+                && !matches!((progress.current, progress.total), (_, Some(total)) if total > 0);
+            if existing_is_more_determinate
+                && new_is_less_determinate
+                && matches!(progress.source, BackgroundTaskProgressSource::ParsedOutput)
+            {
+                return Ok(Some(status));
+            }
+        }
+
         status.progress = Some(progress.clone());
         self.write_status_file(&status_path, &status).await;
 
@@ -870,7 +906,7 @@ impl BackgroundTaskManager {
 
     /// Best-effort synchronous snapshot of currently running tasks.
     /// This avoids async calls in render paths.
-    pub fn running_snapshot(&self) -> (usize, Vec<String>, Option<String>) {
+    pub fn running_snapshot(&self) -> (usize, Vec<String>, Option<RunningBackgroundProgress>) {
         let Ok(tasks) = self.tasks.try_read() else {
             return (0, Vec::new(), None);
         };
@@ -879,17 +915,25 @@ impl BackgroundTaskManager {
         names.sort();
         names.dedup();
 
-        let mut latest_progress: Option<(String, String)> = None;
+        let mut latest_progress: Option<(String, RunningBackgroundProgress)> = None;
         for task in tasks.values() {
             let progress = std::fs::read_to_string(&task.status_path)
                 .ok()
                 .and_then(|content| serde_json::from_str::<TaskStatusFile>(&content).ok())
-                .and_then(|status| status.progress)
-                .map(|progress| format_progress_summary(&progress));
+                .and_then(|status| status.progress);
             if let Some(progress) = progress {
                 let candidate = (
                     task.task_id.clone(),
-                    format!("{} {}", task.tool_name, progress),
+                    RunningBackgroundProgress {
+                        task_id: task.task_id.clone(),
+                        tool_name: task.tool_name.clone(),
+                        summary: format!(
+                            "{} {}",
+                            task.tool_name,
+                            format_progress_summary(&progress)
+                        ),
+                        detail: format_progress_display(&progress, 12),
+                    },
                 );
                 if latest_progress
                     .as_ref()

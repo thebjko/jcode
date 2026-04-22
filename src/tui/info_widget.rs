@@ -256,6 +256,8 @@ pub struct BackgroundInfo {
     pub running_tasks: Vec<String>,
     /// Compact summary of the most recent task progress
     pub progress_summary: Option<String>,
+    /// Detailed display for the most recent task progress
+    pub progress_detail: Option<String>,
     /// Memory agent status
     pub memory_agent_active: bool,
     /// Memory agent turn count
@@ -843,7 +845,10 @@ pub(crate) fn calculate_widget_height(
             {
                 return 0;
             }
-            1 // Single line
+            data.background_info
+                .as_ref()
+                .map(|b| 1 + u16::from(b.progress_detail.is_some()))
+                .unwrap_or(1)
         }
         WidgetKind::AmbientMode => {
             let Some(info) = &data.ambient_info else {

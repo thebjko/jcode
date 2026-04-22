@@ -186,9 +186,17 @@ pub(super) fn present_swarm_notification(
                 status_notice: "Swarm update".to_string(),
             },
             Some("background_task") => SwarmNotificationPresentation {
-                title: "Background task".to_string(),
+                title: if trimmed.starts_with("**Background task progress**") {
+                    "Background task progress".to_string()
+                } else {
+                    "Background task".to_string()
+                },
                 message: trimmed.to_string(),
-                status_notice: "Background task update".to_string(),
+                status_notice: if trimmed.starts_with("**Background task progress**") {
+                    "Background task progress".to_string()
+                } else {
+                    "Background task update".to_string()
+                },
             },
             Some(other) => SwarmNotificationPresentation {
                 title: format!("{} · {}", capitalize(other), sender),

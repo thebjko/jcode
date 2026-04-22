@@ -7405,6 +7405,53 @@ fn test_handle_background_task_progress_updates_status_notice() {
 }
 
 #[test]
+fn test_handle_background_task_progress_debounces_identical_notice_updates() {
+    let mut app = create_test_app();
+    let first_event = BusEvent::BackgroundTaskProgress(BackgroundTaskProgressEvent {
+        task_id: "bgprogress".to_string(),
+        tool_name: "bash".to_string(),
+        session_id: app.session.id.clone(),
+        progress: BackgroundTaskProgress {
+            kind: BackgroundTaskProgressKind::Determinate,
+            percent: Some(42.0),
+            message: Some("Running tests".to_string()),
+            current: Some(21),
+            total: Some(50),
+            unit: Some("tests".to_string()),
+            eta_seconds: None,
+            updated_at: chrono::Utc::now().to_rfc3339(),
+            source: BackgroundTaskProgressSource::Reported,
+        },
+    });
+    super::local::handle_bus_event(&mut app, Ok(first_event));
+    let first_at = app.status_notice.as_ref().map(|(_, at)| *at).unwrap();
+
+    let second_event = BusEvent::BackgroundTaskProgress(BackgroundTaskProgressEvent {
+        task_id: "bgprogress".to_string(),
+        tool_name: "bash".to_string(),
+        session_id: app.session.id.clone(),
+        progress: BackgroundTaskProgress {
+            kind: BackgroundTaskProgressKind::Determinate,
+            percent: Some(42.0),
+            message: Some("Running tests".to_string()),
+            current: Some(21),
+            total: Some(50),
+            unit: Some("tests".to_string()),
+            eta_seconds: None,
+            updated_at: chrono::Utc::now().to_rfc3339(),
+            source: BackgroundTaskProgressSource::Reported,
+        },
+    });
+    super::local::handle_bus_event(&mut app, Ok(second_event));
+
+    let second_at = app.status_notice.as_ref().map(|(_, at)| *at).unwrap();
+    assert_eq!(
+        first_at, second_at,
+        "identical progress notice should be debounced"
+    );
+}
+
+#[test]
 fn test_handle_server_event_input_shell_result_renders_markdown_blocks() {
     let mut app = create_test_app();
     let rt = tokio::runtime::Runtime::new().unwrap();
