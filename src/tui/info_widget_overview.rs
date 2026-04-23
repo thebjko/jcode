@@ -148,7 +148,7 @@ fn compact_model_height(data: &InfoWidgetData) -> u16 {
 
 fn compact_background_height(data: &InfoWidgetData) -> u16 {
     if let Some(info) = &data.background_info
-        && (info.running_count > 0 || info.memory_agent_active)
+        && info.running_count > 0
     {
         let task_lines = info.running_tasks.len().min(3) as u16;
         let overflow_line = u16::from(info.running_tasks.len() > 3);

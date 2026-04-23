@@ -932,14 +932,11 @@ impl crate::tui::TuiState for App {
 
         // Gather background task info
         let background_info = {
-            let memory_agent_active = self.memory_enabled && crate::memory_agent::is_active();
-            let memory_stats = crate::memory_agent::stats();
-
             // Get running background tasks count
             let bg_manager = crate::background::global();
             let (running_count, running_tasks, progress) = bg_manager.running_snapshot();
 
-            if memory_agent_active || running_count > 0 {
+            if running_count > 0 {
                 Some(crate::tui::info_widget::BackgroundInfo {
                     running_count,
                     running_tasks,
@@ -947,8 +944,8 @@ impl crate::tui::TuiState for App {
                     progress_detail: progress
                         .as_ref()
                         .and_then(|progress| progress.detail.clone()),
-                    memory_agent_active,
-                    memory_agent_turns: memory_stats.turns_processed,
+                    memory_agent_active: false,
+                    memory_agent_turns: 0,
                 })
             } else {
                 None

@@ -172,14 +172,11 @@ fn render_background_lines(info: &BackgroundInfo, width: usize) -> Vec<Line<'sta
 }
 
 fn background_summary(info: &BackgroundInfo) -> Option<String> {
-    if info.running_count == 0 && !info.memory_agent_active {
+    if info.running_count == 0 {
         return None;
     }
 
     let mut parts: Vec<String> = Vec::new();
-    if info.memory_agent_active {
-        parts.push(format!("mem:{}", info.memory_agent_turns));
-    }
     if info.running_count > 0 {
         parts.push(format!("bg:{}", info.running_count));
     }

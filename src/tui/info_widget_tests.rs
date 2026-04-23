@@ -678,8 +678,8 @@ fn background_widget_and_compact_share_summary_format() {
         ],
         progress_summary: Some("selfdev build".to_string()),
         progress_detail: Some("[#####-------] 42% · Building (parsed)".to_string()),
-        memory_agent_active: true,
-        memory_agent_turns: 4,
+        memory_agent_active: false,
+        memory_agent_turns: 0,
     };
     let data = InfoWidgetData {
         background_info: Some(info.clone()),
@@ -693,8 +693,8 @@ fn background_widget_and_compact_share_summary_format() {
     let compact_text = lines_text(&super::render_background_compact(&info));
 
     assert_eq!(widget_text, compact_text);
-    assert!(widget_text.contains("mem:4"), "got: {widget_text}");
     assert!(widget_text.contains("bg:4"), "got: {widget_text}");
+    assert!(!widget_text.contains("mem:"), "got: {widget_text}");
     assert!(widget_text.contains("selfdev build"), "got: {widget_text}");
     assert!(widget_text.contains("train.py"), "got: {widget_text}");
     assert!(widget_text.contains("cargo test"), "got: {widget_text}");

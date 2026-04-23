@@ -562,7 +562,7 @@ impl InfoWidgetData {
                 if self
                     .background_info
                     .as_ref()
-                    .map(|b| b.running_count > 0 || b.memory_agent_active)
+                    .map(|b| b.running_count > 0)
                     .unwrap_or(false)
                 {
                     sections += 1;
@@ -604,7 +604,7 @@ impl InfoWidgetData {
             WidgetKind::BackgroundTasks => self
                 .background_info
                 .as_ref()
-                .map(|b| b.running_count > 0 || b.memory_agent_active)
+                .map(|b| b.running_count > 0)
                 .unwrap_or(false),
             WidgetKind::AmbientMode => false,
             WidgetKind::UsageLimits => self
@@ -840,7 +840,7 @@ pub(crate) fn calculate_widget_height(
             if data
                 .background_info
                 .as_ref()
-                .map(|b| b.running_count == 0 && !b.memory_agent_active)
+                .map(|b| b.running_count == 0)
                 .unwrap_or(true)
             {
                 return 0;
@@ -1546,7 +1546,7 @@ fn render_sections(
 
     // Background tasks info
     if let Some(info) = &data.background_info
-        && (info.running_count > 0 || info.memory_agent_active)
+        && info.running_count > 0
     {
         lines.extend(render_background_compact(info));
     }
