@@ -669,9 +669,14 @@ fn swarm_widget_renders_member_roles_and_details() {
 #[test]
 fn background_widget_and_compact_share_summary_format() {
     let info = BackgroundInfo {
-        running_count: 2,
-        running_tasks: vec!["bash".to_string(), "cargo".to_string()],
-        progress_summary: Some("bash 42% Building".to_string()),
+        running_count: 4,
+        running_tasks: vec![
+            "selfdev build".to_string(),
+            "train.py".to_string(),
+            "cargo test".to_string(),
+            "download".to_string(),
+        ],
+        progress_summary: Some("selfdev build".to_string()),
         progress_detail: Some("[#####-------] 42% · Building (parsed)".to_string()),
         memory_agent_active: true,
         memory_agent_turns: 4,
@@ -689,8 +694,12 @@ fn background_widget_and_compact_share_summary_format() {
 
     assert_eq!(widget_text, compact_text);
     assert!(widget_text.contains("mem:4"), "got: {widget_text}");
-    assert!(widget_text.contains("bg:bash,cargo"), "got: {widget_text}");
-    assert!(widget_text.contains("42% · Building"), "got: {widget_text}");
+    assert!(widget_text.contains("bg:4"), "got: {widget_text}");
+    assert!(widget_text.contains("selfdev build"), "got: {widget_text}");
+    assert!(widget_text.contains("train.py"), "got: {widget_text}");
+    assert!(widget_text.contains("cargo test"), "got: {widget_text}");
+    assert!(widget_text.contains("+1 more"), "got: {widget_text}");
+    assert!(widget_text.contains("[#####-------]"), "got: {widget_text}");
 }
 
 #[test]

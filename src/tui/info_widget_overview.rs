@@ -150,7 +150,9 @@ fn compact_background_height(data: &InfoWidgetData) -> u16 {
     if let Some(info) = &data.background_info
         && (info.running_count > 0 || info.memory_agent_active)
     {
-        return 1 + u16::from(info.progress_detail.is_some());
+        let task_lines = info.running_tasks.len().min(3) as u16;
+        let overflow_line = u16::from(info.running_tasks.len() > 3);
+        return 1 + task_lines + overflow_line;
     }
     0
 }

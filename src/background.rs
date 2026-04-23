@@ -31,6 +31,8 @@ const EXIT_MARKER_PREFIX: &str = "--- Command finished with exit code: ";
 pub struct TaskStatusFile {
     pub task_id: String,
     pub tool_name: String,
+    #[serde(default)]
+    pub display_name: Option<String>,
     pub session_id: String,
     pub status: BackgroundTaskStatus,
     pub exit_code: Option<i32>,
@@ -132,8 +134,8 @@ fn progress_equivalent(a: &BackgroundTaskProgress, b: &BackgroundTaskProgress) -
 pub struct RunningBackgroundProgress {
     pub task_id: String,
     pub tool_name: String,
-    pub summary: String,
-    pub detail: String,
+    pub label: String,
+    pub detail: Option<String>,
 }
 
 /// Information returned when a background task is started
@@ -148,6 +150,7 @@ pub struct BackgroundTaskInfo {
 struct RunningTask {
     task_id: String,
     tool_name: String,
+    display_name: Option<String>,
     session_id: String,
     status_path: PathBuf,
     started_at: Instant,
@@ -355,6 +358,7 @@ impl BackgroundTaskManager {
         &self,
         info: &BackgroundTaskInfo,
         tool_name: &str,
+        display_name: Option<String>,
         session_id: &str,
         pid: u32,
         started_at: &str,
@@ -365,6 +369,7 @@ impl BackgroundTaskManager {
         let status = TaskStatusFile {
             task_id: info.task_id.clone(),
             tool_name: tool_name.to_string(),
+            display_name,
             session_id: session_id.to_string(),
             status: BackgroundTaskStatus::Running,
             exit_code: None,
@@ -395,7 +400,7 @@ impl BackgroundTaskManager {
         F: FnOnce(PathBuf) -> Fut + Send + 'static,
         Fut: std::future::Future<Output = Result<TaskResult>> + Send,
     {
-        self.spawn_with_notify(tool_name, session_id, true, false, execute_fn)
+        self.spawn_with_notify(tool_name, None, session_id, true, false, execute_fn)
             .await
     }
 
@@ -403,6 +408,7 @@ impl BackgroundTaskManager {
     pub async fn spawn_with_notify<F, Fut>(
         &self,
         tool_name: &str,
+        display_name: Option<String>,
         session_id: &str,
         notify: bool,
         wake: bool,
@@ -422,6 +428,7 @@ impl BackgroundTaskManager {
         let initial_status = TaskStatusFile {
             task_id: task_id.clone(),
             tool_name: tool_name.to_string(),
+            display_name: display_name.clone(),
             session_id: session_id.to_string(),
             status: BackgroundTaskStatus::Running,
             exit_code: None,
@@ -443,6 +450,7 @@ impl BackgroundTaskManager {
         let status_path_clone = status_path.clone();
         let task_id_clone = task_id.clone();
         let tool_name_owned = tool_name.to_string();
+        let display_name_owned = display_name.clone();
         let session_id_owned = session_id.to_string();
         let started_at = Instant::now();
         let started_at_rfc3339_for_task = started_at_rfc3339.clone();
@@ -478,6 +486,7 @@ impl BackgroundTaskManager {
             let final_status = TaskStatusFile {
                 task_id: task_id_clone.clone(),
                 tool_name: tool_name_owned.clone(),
+                display_name: display_name_owned.clone(),
                 session_id: session_id_owned.clone(),
                 status: status.clone(),
                 exit_code,
@@ -528,6 +537,7 @@ impl BackgroundTaskManager {
         let running_task = RunningTask {
             task_id: task_id.clone(),
             tool_name: tool_name.to_string(),
+            display_name,
             session_id: session_id.to_string(),
             status_path: status_path.clone(),
             started_at,
@@ -565,6 +575,7 @@ impl BackgroundTaskManager {
         let initial_status = TaskStatusFile {
             task_id: task_id.clone(),
             tool_name: tool_name.to_string(),
+            display_name: None,
             session_id: session_id.to_string(),
             status: BackgroundTaskStatus::Running,
             exit_code: None,
@@ -630,6 +641,7 @@ impl BackgroundTaskManager {
             let final_status = TaskStatusFile {
                 task_id: task_id_clone.clone(),
                 tool_name: tool_name_owned.clone(),
+                display_name: None,
                 session_id: session_id_owned.clone(),
                 status: status.clone(),
                 exit_code,
@@ -676,6 +688,7 @@ impl BackgroundTaskManager {
         let running_task = RunningTask {
             task_id: task_id.clone(),
             tool_name: tool_name.to_string(),
+            display_name: None,
             session_id: session_id.to_string(),
             status_path: status_path.clone(),
             started_at,
@@ -822,6 +835,7 @@ impl BackgroundTaskManager {
             let final_status = TaskStatusFile {
                 task_id: task.task_id,
                 tool_name: task.tool_name,
+                display_name: task.display_name,
                 session_id: task.session_id,
                 status: BackgroundTaskStatus::Failed,
                 exit_code: None,
@@ -911,44 +925,33 @@ impl BackgroundTaskManager {
             return (0, Vec::new(), None);
         };
 
-        let mut names: Vec<String> = tasks.values().map(|t| t.tool_name.clone()).collect();
-        names.sort();
-        names.dedup();
-
-        let mut latest_progress: Option<(String, RunningBackgroundProgress)> = None;
+        let mut rows: Vec<RunningBackgroundProgress> = Vec::new();
         for task in tasks.values() {
-            let progress = std::fs::read_to_string(&task.status_path)
+            let status = std::fs::read_to_string(&task.status_path)
                 .ok()
-                .and_then(|content| serde_json::from_str::<TaskStatusFile>(&content).ok())
-                .and_then(|status| status.progress);
-            if let Some(progress) = progress {
-                let candidate = (
-                    task.task_id.clone(),
-                    RunningBackgroundProgress {
-                        task_id: task.task_id.clone(),
-                        tool_name: task.tool_name.clone(),
-                        summary: format!(
-                            "{} {}",
-                            task.tool_name,
-                            format_progress_summary(&progress)
-                        ),
-                        detail: format_progress_display(&progress, 12),
-                    },
-                );
-                if latest_progress
-                    .as_ref()
-                    .map(|(task_id, _)| candidate.0 > *task_id)
-                    .unwrap_or(true)
-                {
-                    latest_progress = Some(candidate);
-                }
-            }
+                .and_then(|content| serde_json::from_str::<TaskStatusFile>(&content).ok());
+            let progress = status.as_ref().and_then(|status| status.progress.clone());
+            let label = status
+                .as_ref()
+                .and_then(|status| status.display_name.clone())
+                .or_else(|| task.display_name.clone())
+                .unwrap_or_else(|| task.tool_name.clone());
+
+            rows.push(RunningBackgroundProgress {
+                task_id: task.task_id.clone(),
+                tool_name: task.tool_name.clone(),
+                label,
+                detail: progress.map(|progress| format_progress_display(&progress, 10)),
+            });
         }
+
+        rows.sort_by(|a, b| b.task_id.cmp(&a.task_id));
+        let latest = rows.iter().find(|row| row.detail.is_some()).cloned();
 
         (
             tasks.len(),
-            names,
-            latest_progress.map(|(_, summary)| summary),
+            rows.iter().map(|row| row.label.clone()).collect(),
+            latest,
         )
     }
 
@@ -1030,6 +1033,7 @@ mod tests {
         let info = manager
             .spawn_with_notify(
                 "bash",
+                None,
                 "session-test",
                 false,
                 false,
@@ -1076,6 +1080,7 @@ mod tests {
         let info = manager
             .spawn_with_notify(
                 "bash",
+                None,
                 "session-progress",
                 false,
                 false,

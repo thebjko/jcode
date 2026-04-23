@@ -37,16 +37,16 @@ pub(super) fn render_swarm_widget(data: &InfoWidgetData, inner: Rect) -> Vec<Lin
     lines
 }
 
-pub(super) fn render_background_widget(data: &InfoWidgetData, _inner: Rect) -> Vec<Line<'static>> {
+pub(super) fn render_background_widget(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static>> {
     let Some(info) = &data.background_info else {
         return Vec::new();
     };
 
-    render_background_lines(info)
+    render_background_lines(info, inner.width as usize)
 }
 
 pub(super) fn render_background_compact(info: &BackgroundInfo) -> Vec<Line<'static>> {
-    render_background_lines(info)
+    render_background_lines(info, 40)
 }
 
 fn swarm_member_label(member: &SwarmMemberStatus) -> String {
@@ -130,7 +130,7 @@ fn render_swarm_name_line(name: &str, max_name_len: usize) -> Line<'static> {
     ])
 }
 
-fn render_background_lines(info: &BackgroundInfo) -> Vec<Line<'static>> {
+fn render_background_lines(info: &BackgroundInfo, width: usize) -> Vec<Line<'static>> {
     let Some(summary) = background_summary(info) else {
         return Vec::new();
     };
@@ -139,12 +139,31 @@ fn render_background_lines(info: &BackgroundInfo) -> Vec<Line<'static>> {
         Span::styled(summary, Style::default().fg(rgb(160, 160, 170))),
     ])];
 
-    if let Some(detail) = info.progress_detail.as_deref() {
+    let row_width = width.saturating_sub(4).max(12);
+    for (index, task) in info.running_tasks.iter().take(3).enumerate() {
+        let detail = if index == 0 {
+            info.progress_detail.as_deref()
+        } else {
+            None
+        };
+        let row_text = if let Some(detail) = detail {
+            truncate_smart(&format!("{} · {}", task, detail), row_width)
+        } else {
+            truncate_smart(task, row_width)
+        };
+        lines.push(Line::from(vec![
+            Span::styled("  • ", Style::default().fg(rgb(120, 120, 130))),
+            Span::styled(row_text, Style::default().fg(rgb(180, 180, 190))),
+        ]));
+    }
+
+    let hidden = info.running_tasks.len().saturating_sub(3);
+    if hidden > 0 {
         lines.push(Line::from(vec![
             Span::styled("   ", Style::default().fg(rgb(100, 100, 110))),
             Span::styled(
-                truncate_smart(detail, 40),
-                Style::default().fg(rgb(180, 180, 190)),
+                format!("+{} more", hidden),
+                Style::default().fg(rgb(140, 140, 150)),
             ),
         ]));
     }
@@ -162,21 +181,7 @@ fn background_summary(info: &BackgroundInfo) -> Option<String> {
         parts.push(format!("mem:{}", info.memory_agent_turns));
     }
     if info.running_count > 0 {
-        if info.running_tasks.is_empty() {
-            parts.push(format!("bg:{}", info.running_count));
-        } else {
-            let task_str = info.running_tasks.join(",");
-            if task_str.len() > 15 {
-                parts.push(format!("bg:{}+", info.running_count));
-            } else {
-                parts.push(format!("bg:{}", task_str));
-            }
-        }
-        if info.progress_detail.is_none() {
-            if let Some(progress) = info.progress_summary.as_deref() {
-                parts.push(format!("{}", truncate_smart(progress, 18)));
-            }
-        }
+        parts.push(format!("bg:{}", info.running_count));
     }
 
     if parts.is_empty() {

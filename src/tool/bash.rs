@@ -95,6 +95,47 @@ fn parse_progress_kind(kind: Option<&str>) -> BackgroundTaskProgressKind {
     }
 }
 
+fn summarize_background_command(description: Option<&str>, command: &str) -> String {
+    if let Some(description) = description
+        .map(str::trim)
+        .filter(|description| !description.is_empty())
+    {
+        return truncate_str(description, 28).to_string();
+    }
+
+    let trimmed = command.trim();
+    if trimmed.is_empty() {
+        return "bash".to_string();
+    }
+
+    let tokens: Vec<&str> = trimmed.split_whitespace().collect();
+    let start = tokens
+        .iter()
+        .position(|token| !token.contains('='))
+        .unwrap_or(0);
+    let tokens = &tokens[start..];
+    if tokens.is_empty() {
+        return truncate_str(trimmed, 28).to_string();
+    }
+
+    let label = match tokens {
+        ["python" | "python3" | "bash" | "sh" | "node", script, ..] => std::path::Path::new(script)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(script)
+            .to_string(),
+        ["cargo", subcommand, ..] => format!("cargo {}", subcommand),
+        ["npm" | "pnpm" | "yarn", command, script, ..] if *command == "run" => {
+            format!("{} {} {}", tokens[0], command, script)
+        }
+        [first, second, ..] => format!("{} {}", first, second),
+        [first] => first.to_string(),
+        [] => "bash".to_string(),
+    };
+
+    truncate_str(&label, 28).to_string()
+}
+
 fn parse_progress_marker(line: &str) -> Option<BackgroundTaskProgress> {
     let payload = line.trim().strip_prefix(PROGRESS_MARKER_PREFIX)?.trim();
     let marker: ProgressMarker = serde_json::from_str(payload).ok()?;
@@ -666,6 +707,8 @@ impl BashTool {
         let started = Instant::now();
         let manager = crate::background::global();
         let info = manager.reserve_task_info();
+        let display_name =
+            summarize_background_command(params.description.as_deref(), &params.command);
 
         let mut cmd = build_detached_shell_wrapper(&params.command);
         let stdout = OpenOptions::new()
@@ -715,6 +758,7 @@ impl BashTool {
                     .register_detached_task(
                         &info,
                         "bash",
+                        Some(display_name.clone()),
                         &ctx.session_id,
                         pid,
                         &started_at,
@@ -754,6 +798,7 @@ impl BashTool {
     async fn execute_background(&self, params: BashInput, ctx: ToolContext) -> Result<ToolOutput> {
         let command = params.command.clone();
         let description = params.description.clone();
+        let display_name = summarize_background_command(description.as_deref(), &command);
         let working_dir = ctx.working_dir.clone();
 
         let wake = params.wake;
@@ -761,6 +806,7 @@ impl BashTool {
         let info = crate::background::global()
             .spawn_with_notify(
                 "bash",
+                Some(display_name),
                 &ctx.session_id,
                 notify,
                 wake,

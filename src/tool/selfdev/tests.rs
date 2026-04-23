@@ -732,6 +732,7 @@ async fn build_ignores_stale_pending_requests_when_computing_queue_position() {
         &background::TaskStatusFile {
             task_id: "stale-task".to_string(),
             tool_name: "selfdev-build".to_string(),
+            display_name: Some("selfdev build".to_string()),
             session_id: stale_session.id.clone(),
             status: BackgroundTaskStatus::Running,
             exit_code: None,
@@ -825,6 +826,7 @@ fn reconcile_pending_state_maps_superseded_background_status() {
         &background::TaskStatusFile {
             task_id: "superseded-task".to_string(),
             tool_name: "selfdev-build".to_string(),
+            display_name: Some("selfdev build".to_string()),
             session_id: session.id.clone(),
             status: BackgroundTaskStatus::Superseded,
             exit_code: Some(0),

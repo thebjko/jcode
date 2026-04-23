@@ -943,8 +943,10 @@ impl crate::tui::TuiState for App {
                 Some(crate::tui::info_widget::BackgroundInfo {
                     running_count,
                     running_tasks,
-                    progress_summary: progress.as_ref().map(|progress| progress.summary.clone()),
-                    progress_detail: progress.as_ref().map(|progress| progress.detail.clone()),
+                    progress_summary: progress.as_ref().map(|progress| progress.label.clone()),
+                    progress_detail: progress
+                        .as_ref()
+                        .and_then(|progress| progress.detail.clone()),
                     memory_agent_active,
                     memory_agent_turns: memory_stats.turns_processed,
                 })

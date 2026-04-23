@@ -847,7 +847,11 @@ pub(crate) fn calculate_widget_height(
             }
             data.background_info
                 .as_ref()
-                .map(|b| 1 + u16::from(b.progress_detail.is_some()))
+                .map(|b| {
+                    let task_lines = b.running_tasks.len().min(3) as u16;
+                    let overflow_line = u16::from(b.running_tasks.len() > 3);
+                    1 + task_lines + overflow_line
+                })
                 .unwrap_or(1)
         }
         WidgetKind::AmbientMode => {

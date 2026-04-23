@@ -407,6 +407,7 @@ impl SelfDevTool {
             let info = background::global()
                 .spawn_with_notify(
                     "selfdev-build-watch",
+                    Some("build watch".to_string()),
                     &ctx.session_id,
                     notify,
                     wake,
@@ -508,6 +509,7 @@ impl SelfDevTool {
         let info = background::global()
             .spawn_with_notify(
                 "selfdev-build",
+                Some("selfdev build".to_string()),
                 &ctx.session_id,
                 notify,
                 wake,
