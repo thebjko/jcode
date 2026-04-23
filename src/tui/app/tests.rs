@@ -4262,6 +4262,43 @@ fn test_fuzzy_command_suggestions() {
 }
 
 #[test]
+fn test_refresh_model_list_command_suggestions() {
+    let app = create_test_app();
+    let suggestions = app.get_suggestions_for("/refresh");
+    assert!(
+        suggestions
+            .iter()
+            .any(|(cmd, _)| cmd == "/refresh-model-list")
+    );
+    assert!(suggestions.iter().any(|(cmd, _)| cmd == "/refresh-models"));
+
+    let spaced = app.get_suggestions_for("/refresh ");
+    assert!(spaced.iter().any(|(cmd, _)| cmd == "/refresh model list"));
+}
+
+#[test]
+fn test_registered_command_suggestions_include_aliases_and_hide_secret_commands() {
+    let app = create_test_app();
+    let suggestions = app.get_suggestions_for("/");
+    let commands: Vec<&str> = suggestions.iter().map(|(cmd, _)| cmd.as_str()).collect();
+
+    assert!(commands.contains(&"/models"));
+    assert!(commands.contains(&"/sessions"));
+    assert!(commands.contains(&"/dictation"));
+    assert!(commands.contains(&"/feedback"));
+    assert!(!commands.contains(&"/z"));
+    assert!(!commands.contains(&"/zz"));
+    assert!(!commands.contains(&"/zzz"));
+}
+
+#[test]
+fn test_auth_doctor_command_suggestion_is_not_shadowed_by_provider_suggestions() {
+    let app = create_test_app();
+    let suggestions = app.get_suggestions_for("/auth d");
+    assert!(suggestions.iter().any(|(cmd, _)| cmd == "/auth doctor"));
+}
+
+#[test]
 fn test_top_level_command_suggestions_include_config_and_subscription() {
     let app = create_test_app();
     let suggestions = app.get_suggestions_for("/con");

@@ -1637,6 +1637,9 @@ impl App {
             "model" => {
                 "`/model`\nOpen model picker.\n\n`/model <name>`\nSwitch model.\n\n`/model <name>@<provider>`\nPin OpenRouter routing (`@auto` clears pin)."
             }
+            "refresh-model-list" | "refresh-models" | "refresh models" | "refresh model list" => {
+                "`/refresh-model-list`\nForce-refresh provider model catalogs, update `/model`, and persist the refreshed cache.\n\nAliases: `/refresh-models`, `/refresh models`, `/refresh model list`."
+            }
             "agents" => {
                 "`/agents`\nOpen the agent-model config picker.\n\n`/agents <swarm|review|judge|memory|ambient>`\nJump straight to that agent role's saved model override."
             }
@@ -1674,10 +1677,10 @@ impl App {
                 "`/autojudge`\nShow autojudge status for this session.\n\n`/autojudge on`\nEnable end-of-turn autojudge for this session. The autojudge acts like a completion manager: it tells the parent agent either to continue with specific next steps or that it is fine to stop.\n\n`/autojudge off`\nDisable autojudge for this session.\n\n`/autojudge now`\nLaunch a headed autojudge immediately in a new window."
             }
             "review" => {
-                "`/review`\nLaunch a one-shot headed review session immediately.\n\nThe reviewer will DM this session when done. If OpenAI ChatGPT OAuth is available, it prefers `gpt-5.4`."
+                "`/review`\nLaunch a one-shot headed review session immediately.\n\nThe reviewer will DM this session when done. If OpenAI ChatGPT OAuth is available, it prefers `gpt-5.5`."
             }
             "judge" => {
-                "`/judge`\nLaunch a one-shot headed judge session immediately.\n\nThe judge will DM this session when done. If OpenAI ChatGPT OAuth is available, it prefers `gpt-5.4`."
+                "`/judge`\nLaunch a one-shot headed judge session immediately.\n\nThe judge will DM this session when done. If OpenAI ChatGPT OAuth is available, it prefers `gpt-5.5`."
             }
             "effort" => {
                 "`/effort`\nShow current reasoning effort.\n\n`/effort <level>`\nSet reasoning effort (none|low|medium|high|xhigh).\n\nAlso: Alt+←/→ to cycle."

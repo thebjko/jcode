@@ -495,7 +495,7 @@ pub(super) async fn execute_debug_command(
                     "claude-opus-4-6"
                 }
             }
-            "openai" | "codex" => "gpt-5.4",
+            "openai" | "codex" => "gpt-5.5",
             "openrouter" => "anthropic/claude-sonnet-4",
             "cursor" => "gpt-5",
             "copilot" => "copilot:claude-sonnet-4",

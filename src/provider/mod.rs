@@ -955,7 +955,7 @@ impl Provider for MultiProvider {
             ActiveProvider::OpenAI => self
                 .openai_provider()
                 .map(|o| o.model())
-                .unwrap_or_else(|| "gpt-5.4".to_string()),
+                .unwrap_or_else(|| "gpt-5.5".to_string()),
             ActiveProvider::Copilot => self
                 .copilot_provider()
                 .map(|o| o.model())

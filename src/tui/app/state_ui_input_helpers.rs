@@ -1,6 +1,125 @@
 use super::*;
 use crate::tui::core;
 
+#[derive(Clone, Copy)]
+struct RegisteredCommand {
+    name: &'static str,
+    help: &'static str,
+    autocomplete: bool,
+    remote_only: bool,
+}
+
+impl RegisteredCommand {
+    const fn public(name: &'static str, help: &'static str) -> Self {
+        Self {
+            name,
+            help,
+            autocomplete: true,
+            remote_only: false,
+        }
+    }
+
+    const fn remote(name: &'static str, help: &'static str) -> Self {
+        Self {
+            name,
+            help,
+            autocomplete: true,
+            remote_only: true,
+        }
+    }
+
+    const fn hidden(name: &'static str, help: &'static str) -> Self {
+        Self {
+            name,
+            help,
+            autocomplete: false,
+            remote_only: false,
+        }
+    }
+}
+
+const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
+    RegisteredCommand::public("/help", "Show help and keyboard shortcuts"),
+    RegisteredCommand::public("/?", "Alias for /help"),
+    RegisteredCommand::public("/commands", "Alias for /help"),
+    RegisteredCommand::public("/model", "List or switch models"),
+    RegisteredCommand::public("/models", "Alias for /model"),
+    RegisteredCommand::public("/refresh-model-list", "Refresh provider model catalogs"),
+    RegisteredCommand::public("/refresh-models", "Alias for /refresh-model-list"),
+    RegisteredCommand::public("/refresh models", "Alias for /refresh-model-list"),
+    RegisteredCommand::public("/refresh model list", "Alias for /refresh-model-list"),
+    RegisteredCommand::public("/agents", "Configure models for agent roles"),
+    RegisteredCommand::public("/subagent", "Launch a subagent manually"),
+    RegisteredCommand::public("/observe", "Show the latest tool context in the side panel"),
+    RegisteredCommand::public(
+        "/todos",
+        "Show the current session todo list in the side panel",
+    ),
+    RegisteredCommand::public("/splitview", "Mirror the current chat in the side panel"),
+    RegisteredCommand::public("/split-view", "Alias for /splitview"),
+    RegisteredCommand::public("/btw", "Ask a side question in the side panel"),
+    RegisteredCommand::public("/git", "Show git status for the session working directory"),
+    RegisteredCommand::public("/subagent-model", "Show/change subagent model policy"),
+    RegisteredCommand::public("/autoreview", "Show/toggle automatic end-of-turn review"),
+    RegisteredCommand::public("/autojudge", "Show/toggle automatic end-of-turn judging"),
+    RegisteredCommand::public("/review", "Launch a one-shot headed review session"),
+    RegisteredCommand::public("/judge", "Launch a one-shot headed judge session"),
+    RegisteredCommand::public("/effort", "Show/change reasoning effort (Alt+left/right)"),
+    RegisteredCommand::public("/fast", "Toggle OpenAI/Codex fast mode"),
+    RegisteredCommand::public("/transport", "Show/change connection transport"),
+    RegisteredCommand::public("/alignment", "Show/change default text alignment"),
+    RegisteredCommand::public("/clear", "Clear conversation history"),
+    RegisteredCommand::public("/rewind", "Rewind conversation to previous message"),
+    RegisteredCommand::public("/poke", "Poke model to resume with incomplete todos"),
+    RegisteredCommand::public("/improve", "Autonomously improve the repository"),
+    RegisteredCommand::public("/refactor", "Run a safe refactor loop"),
+    RegisteredCommand::public("/compact", "Compact context"),
+    RegisteredCommand::public("/fix", "Recover when the model cannot continue"),
+    RegisteredCommand::public("/dictate", "Run configured external dictation command"),
+    RegisteredCommand::public("/dictation", "Alias for /dictate"),
+    RegisteredCommand::public("/memory", "Toggle memory feature"),
+    RegisteredCommand::public("/goals", "Open goals overview / resume tracked goals"),
+    RegisteredCommand::public("/swarm", "Toggle swarm feature"),
+    RegisteredCommand::public("/context", "Show the full session context snapshot"),
+    RegisteredCommand::public("/version", "Show current version"),
+    RegisteredCommand::public("/changelog", "Show recent changes in this build"),
+    RegisteredCommand::public("/info", "Show session info and tokens"),
+    RegisteredCommand::public("/usage", "Show connected provider usage limits"),
+    RegisteredCommand::public("/feedback", "Send feedback about jcode"),
+    RegisteredCommand::public("/subscription", "Show jcode subscription status"),
+    RegisteredCommand::public("/config", "Show or edit configuration"),
+    RegisteredCommand::public("/reload", "Reload into newest available binary"),
+    RegisteredCommand::public("/restart", "Restart with current binary"),
+    RegisteredCommand::public("/rebuild", "Background rebuild and auto reload"),
+    RegisteredCommand::public("/selfdev", "Open a new self-dev jcode session"),
+    RegisteredCommand::public("/update", "Background update and auto reload"),
+    RegisteredCommand::public("/resume", "Open session picker"),
+    RegisteredCommand::public("/sessions", "Alias for /resume"),
+    RegisteredCommand::public("/catchup", "Open Catch Up picker"),
+    RegisteredCommand::public("/back", "Return to the previous Catch Up session"),
+    RegisteredCommand::public("/save", "Bookmark session for easy access"),
+    RegisteredCommand::public("/unsave", "Remove bookmark from session"),
+    RegisteredCommand::public("/split", "Split session into a new window"),
+    RegisteredCommand::public("/transfer", "Compact context into a fresh handoff session"),
+    RegisteredCommand::public("/workspace", "Niri-style session workspace"),
+    RegisteredCommand::public("/quit", "Exit jcode"),
+    RegisteredCommand::public("/auth", "Show authentication status"),
+    RegisteredCommand::public("/login", "Login to a provider"),
+    RegisteredCommand::public("/account", "Open the combined account picker"),
+    RegisteredCommand::public("/accounts", "Alias for /account"),
+    RegisteredCommand::public("/cache", "Toggle cache TTL between 5min and 1h"),
+    RegisteredCommand::public("/debug-visual", "Toggle visual debug overlay"),
+    RegisteredCommand::public("/screenshot-mode", "Toggle screenshot capture mode"),
+    RegisteredCommand::public("/screenshot", "Capture a screenshot debug state"),
+    RegisteredCommand::public("/record", "Record a demo capture"),
+    RegisteredCommand::remote("/client-reload", "Force reload client binary"),
+    RegisteredCommand::remote("/server-reload", "Force reload server binary"),
+    RegisteredCommand::hidden("/z", "Secret premium-mode command"),
+    RegisteredCommand::hidden("/zz", "Secret premium-mode command"),
+    RegisteredCommand::hidden("/zzz", "Secret premium-mode command"),
+    RegisteredCommand::hidden("/zstatus", "Secret premium-mode status command"),
+];
+
 impl App {
     /// Find word boundary going backward (for Ctrl+W, Alt+B)
     pub(super) fn find_word_boundary_back(&self) -> usize {
@@ -131,141 +250,12 @@ impl App {
     }
 
     fn command_candidates(&self) -> Vec<(String, &'static str)> {
-        let mut commands: Vec<(String, &'static str)> = vec![
-            ("/help".into(), "Show help and keyboard shortcuts"),
-            ("/?".into(), "Alias for /help"),
-            ("/commands".into(), "Alias for /help"),
-            ("/model".into(), "List or switch models"),
-            ("/agents".into(), "Configure models for agent roles"),
-            ("/subagent".into(), "Launch a subagent manually"),
-            (
-                "/observe".into(),
-                "Show the latest tool context in the side panel",
-            ),
-            (
-                "/todos".into(),
-                "Show the current session todo list in the side panel",
-            ),
-            (
-                "/splitview".into(),
-                "Mirror the current chat in the side panel",
-            ),
-            ("/btw".into(), "Ask a side question in the side panel"),
-            (
-                "/git".into(),
-                "Show git status for the session working directory",
-            ),
-            (
-                "/subagent-model".into(),
-                "Show/change subagent model policy",
-            ),
-            (
-                "/autoreview".into(),
-                "Show/toggle automatic end-of-turn review",
-            ),
-            (
-                "/autojudge".into(),
-                "Show/toggle automatic end-of-turn judging",
-            ),
-            ("/review".into(), "Launch a one-shot headed review session"),
-            ("/judge".into(), "Launch a one-shot headed judge session"),
-            ("/effort".into(), "Show/change reasoning effort (Alt+←/→)"),
-            ("/fast".into(), "Toggle OpenAI/Codex fast mode"),
-            (
-                "/transport".into(),
-                "Show/change connection transport (auto/https/websocket)",
-            ),
-            (
-                "/alignment".into(),
-                "Show/change default text alignment (centered/left)",
-            ),
-            ("/clear".into(), "Clear conversation history"),
-            ("/rewind".into(), "Rewind conversation to previous message"),
-            (
-                "/poke".into(),
-                "Poke model to resume with incomplete todos (on/off/status)",
-            ),
-            (
-                "/improve".into(),
-                "Autonomously find and implement highest-leverage improvements",
-            ),
-            (
-                "/refactor".into(),
-                "Run a safe refactor loop with independent review",
-            ),
-            (
-                "/compact".into(),
-                "Compact context (summarize old messages)",
-            ),
-            ("/fix".into(), "Recover when the model cannot continue"),
-            (
-                "/dictate".into(),
-                "Run configured external dictation command",
-            ),
-            ("/memory".into(), "Toggle memory feature (on/off/status)"),
-            (
-                "/goals".into(),
-                "Open goals overview / resume tracked goals",
-            ),
-            ("/swarm".into(), "Toggle swarm feature (on/off/status)"),
-            ("/context".into(), "Show the full session context snapshot"),
-            ("/version".into(), "Show current version"),
-            ("/changelog".into(), "Show recent changes in this build"),
-            ("/info".into(), "Show session info and tokens"),
-            ("/usage".into(), "Show connected provider usage limits"),
-            (
-                "/subscription".into(),
-                "Show jcode subscription status and account details",
-            ),
-            ("/config".into(), "Show or edit configuration"),
-            ("/reload".into(), "Reload into newest available binary"),
-            ("/restart".into(), "Restart with current binary (no build)"),
-            (
-                "/rebuild".into(),
-                "Background rebuild + auto reload when ready",
-            ),
-            ("/selfdev".into(), "Open a new self-dev jcode session"),
-            (
-                "/update".into(),
-                "Background update + auto reload when ready",
-            ),
-            ("/resume".into(), "Open session picker"),
-            (
-                "/catchup".into(),
-                "Open Catch Up picker for sessions needing attention",
-            ),
-            (
-                "/back".into(),
-                "Return to the previous session visited via Catch Up",
-            ),
-            ("/save".into(), "Bookmark session for easy access"),
-            ("/unsave".into(), "Remove bookmark from session"),
-            ("/split".into(), "Split session into a new window"),
-            (
-                "/transfer".into(),
-                "Compact context into a fresh handoff session",
-            ),
-            (
-                "/workspace".into(),
-                "Niri-style session workspace (status/on/off/add)",
-            ),
-            ("/quit".into(), "Exit jcode"),
-            ("/auth".into(), "Show authentication status"),
-            ("/cache".into(), "Toggle cache TTL between 5min and 1h"),
-            (
-                "/login".into(),
-                "Login to a provider (use `/login <provider>` for the full list)",
-            ),
-            (
-                "/account".into(),
-                "Open the combined Claude/OpenAI account picker",
-            ),
-        ];
-
-        if self.is_remote {
-            commands.push(("/client-reload".into(), "Force reload client binary"));
-            commands.push(("/server-reload".into(), "Force reload server binary"));
-        }
+        let mut commands: Vec<(String, &'static str)> = REGISTERED_COMMANDS
+            .iter()
+            .filter(|command| command.autocomplete)
+            .filter(|command| !command.remote_only || self.is_remote)
+            .map(|command| (command.name.to_string(), command.help))
+            .collect();
 
         let skills = self.current_skills_snapshot();
         for skill in skills.list() {
@@ -664,10 +654,15 @@ impl App {
             } else {
                 "/login"
             };
-            let suggestions = crate::provider_catalog::tui_login_providers()
-                .iter()
-                .map(|provider| (format!("{} {}", base, provider.id), provider.menu_detail))
-                .collect();
+            let mut suggestions: Vec<(String, &'static str)> = Vec::new();
+            if base == "/auth" {
+                suggestions.push(("/auth doctor".into(), "Diagnose provider auth issues"));
+            }
+            suggestions.extend(
+                crate::provider_catalog::tui_login_providers()
+                    .iter()
+                    .map(|provider| (format!("{} {}", base, provider.id), provider.menu_detail)),
+            );
             return self.rank_suggestions(input, suggestions);
         }
 

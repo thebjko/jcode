@@ -28,7 +28,7 @@ use std::process::Command;
 use std::time::Instant;
 
 const BTW_PAGE_ID: &str = "btw";
-pub(super) const REVIEW_PREFERRED_MODEL: &str = "gpt-5.4";
+pub(super) const REVIEW_PREFERRED_MODEL: &str = "gpt-5.5";
 const POKE_OFF_UI_HINT: &str = "`/poke off` to stop.";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
