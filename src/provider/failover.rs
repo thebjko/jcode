@@ -1,4 +1,5 @@
 use super::*;
+use serde::{Deserialize, Serialize};
 
 const PROVIDER_FAILOVER_PROMPT_PREFIX: &str = "[jcode-provider-failover]";
 
