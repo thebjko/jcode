@@ -693,7 +693,8 @@ fn background_widget_and_compact_share_summary_format() {
     let compact_text = lines_text(&super::render_background_compact(&info));
 
     assert_eq!(widget_text, compact_text);
-    assert!(widget_text.contains("bg:4"), "got: {widget_text}");
+    assert!(widget_text.contains("Background"), "got: {widget_text}");
+    assert!(widget_text.contains("4"), "got: {widget_text}");
     assert!(!widget_text.contains("mem:"), "got: {widget_text}");
     assert!(widget_text.contains("selfdev build"), "got: {widget_text}");
     assert!(widget_text.contains("train.py"), "got: {widget_text}");

@@ -176,14 +176,5 @@ fn background_summary(info: &BackgroundInfo) -> Option<String> {
         return None;
     }
 
-    let mut parts: Vec<String> = Vec::new();
-    if info.running_count > 0 {
-        parts.push(format!("bg:{}", info.running_count));
-    }
-
-    if parts.is_empty() {
-        None
-    } else {
-        Some(parts.join(" "))
-    }
+    Some(format!("Background · {} running", info.running_count))
 }
