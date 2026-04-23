@@ -101,6 +101,9 @@ pub(crate) enum AccountCommand {
     OpenOverlay {
         provider_filter: Option<String>,
     },
+    Doctor {
+        provider_id: Option<String>,
+    },
     ShowSettings {
         provider_id: String,
     },

@@ -5,6 +5,7 @@ pub mod claude;
 pub mod codex;
 pub mod copilot;
 pub mod cursor;
+pub mod doctor;
 pub mod external;
 pub mod gemini;
 pub mod google;

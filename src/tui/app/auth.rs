@@ -20,6 +20,48 @@ impl App {
         open::that_detached(url).is_ok()
     }
 
+    fn record_oauth_preflight(
+        provider_id: &str,
+        browser_opened: bool,
+        callback_target: Option<&str>,
+        callback_available: Option<bool>,
+    ) -> String {
+        let mut notices = Vec::new();
+        if !browser_opened {
+            crate::telemetry::record_auth_surface_blocked_reason(
+                provider_id,
+                "oauth",
+                crate::auth::login_diagnostics::AuthFailureReason::BrowserOpenFailed.label(),
+            );
+            notices.push("This machine could not open a browser automatically.".to_string());
+        }
+        if matches!(callback_available, Some(false)) {
+            crate::telemetry::record_auth_surface_blocked_reason(
+                provider_id,
+                "oauth",
+                crate::auth::login_diagnostics::AuthFailureReason::CallbackPortUnavailable.label(),
+            );
+            if let Some(target) = callback_target {
+                notices.push(format!(
+                    "Local callback target `{}` is unavailable, so jcode is using manual-safe paste completion instead.",
+                    target
+                ));
+            } else {
+                notices.push(
+                    "The local callback listener is unavailable, so jcode is using manual-safe paste completion instead."
+                        .to_string(),
+                );
+            }
+        }
+        if !notices.is_empty() {
+            notices.push(format!(
+                "If login still fails, run `jcode auth doctor {}` for a guided diagnosis.",
+                provider_id
+            ));
+        }
+        notices.join("\n")
+    }
+
     pub(super) fn show_jcode_subscription_status(&mut self) {
         let configured_key = crate::subscription_catalog::configured_api_key().is_some();
         let configured_base = crate::subscription_catalog::configured_api_base()
@@ -117,7 +159,7 @@ impl App {
             ));
         }
         message.push_str(
-            "\nUse `/login <provider>` to authenticate. `/login jcode` is for curated jcode subscription access; `/account` opens the provider/account management center, and `/account <provider> settings` shows provider-specific controls.",
+            "\nUse `/login <provider>` to authenticate. `/login jcode` is for curated jcode subscription access; `/account` opens the provider/account management center, `/account <provider> settings` shows provider-specific controls, and `/auth doctor` or `/account <provider> doctor` shows recovery steps.",
         );
         self.push_display_message(DisplayMessage::system(message));
     }
@@ -269,14 +311,24 @@ impl App {
         .map(|section| format!("\n\n{section}"))
         .unwrap_or_default();
 
-        let _ = Self::open_auth_browser(&auth_url);
+        let browser_opened = Self::open_auth_browser(&auth_url);
+        let preflight = Self::record_oauth_preflight("claude", browser_opened, None, None);
 
         self.push_display_message(DisplayMessage::system(format!(
             "**Claude OAuth Login** (account: `{}`)\n\n\
              Opening browser for authentication...\n\n\
              If the browser didn't open, visit:\n{}\n\n\
-             After logging in, copy the callback URL or authorization code and **paste it here**.{}",
-            label, auth_url, qr_section
+             {}{}{}After logging in, copy the callback URL or authorization code and **paste it here**.{}",
+            label,
+            auth_url,
+            if preflight.is_empty() { "" } else { &preflight },
+            if preflight.is_empty() { "" } else { "\n\n" },
+            if preflight.is_empty() {
+                ""
+            } else {
+                "Manual-safe fallback is already available here.\n\n"
+            },
+            qr_section
         )));
         self.set_status_notice(format!("Login [{}]: paste code...", label));
         self.begin_pending_login(PendingLogin::ClaudeAccount {
@@ -502,11 +554,12 @@ impl App {
                 port
             )
         };
-        let browser_line = if browser_opened {
-            String::new()
-        } else {
-            "This machine could not open a browser automatically.\n".to_string()
-        };
+        let preflight = Self::record_oauth_preflight(
+            "openai",
+            browser_opened,
+            Some(&format!("localhost:{}", port)),
+            Some(callback_available),
+        );
 
         self.push_display_message(DisplayMessage::system(format!(
             "**OpenAI OAuth Login** (account: `{}`)\n\n\
@@ -514,9 +567,22 @@ impl App {
              If the browser didn't open, visit:\n{}\n\n\
              **Note:** Wait a few seconds for the page to fully load before clicking Continue. \
              OpenAI's verification system may briefly disable the button.\n\n\
-             {}{}\
+             {}{}{}\
              Or paste the full callback URL or query string here to finish from another device.{}",
-            label, auth_url, browser_line, callback_line, qr_section
+            label,
+            auth_url,
+            if preflight.is_empty() {
+                String::new()
+            } else {
+                format!("{}\n", preflight)
+            },
+            callback_line,
+            if preflight.is_empty() {
+                String::new()
+            } else {
+                "Manual-safe fallback is already active here.\n".to_string()
+            },
+            qr_section
         )));
         self.set_status_notice(format!("Login [{}]: waiting...", label));
         self.begin_pending_login(PendingLogin::OpenAiAccount {
@@ -706,19 +772,32 @@ impl App {
             "Finish login in any browser, then paste the callback URL or authorization code here.\n"
                 .to_string()
         };
-        let browser_line = if browser_opened {
-            String::new()
-        } else {
-            "This machine could not open a browser automatically.\n".to_string()
-        };
+        let preflight = Self::record_oauth_preflight(
+            "gemini",
+            browser_opened,
+            Some(&redirect_uri),
+            Some(callback_available),
+        );
 
         self.push_display_message(DisplayMessage::system(format!(
             "**Gemini OAuth Login**\n\n\
              Opening browser for authentication...\n\n\
              If the browser didn't open, visit:\n{}\n\n\
-             {}{}\
+             {}{}{}\
              Or paste the full callback URL, query string, or authorization code here to finish.{}",
-            auth_url, browser_line, callback_line, qr_section
+            auth_url,
+            if preflight.is_empty() {
+                String::new()
+            } else {
+                format!("{}\n", preflight)
+            },
+            callback_line,
+            if preflight.is_empty() {
+                String::new()
+            } else {
+                "Manual-safe fallback is already active here.\n".to_string()
+            },
+            qr_section
         )));
         self.set_status_notice("Login: waiting...");
         self.begin_pending_login(PendingLogin::Gemini {
@@ -1112,20 +1191,34 @@ impl App {
                 redirect_uri
             )
         };
-        let browser_line = if browser_opened {
-            String::new()
-        } else {
-            "This machine could not open a browser automatically.\n".to_string()
-        };
+        let preflight = Self::record_oauth_preflight(
+            "antigravity",
+            browser_opened,
+            Some(&redirect_uri),
+            Some(callback_available),
+        );
         let manual_hint = "If the browser ends on a loopback/callback error page, copy the full URL from the address bar and paste it here immediately.\n";
 
         self.push_display_message(DisplayMessage::system(format!(
             "**Antigravity OAuth Login**\n\n\
              Opening browser for authentication...\n\n\
              If the browser didn't open, visit:\n{}\n\n\
-             {}{}{}\
+             {}{}{}{}\
              Or paste the full callback URL or query string here to finish.{}",
-            auth_url, browser_line, callback_line, manual_hint, qr_section
+            auth_url,
+            if preflight.is_empty() {
+                String::new()
+            } else {
+                format!("{}\n", preflight)
+            },
+            callback_line,
+            manual_hint,
+            if preflight.is_empty() {
+                String::new()
+            } else {
+                "Manual-safe fallback is already active here.\n".to_string()
+            },
+            qr_section
         )));
         self.set_status_notice("Login: antigravity waiting...");
         self.begin_pending_login(PendingLogin::Antigravity {
@@ -1893,7 +1986,7 @@ fn antigravity_input_requires_state_validation(input: &str, expected_state: Opti
 #[cfg(test)]
 mod tests {
     use super::{
-        antigravity_input_requires_state_validation, save_tui_openai_compatible_api_base,
+        App, antigravity_input_requires_state_validation, save_tui_openai_compatible_api_base,
         save_tui_openai_compatible_key,
     };
 
@@ -1911,6 +2004,26 @@ mod tests {
             "http://127.0.0.1:51121/oauth-callback?code=abc&state=expected_state",
             Some("expected_state")
         ));
+    }
+
+    #[test]
+    fn oauth_preflight_mentions_browser_fallback_and_doctor() {
+        let message =
+            App::record_oauth_preflight("openai", false, Some("localhost:1455"), Some(true));
+        assert!(message.contains("could not open a browser"));
+        assert!(message.contains("auth doctor openai"));
+    }
+
+    #[test]
+    fn oauth_preflight_mentions_manual_safe_callback_mode() {
+        let message = App::record_oauth_preflight(
+            "gemini",
+            true,
+            Some("http://127.0.0.1:0/oauth2callback"),
+            Some(false),
+        );
+        assert!(message.contains("manual-safe paste completion"));
+        assert!(message.contains("oauth2callback"));
     }
 
     #[test]

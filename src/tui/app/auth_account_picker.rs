@@ -67,6 +67,24 @@ impl App {
             ));
         }
 
+        items.push(AccountPickerItem::action(
+            provider_scope.as_deref().unwrap_or("auth-doctor"),
+            provider_scope
+                .as_deref()
+                .unwrap_or("Authentication")
+                .to_string(),
+            "Diagnose login",
+            if provider_scope.is_some() {
+                "review status, validation, and recommended next steps".to_string()
+            } else {
+                "review all configured providers and recovery steps".to_string()
+            },
+            AccountPickerCommand::SubmitInput(match provider_scope.as_deref() {
+                Some(provider_id) => format!("/account {} doctor", provider_id),
+                None => "/auth doctor".to_string(),
+            }),
+        ));
+
         for provider in providers {
             let auth_state = status.state_for_provider(provider);
             let method_detail = status.method_detail_for_provider(provider);
@@ -124,6 +142,13 @@ impl App {
                 "Login / refresh",
                 provider.menu_detail,
                 AccountPickerCommand::SubmitInput(format!("/account {} login", provider.id)),
+            ));
+            items.push(AccountPickerItem::action(
+                provider.id,
+                provider.display_name,
+                "Diagnose login",
+                format!("{} - {}", state_label, validation_detail),
+                AccountPickerCommand::SubmitInput(format!("/account {} doctor", provider.id)),
             ));
 
             match provider.id {

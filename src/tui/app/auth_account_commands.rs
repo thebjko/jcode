@@ -6,6 +6,14 @@ pub(crate) fn handle_auth_command(app: &mut App, trimmed: &str) -> bool {
         return true;
     }
 
+    if let Some(rest) = trimmed.strip_prefix("/auth doctor") {
+        let provider_id = (!rest.trim().is_empty()).then(|| rest.trim().to_string());
+        app.push_display_message(DisplayMessage::system(render_auth_doctor_markdown(
+            provider_id.as_deref(),
+        )));
+        return true;
+    }
+
     if trimmed == "/login" {
         app.show_interactive_login();
         return true;
@@ -83,6 +91,9 @@ fn parse_account_command(trimmed: &str) -> Option<Result<AccountCommand, String>
     let remainder = remainder.trim();
 
     match first {
+        "doctor" => {
+            return Some(Ok(AccountCommand::Doctor { provider_id: None }));
+        }
         "list" | "ls" => {
             return Some(Ok(AccountCommand::OpenOverlay {
                 provider_filter: None,
@@ -149,6 +160,9 @@ fn parse_account_command(trimmed: &str) -> Option<Result<AccountCommand, String>
         let value = value.trim();
 
         let parsed = match subcommand {
+            "doctor" => AccountCommand::Doctor {
+                provider_id: Some(provider.id.to_string()),
+            },
             "list" | "ls" => AccountCommand::OpenOverlay {
                 provider_filter: Some(provider.id.to_string()),
             },
@@ -283,6 +297,9 @@ fn execute_account_command_local(app: &mut App, command: AccountCommand) {
                 app.open_account_center(provider_filter.as_deref())
             }
         }
+        AccountCommand::Doctor { provider_id } => app.push_display_message(DisplayMessage::system(
+            render_auth_doctor_markdown(provider_id.as_deref()),
+        )),
         AccountCommand::ShowSettings { provider_id } => app.push_display_message(
             DisplayMessage::system(render_provider_settings_markdown(app, &provider_id)),
         ),
@@ -356,6 +373,9 @@ async fn execute_account_command_remote(
             } else {
                 app.open_account_center(provider_filter.as_deref());
             }
+        }
+        AccountCommand::Doctor { provider_id } => {
+            execute_account_command_local(app, AccountCommand::Doctor { provider_id })
         }
         AccountCommand::Switch { provider_id, label } => match provider_id.as_str() {
             "claude" => {
@@ -830,7 +850,28 @@ fn render_provider_settings_markdown(app: &App, provider_id: &str) -> String {
             .unwrap_or_else(|| "not validated".to_string())
     ));
     lines.push(format!("- Login command: `/account {} login`", provider.id));
+    lines.push(format!(
+        "- Doctor command: `/account {} doctor`",
+        provider.id
+    ));
     lines.push(String::new());
+
+    let recommended_actions = crate::auth::doctor::recommended_actions(
+        provider,
+        status.state_for_provider(provider),
+        validation
+            .get(provider.id)
+            .map(crate::auth::validation::format_record_label)
+            .as_deref(),
+        None,
+    );
+    if !recommended_actions.is_empty() {
+        lines.push("**Recommended next steps**".to_string());
+        for action in recommended_actions {
+            lines.push(format!("- {}", action));
+        }
+        lines.push(String::new());
+    }
 
     match provider.id {
         "claude" => {
@@ -920,4 +961,108 @@ fn render_provider_settings_markdown(app: &App, provider_id: &str) -> String {
     }
 
     lines.join("\n")
+}
+
+fn render_auth_doctor_markdown(provider_filter: Option<&str>) -> String {
+    let status = crate::auth::AuthStatus::check();
+    let validation = crate::auth::validation::load_all();
+    let providers = match provider_filter {
+        Some(provider_id) => match resolve_account_provider_descriptor(provider_id) {
+            Some(provider) => vec![provider],
+            None => {
+                return format!(
+                    "Unknown provider `{}`. Use `/account <provider> doctor` with a valid provider id.",
+                    provider_id
+                );
+            }
+        },
+        None => {
+            let configured = crate::provider_catalog::auth_status_login_providers()
+                .into_iter()
+                .filter(|provider| {
+                    status.state_for_provider(*provider) != crate::auth::AuthState::NotConfigured
+                })
+                .collect::<Vec<_>>();
+            if configured.is_empty() {
+                crate::provider_catalog::auth_status_login_providers().to_vec()
+            } else {
+                configured
+            }
+        }
+    };
+
+    let mut sections = Vec::new();
+    for provider in providers {
+        let assessment = status.assessment_for_provider(provider);
+        let validation_label = validation
+            .get(provider.id)
+            .map(crate::auth::validation::format_record_label);
+        let recommended_actions = crate::auth::doctor::recommended_actions(
+            provider,
+            assessment.state,
+            validation_label.as_deref(),
+            None,
+        );
+        let needs_attention = assessment.state != crate::auth::AuthState::Available
+            || validation_label
+                .as_deref()
+                .is_some_and(|value| value.contains("validation failed"));
+
+        let mut lines = vec![format!("**{}** (`{}`)", provider.display_name, provider.id)];
+        lines.push(format!(
+            "- Status: {}",
+            match assessment.state {
+                crate::auth::AuthState::Available => "ready",
+                crate::auth::AuthState::Expired => "needs attention",
+                crate::auth::AuthState::NotConfigured => "setup needed",
+            }
+        ));
+        lines.push(format!("- Method: {}", assessment.method_detail));
+        lines.push(format!("- Health: {}", assessment.health_summary()));
+        lines.push(format!(
+            "- Validation: {}",
+            validation_label.as_deref().unwrap_or("not validated")
+        ));
+        lines.push(format!(
+            "- Needs attention: {}",
+            if needs_attention { "yes" } else { "no" }
+        ));
+        if !recommended_actions.is_empty() {
+            lines.push(String::new());
+            lines.push("**Next steps**".to_string());
+            for action in recommended_actions {
+                lines.push(format!("- {}", action));
+            }
+        }
+        sections.push(lines.join("\n"));
+    }
+
+    sections.join("\n\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_account_doctor_subcommands() {
+        assert!(matches!(
+            parse_account_command("/account doctor"),
+            Some(Ok(AccountCommand::Doctor { provider_id: None }))
+        ));
+        assert!(matches!(
+            parse_account_command("/account openai doctor"),
+            Some(Ok(AccountCommand::Doctor { provider_id: Some(provider_id) })) if provider_id == "openai"
+        ));
+    }
+
+    #[test]
+    fn render_auth_doctor_markdown_includes_recovery_steps() {
+        let _guard = crate::storage::lock_test_env();
+        let markdown = render_auth_doctor_markdown(Some("openai"));
+        assert!(markdown.contains("**OpenAI** (`openai`)"));
+        assert!(markdown.contains("**Next steps**"));
+        assert!(markdown.contains("jcode login --provider openai"));
+        assert!(markdown.contains("jcode auth-test --provider openai"));
+    }
 }
