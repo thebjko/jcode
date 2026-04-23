@@ -7450,6 +7450,17 @@ fn test_handle_background_task_progress_updates_status_notice() {
         app.status_notice(),
         Some("Background task · bash · 42% · Running tests".to_string())
     );
+    let progress_messages: Vec<_> = app
+        .display_messages()
+        .iter()
+        .filter(|message| message.role == "background_task")
+        .collect();
+    assert_eq!(progress_messages.len(), 1);
+    assert!(
+        progress_messages[0]
+            .content
+            .starts_with("**Background task progress** `bgprogress` · `bash`\n\n")
+    );
 }
 
 #[test]
@@ -7497,6 +7508,49 @@ fn test_handle_background_task_progress_debounces_identical_notice_updates() {
         first_at, second_at,
         "identical progress notice should be debounced"
     );
+}
+
+#[test]
+fn test_handle_background_task_progress_updates_existing_card() {
+    let mut app = create_test_app();
+    let session_id = app.session.id.clone();
+
+    for (percent, message) in [(42.0, "Running tests"), (75.0, "Packaging artifacts")] {
+        super::local::handle_bus_event(
+            &mut app,
+            Ok(BusEvent::BackgroundTaskProgress(
+                BackgroundTaskProgressEvent {
+                    task_id: "bgprogress".to_string(),
+                    tool_name: "bash".to_string(),
+                    session_id: session_id.clone(),
+                    progress: BackgroundTaskProgress {
+                        kind: BackgroundTaskProgressKind::Determinate,
+                        percent: Some(percent),
+                        message: Some(message.to_string()),
+                        current: None,
+                        total: None,
+                        unit: None,
+                        eta_seconds: None,
+                        updated_at: chrono::Utc::now().to_rfc3339(),
+                        source: BackgroundTaskProgressSource::Reported,
+                    },
+                },
+            )),
+        );
+    }
+
+    let progress_messages: Vec<_> = app
+        .display_messages()
+        .iter()
+        .filter(|message| message.role == "background_task")
+        .collect();
+    assert_eq!(progress_messages.len(), 1);
+    assert!(
+        progress_messages[0]
+            .content
+            .contains("75% · Packaging artifacts")
+    );
+    assert!(!progress_messages[0].content.contains("42% · Running tests"));
 }
 
 #[test]

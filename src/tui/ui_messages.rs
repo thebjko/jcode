@@ -1,7 +1,10 @@
 use super::*;
 #[path = "ui_messages_cache.rs"]
 mod cache_support;
-use crate::message::parse_background_task_notification_markdown;
+use crate::message::{
+    ParsedBackgroundTaskProgressNotification, parse_background_task_notification_markdown,
+    parse_background_task_progress_notification_markdown,
+};
 pub(super) use cache_support::get_cached_message_lines;
 use cache_support::{centered_wrap_width, left_pad_lines_for_centered_mode};
 use std::borrow::Cow;
@@ -684,6 +687,10 @@ pub(crate) fn render_background_task_message(
     width: u16,
     diff_mode: crate::config::DiffDisplayMode,
 ) -> Vec<Line<'static>> {
+    if let Some(progress) = parse_background_task_progress_notification_markdown(&msg.content) {
+        return render_background_task_progress_message(&progress, width);
+    }
+
     let Some(parsed) = parse_background_task_notification_markdown(&msg.content) else {
         return render_system_message(msg, width, diff_mode);
     };
@@ -761,6 +768,84 @@ pub(crate) fn render_background_task_message(
         None => {
             box_content.push(Line::from(Span::styled("No output captured.", label_style)));
         }
+    }
+
+    let mut lines = render_rounded_box(&title, box_content, max_box_width, border_style);
+    if centered {
+        left_pad_lines_for_centered_mode(&mut lines, width);
+    }
+    lines
+}
+
+fn render_progress_bar_line(
+    percent: f32,
+    inner_width: usize,
+    filled_style: Style,
+    empty_style: Style,
+    label_style: Style,
+) -> Line<'static> {
+    let percent = percent.clamp(0.0, 100.0);
+    let label = format!(" {:>3}%", percent.round() as u32);
+    let label_width = label.width();
+    let bar_width = inner_width.saturating_sub(label_width).max(1);
+    let filled = ((percent / 100.0) * bar_width as f32).round() as usize;
+    let filled = filled.min(bar_width);
+    let empty = bar_width.saturating_sub(filled);
+
+    Line::from(vec![
+        Span::styled("█".repeat(filled), filled_style),
+        Span::styled("░".repeat(empty), empty_style),
+        Span::styled(label, label_style),
+    ])
+}
+
+fn render_background_task_progress_message(
+    progress: &ParsedBackgroundTaskProgressNotification,
+    width: u16,
+) -> Vec<Line<'static>> {
+    let centered = markdown::center_code_blocks();
+    let border_color = rgb(255, 193, 94);
+    let border_style = Style::default().fg(border_color);
+    let label_style = Style::default().fg(dim_color());
+    let text_style = Style::default().fg(rgb(255, 241, 214));
+    let filled_style = Style::default().fg(rgb(255, 214, 120));
+    let empty_style = Style::default().fg(rgb(94, 82, 62));
+
+    let max_box_width = if centered {
+        (width.saturating_sub(4) as usize).min(120)
+    } else {
+        (width.saturating_sub(2) as usize).min(96)
+    }
+    .max(16);
+    let inner_width = max_box_width.saturating_sub(4).max(1);
+    let title = format!(
+        "◌ bg {} progress · {}",
+        progress.tool_name, progress.task_id
+    );
+
+    let mut box_content: Vec<Line<'static>> = Vec::new();
+    if let Some(percent) = progress.percent {
+        box_content.push(render_progress_bar_line(
+            percent,
+            inner_width,
+            filled_style,
+            empty_style,
+            label_style,
+        ));
+        box_content.push(Line::from(""));
+    }
+
+    box_content.push(Line::from(Span::styled("Latest update", label_style)));
+    for chunk in split_by_display_width(&progress.summary, inner_width) {
+        box_content.push(Line::from(Span::styled(chunk, text_style)));
+    }
+
+    if let Some(source) = progress.source.as_deref() {
+        box_content.push(Line::from(""));
+        box_content.push(Line::from(Span::styled(
+            format!("Source: {source}"),
+            label_style,
+        )));
     }
 
     let mut lines = render_rounded_box(&title, box_content, max_box_width, border_style);
@@ -1367,6 +1452,29 @@ mod tests {
         assert!(!plain.contains("Preview"));
         assert!(!plain.contains("Full output"));
         assert!(!plain.contains("bg action=\"output\" task_id=\"bg123\""));
+    }
+
+    #[test]
+    fn render_background_task_progress_message_uses_box_with_progress_bar() {
+        let msg = DisplayMessage::background_task(
+            "**Background task progress** `bg123` · `bash`\n\n[#####-------] 42% · Running tests (reported)",
+        );
+
+        let lines = render_background_task_message(&msg, 80, crate::config::DiffDisplayMode::Off);
+        let plain = lines
+            .iter()
+            .map(extract_line_text)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(plain.contains("◌ bg bash progress · bg123"));
+        assert!(plain.contains("█"));
+        assert!(plain.contains("░"));
+        assert!(plain.contains("42%"));
+        assert!(plain.contains("Latest update"));
+        assert!(plain.contains("Running tests"));
+        assert!(plain.contains("Source: reported"));
+        assert!(!plain.contains("**Background task progress**"));
     }
 
     #[test]

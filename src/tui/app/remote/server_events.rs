@@ -983,7 +983,13 @@ pub(in crate::tui::app) fn handle_server_event(
             if background_task_scope {
                 let presentation =
                     present_swarm_notification(&sender, &notification_type, &message);
-                app.push_display_message(DisplayMessage::background_task(message.clone()));
+                if crate::message::parse_background_task_progress_notification_markdown(&message)
+                    .is_some()
+                {
+                    app.upsert_background_task_progress_message(message.clone());
+                } else {
+                    app.push_display_message(DisplayMessage::background_task(message.clone()));
+                }
                 persist_replay_display_message(app, "background_task", None, &message);
                 app.set_status_notice(presentation.status_notice);
                 return false;

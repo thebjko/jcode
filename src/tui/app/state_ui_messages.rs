@@ -69,6 +69,29 @@ impl App {
         self.replace_display_message_title_and_content(idx, title, content)
     }
 
+    pub(super) fn upsert_background_task_progress_message(&mut self, content: String) {
+        let Some(progress) =
+            crate::message::parse_background_task_progress_notification_markdown(&content)
+        else {
+            self.push_display_message(DisplayMessage::background_task(content));
+            return;
+        };
+
+        let idx = self.display_messages.iter().rposition(|message| {
+            message.role == "background_task"
+                && crate::message::parse_background_task_progress_notification_markdown(
+                    &message.content,
+                )
+                .is_some_and(|existing| existing.task_id == progress.task_id)
+        });
+
+        if let Some(idx) = idx {
+            self.replace_display_message_content(idx, content);
+        } else {
+            self.push_display_message(DisplayMessage::background_task(content));
+        }
+    }
+
     pub(super) fn remove_display_message(&mut self, idx: usize) -> Option<DisplayMessage> {
         if idx < self.display_messages.len() {
             let removed = self.display_messages.remove(idx);

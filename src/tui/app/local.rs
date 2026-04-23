@@ -5,7 +5,7 @@ use crate::bus::{
 };
 use crate::message::{
     ContentBlock, Message, Role, background_task_status_notice,
-    format_background_task_notification_markdown,
+    format_background_task_notification_markdown, format_background_task_progress_markdown,
 };
 use crate::session::StoredDisplayRole;
 use anyhow::Result;
@@ -310,6 +310,8 @@ fn handle_background_task_progress(app: &mut App, event: BackgroundTaskProgressE
     if event.session_id != app.session.id {
         return;
     }
+
+    app.upsert_background_task_progress_message(format_background_task_progress_markdown(&event));
 
     let notice = format!(
         "Background task · {} · {}",

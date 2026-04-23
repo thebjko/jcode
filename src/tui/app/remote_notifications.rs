@@ -192,7 +192,14 @@ pub(super) fn present_swarm_notification(
                     "Background task".to_string()
                 },
                 message: trimmed.to_string(),
-                status_notice: if trimmed.starts_with("**Background task progress**") {
+                status_notice: if let Some(progress) =
+                    crate::message::parse_background_task_progress_notification_markdown(trimmed)
+                {
+                    format!(
+                        "Background task · {} · {}",
+                        progress.tool_name, progress.summary
+                    )
+                } else if trimmed.starts_with("**Background task progress**") {
                     "Background task progress".to_string()
                 } else {
                     "Background task update".to_string()
@@ -287,6 +294,24 @@ mod tests {
             "Background task failed · selfdev-build · exit 101"
         );
         assert_eq!(presentation.status_notice, "Background task update");
+    }
+
+    #[test]
+    fn present_swarm_notification_formats_background_task_progress_notice() {
+        let presentation = present_swarm_notification(
+            "background task",
+            &NotificationType::Message {
+                scope: Some("background_task".to_string()),
+                channel: None,
+            },
+            "**Background task progress** `bg123` · `bash`\n\n[#####-------] 42% · Running tests (reported)",
+        );
+
+        assert_eq!(presentation.title, "Background task progress");
+        assert_eq!(
+            presentation.status_notice,
+            "Background task · bash · 42% · Running tests"
+        );
     }
 
     #[test]

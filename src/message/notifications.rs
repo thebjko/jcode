@@ -118,11 +118,113 @@ pub fn format_background_task_notification_markdown(task: &BackgroundTaskComplet
 
 pub fn format_background_task_progress_markdown(task: &BackgroundTaskProgressEvent) -> String {
     format!(
-        "**Background task progress** `{}` · `{}` · {}",
+        "**Background task progress** `{}` · `{}`\n\n{}",
         task.task_id,
         task.tool_name,
         crate::background::format_progress_display(&task.progress, 12)
     )
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedBackgroundTaskProgressNotification {
+    pub task_id: String,
+    pub tool_name: String,
+    pub detail: String,
+    pub summary: String,
+    pub source: Option<String>,
+    pub percent: Option<f32>,
+}
+
+fn split_progress_source(detail: &str) -> (String, Option<String>) {
+    for source in ["reported", "parsed", "estimated"] {
+        let suffix = format!(" ({source})");
+        if let Some(summary) = detail.strip_suffix(&suffix) {
+            return (summary.trim().to_string(), Some(source.to_string()));
+        }
+    }
+    (detail.trim().to_string(), None)
+}
+
+fn strip_progress_bar_prefix(summary: &str) -> &str {
+    if summary.starts_with('[')
+        && let Some((bar, rest)) = summary.split_once("] ")
+        && bar.chars().all(|ch| matches!(ch, '[' | '#' | '-'))
+    {
+        return rest.trim();
+    }
+    summary.trim()
+}
+
+fn parse_progress_percent(summary: &str) -> Option<f32> {
+    static PERCENT_RE: OnceLock<Option<Regex>> = OnceLock::new();
+    let percent_re = PERCENT_RE
+        .get_or_init(|| compile_static_regex(r"(?P<percent>[0-9]+(?:\.[0-9]+)?)%"))
+        .as_ref()?;
+    let captures = percent_re.captures(summary)?;
+    captures["percent"].parse::<f32>().ok()
+}
+
+pub fn parse_background_task_progress_notification_markdown(
+    content: &str,
+) -> Option<ParsedBackgroundTaskProgressNotification> {
+    static HEADER_RE: OnceLock<Option<Regex>> = OnceLock::new();
+    static INLINE_RE: OnceLock<Option<Regex>> = OnceLock::new();
+
+    let normalized = content.replace("\r\n", "\n").replace('\r', "\n");
+    let trimmed = normalized.trim();
+
+    let header_re = HEADER_RE
+        .get_or_init(|| {
+            compile_static_regex(
+                r"^\*\*Background task progress\*\* `(?P<task_id>[^`]+)` · `(?P<tool_name>[^`]+)`$",
+            )
+        })
+        .as_ref()?;
+    let inline_re = INLINE_RE
+        .get_or_init(|| {
+            compile_static_regex(
+                r"^\*\*Background task progress\*\* `(?P<task_id>[^`]+)` · `(?P<tool_name>[^`]+)` · (?P<detail>.+)$",
+            )
+        })
+        .as_ref()?;
+
+    let (task_id, tool_name, detail) = if let Some(captures) = inline_re.captures(trimmed) {
+        (
+            captures["task_id"].to_string(),
+            captures["tool_name"].to_string(),
+            captures["detail"].trim().to_string(),
+        )
+    } else {
+        let mut lines = trimmed.lines();
+        let header = lines.next()?.trim();
+        let captures = header_re.captures(header)?;
+        let detail = lines
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ");
+        if detail.is_empty() {
+            return None;
+        }
+        (
+            captures["task_id"].to_string(),
+            captures["tool_name"].to_string(),
+            detail,
+        )
+    };
+
+    let (summary_with_bar, source) = split_progress_source(&detail);
+    let summary = strip_progress_bar_prefix(&summary_with_bar).to_string();
+    let percent = parse_progress_percent(&summary);
+
+    Some(ParsedBackgroundTaskProgressNotification {
+        task_id,
+        tool_name,
+        detail,
+        summary,
+        source,
+        percent,
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -8,10 +8,11 @@ use std::sync::OnceLock;
 mod notifications;
 
 pub use notifications::{
-    InputShellResult, ParsedBackgroundTaskNotification, background_task_status_notice,
-    format_background_task_notification_markdown, format_background_task_progress_markdown,
-    format_input_shell_result_markdown, input_shell_status_notice,
-    parse_background_task_notification_markdown,
+    InputShellResult, ParsedBackgroundTaskNotification, ParsedBackgroundTaskProgressNotification,
+    background_task_status_notice, format_background_task_notification_markdown,
+    format_background_task_progress_markdown, format_input_shell_result_markdown,
+    input_shell_status_notice, parse_background_task_notification_markdown,
+    parse_background_task_progress_notification_markdown,
 };
 
 fn compile_static_regex(pattern: &str) -> Option<Regex> {
@@ -992,6 +993,60 @@ mod tests {
         assert!(rendered.contains("↻ superseded"));
         assert!(rendered.contains("exit 0"));
         assert!(rendered.contains("source changed before activation"));
+    }
+
+    #[test]
+    fn format_background_task_progress_markdown_uses_compact_multiline_layout() {
+        let rendered = format_background_task_progress_markdown(&BackgroundTaskProgressEvent {
+            task_id: "bgprogress".to_string(),
+            tool_name: "bash".to_string(),
+            session_id: "session".to_string(),
+            progress: crate::bus::BackgroundTaskProgress {
+                kind: crate::bus::BackgroundTaskProgressKind::Determinate,
+                percent: Some(42.0),
+                message: Some("Running tests".to_string()),
+                current: Some(21),
+                total: Some(50),
+                unit: Some("tests".to_string()),
+                eta_seconds: None,
+                updated_at: Utc::now().to_rfc3339(),
+                source: crate::bus::BackgroundTaskProgressSource::Reported,
+            },
+        });
+
+        assert!(rendered.starts_with("**Background task progress** `bgprogress` · `bash`\n\n"));
+        assert!(rendered.contains("42% · Running tests"));
+        assert!(rendered.contains("(reported)"));
+    }
+
+    #[test]
+    fn parse_background_task_progress_notification_extracts_card_fields() {
+        let parsed = parse_background_task_progress_notification_markdown(
+            "**Background task progress** `bgprogress` · `bash`\n\n[#####-------] 42% · Running tests (reported)",
+        )
+        .expect("progress notification should parse");
+
+        assert_eq!(parsed.task_id, "bgprogress");
+        assert_eq!(parsed.tool_name, "bash");
+        assert_eq!(parsed.summary, "42% · Running tests");
+        assert_eq!(parsed.source.as_deref(), Some("reported"));
+        assert_eq!(parsed.percent, Some(42.0));
+    }
+
+    #[test]
+    fn parse_background_task_progress_notification_supports_legacy_inline_layout() {
+        let parsed = parse_background_task_progress_notification_markdown(
+            "**Background task progress** `bgprogress` · `bash` · Release run in_progress: - 7/8 jobs completed (reported)",
+        )
+        .expect("legacy progress notification should parse");
+
+        assert_eq!(parsed.task_id, "bgprogress");
+        assert_eq!(
+            parsed.summary,
+            "Release run in_progress: - 7/8 jobs completed"
+        );
+        assert_eq!(parsed.source.as_deref(), Some("reported"));
+        assert_eq!(parsed.percent, None);
     }
 
     #[test]
