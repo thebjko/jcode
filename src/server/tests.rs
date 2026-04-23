@@ -26,6 +26,11 @@ struct EnvGuard {
     prev_runtime_dir: Option<OsString>,
 }
 
+struct ScopedEnvVar {
+    key: &'static str,
+    prev: Option<OsString>,
+}
+
 impl Drop for EnvGuard {
     fn drop(&mut self) {
         if let Some(value) = &self.prev_home {
@@ -37,6 +42,24 @@ impl Drop for EnvGuard {
             crate::env::set_var("JCODE_RUNTIME_DIR", value);
         } else {
             crate::env::remove_var("JCODE_RUNTIME_DIR");
+        }
+    }
+}
+
+impl ScopedEnvVar {
+    fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+        let prev = std::env::var_os(key);
+        crate::env::set_var(key, value);
+        Self { key, prev }
+    }
+}
+
+impl Drop for ScopedEnvVar {
+    fn drop(&mut self) {
+        if let Some(value) = &self.prev {
+            crate::env::set_var(self.key, value);
+        } else {
+            crate::env::remove_var(self.key);
         }
     }
 }
@@ -566,6 +589,77 @@ async fn startup_recovery_preserves_headed_session_reload_context_for_later_reco
         ReloadContext::peek_for_session(&headed_session_id)?.is_some(),
         "headed reconnecting session reload context should remain available for later reconnect"
     );
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn startup_ready_signal_is_not_blocked_by_headless_recovery_delay() -> Result<()> {
+    use std::os::unix::io::FromRawFd;
+    use tokio::io::AsyncReadExt;
+
+    let _storage_guard = crate::storage::lock_test_env();
+    let temp = tempfile::TempDir::new()?;
+    let _env = configure_test_env(&temp);
+    let _delay_guard = ScopedEnvVar::set("JCODE_TEST_HEADLESS_STARTUP_RECOVERY_DELAY_MS", "500");
+
+    let mut headless =
+        crate::session::Session::create(None, Some("headless-ready-delay".to_string()));
+    headless.save()?;
+
+    let swarm_id = "swarm-ready-before-recovery";
+    persist_swarm_state_snapshot(
+        swarm_id,
+        None,
+        None,
+        &[persisted_headless_member(
+            &headless.id,
+            swarm_id,
+            "running",
+            "delay startup recovery",
+        )],
+    );
+
+    let provider = Arc::new(StreamingMockProvider::default());
+    let server = Server::new(provider);
+
+    let mut ready_fds = [0; 2];
+    let pipe_rc = unsafe { libc::pipe(ready_fds.as_mut_ptr()) };
+    assert_eq!(pipe_rc, 0, "pipe() should succeed");
+    let read_fd = ready_fds[0];
+    let write_fd = ready_fds[1];
+    let _ready_fd_guard = ScopedEnvVar::set("JCODE_READY_FD", write_fd.to_string());
+
+    let main_listener = crate::transport::Listener::bind(&server.socket_path)?;
+    let debug_listener = crate::transport::Listener::bind(&server.debug_socket_path)?;
+
+    let startup = tokio::spawn(async move {
+        server
+            .finish_startup_after_bind(main_listener, debug_listener, Instant::now())
+            .await
+    });
+
+    let read_file = unsafe { std::fs::File::from_raw_fd(read_fd) };
+    let mut async_read = tokio::fs::File::from_std(read_file);
+    let mut ready = [0u8; 1];
+    timeout(Duration::from_millis(200), async {
+        async_read.read_exact(&mut ready).await
+    })
+    .await
+    .expect("ready signal should arrive before delayed startup recovery completes")?;
+    assert_eq!(ready, [b'R']);
+    assert!(
+        !startup.is_finished(),
+        "startup task should still be blocked on delayed recovery even though ready was already signaled"
+    );
+
+    let (main_handle, debug_handle) = timeout(Duration::from_secs(2), startup)
+        .await
+        .expect("startup should finish after delayed recovery")
+        .expect("startup task should succeed");
+    main_handle.abort();
+    debug_handle.abort();
 
     Ok(())
 }

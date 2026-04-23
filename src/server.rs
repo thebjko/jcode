@@ -717,6 +717,14 @@ impl Server {
             sessions_to_restore
         ));
 
+        if let Some(delay) = startup_headless_recovery_test_delay() {
+            crate::logging::info(&format!(
+                "Applying test-only headless startup recovery delay of {}ms",
+                delay.as_millis()
+            ));
+            tokio::time::sleep(delay).await;
+        }
+
         let mcp_pool = get_shared_mcp_pool(&self.mcp_pool).await;
         let recovery_started = Instant::now();
         let mut stats = HeadlessRecoveryStats::default();
@@ -944,6 +952,39 @@ impl Server {
             stats.failed_to_load,
             recovery_started.elapsed().as_millis()
         ));
+    }
+
+    async fn finish_startup_after_bind(
+        &self,
+        main_listener: Listener,
+        debug_listener: Listener,
+        server_start_time: Instant,
+    ) -> (tokio::task::JoinHandle<()>, tokio::task::JoinHandle<()>) {
+        self.spawn_registry_prewarm();
+        let registry_info = self.build_registry_info();
+
+        let runtime = self.runtime();
+        let main_handle = runtime.spawn_main_accept_loop(main_listener);
+        let debug_handle = runtime.spawn_debug_accept_loop(debug_listener, server_start_time);
+
+        crate::logging::info("Accept loop tasks spawned");
+
+        // Signal readiness to the spawning client only after the accept loops
+        // are live, so a "ready" server can immediately handle requests.
+        publish_reload_socket_ready();
+        signal_ready_fd();
+
+        // Persist auxiliary discovery metadata after the server is already live.
+        self.spawn_registry_metadata_publisher(registry_info);
+
+        // Spawn WebSocket gateway for iOS/web clients (if enabled)
+        let _gateway_handle = self.spawn_gateway(runtime);
+
+        // Startup recovery can be expensive in multi-session reloads. Run it
+        // only after the replacement daemon is already accepting reconnects.
+        self.recover_headless_sessions_on_startup().await;
+
+        (main_handle, debug_handle)
     }
 
     fn spawn_background_tasks(&self, server_start_time: Instant) {
@@ -1793,28 +1834,10 @@ impl Server {
 
         let server_start_time = Instant::now();
 
-        self.spawn_registry_prewarm();
-        let registry_info = self.build_registry_info();
-        self.recover_headless_sessions_on_startup().await;
         self.spawn_background_tasks(server_start_time);
-
-        // Note: No default session created here - each client creates its own session
-        let runtime = self.runtime();
-        let main_handle = runtime.spawn_main_accept_loop(main_listener);
-        let debug_handle = runtime.spawn_debug_accept_loop(debug_listener, server_start_time);
-
-        crate::logging::info("Accept loop tasks spawned");
-
-        // Signal readiness to the spawning client only after the accept loops
-        // are live, so a "ready" server can immediately handle requests.
-        publish_reload_socket_ready();
-        signal_ready_fd();
-
-        // Persist auxiliary discovery metadata after the server is already live.
-        self.spawn_registry_metadata_publisher(registry_info);
-
-        // Spawn WebSocket gateway for iOS/web clients (if enabled)
-        let _gateway_handle = self.spawn_gateway(runtime);
+        let (main_handle, debug_handle) = self
+            .finish_startup_after_bind(main_listener, debug_listener, server_start_time)
+            .await;
 
         // Wait for both to complete (they won't normally)
         let _ = tokio::join!(main_handle, debug_handle);
@@ -1851,6 +1874,16 @@ impl Server {
         });
 
         Some(runtime.spawn_gateway_accept_loop(client_rx))
+    }
+}
+
+fn startup_headless_recovery_test_delay() -> Option<std::time::Duration> {
+    let raw = std::env::var("JCODE_TEST_HEADLESS_STARTUP_RECOVERY_DELAY_MS").ok()?;
+    let delay_ms = raw.trim().parse::<u64>().ok()?;
+    if delay_ms == 0 {
+        None
+    } else {
+        Some(std::time::Duration::from_millis(delay_ms))
     }
 }
 
