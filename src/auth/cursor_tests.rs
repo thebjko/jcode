@@ -196,6 +196,15 @@ fn status_output_detects_missing_authentication() {
     ));
 }
 
+#[test]
+fn status_output_requires_successful_exit_for_authentication_keywords() {
+    assert!(!status_output_indicates_authenticated(
+        false,
+        b"Account: user@example.com\nEndpoint: production",
+        b"cursor-agent status failed"
+    ));
+}
+
 fn load_key_from_file(path: &PathBuf) -> Result<String> {
     if !path.exists() {
         anyhow::bail!("File not found");

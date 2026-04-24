@@ -593,6 +593,10 @@ fn status_output_indicates_authenticated(success: bool, stdout: &[u8], stderr: &
         return false;
     }
 
+    if !success {
+        return false;
+    }
+
     if combined.contains("authenticated")
         || combined.contains("account")
         || combined.contains("email")

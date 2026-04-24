@@ -795,6 +795,8 @@ impl BashTool {
         let description = params.intent.clone();
         let display_name = summarize_background_command(description.as_deref(), &command);
         let working_dir = ctx.working_dir.clone();
+        let timeout_ms = params.timeout.unwrap_or(DEFAULT_TIMEOUT_MS).min(600000);
+        let timeout_duration = Duration::from_millis(timeout_ms);
 
         let wake = params.wake;
         let notify = params.notify || wake;
@@ -805,11 +807,20 @@ impl BashTool {
                 &ctx.session_id,
                 notify,
                 wake,
-                move |output_path| async move {
-                    let mut cmd = build_shell_command(&command);
-                    cmd.kill_on_drop(true)
-                        .stdout(Stdio::piped())
-                        .stderr(Stdio::piped());
+				move |output_path| async move {
+					let mut cmd = build_shell_command(&command);
+					#[cfg(unix)]
+					unsafe {
+						cmd.pre_exec(|| {
+							if libc::setpgid(0, 0) == -1 {
+								return Err(std::io::Error::last_os_error());
+							}
+							Ok(())
+						});
+					}
+					cmd.kill_on_drop(true)
+						.stdout(Stdio::piped())
+						.stderr(Stdio::piped());
                     if let Some(ref dir) = working_dir {
                         cmd.current_dir(dir);
                     }
@@ -831,9 +842,28 @@ impl BashTool {
                     let mut stderr_lines = stderr.map(|s| BufReader::new(s).lines());
                     let mut stdout_done = stdout_lines.is_none();
                     let mut stderr_done = stderr_lines.is_none();
+                    let timeout_sleep = tokio::time::sleep(timeout_duration);
+                    tokio::pin!(timeout_sleep);
+                    let mut timed_out = false;
 
                     while !stdout_done || !stderr_done {
                         tokio::select! {
+							_ = &mut timeout_sleep => {
+								timed_out = true;
+								#[cfg(unix)]
+								{
+									if let Some(pid) = child.id() {
+										let _ = crate::platform::signal_detached_process_group(pid, libc::SIGKILL);
+									} else {
+										let _ = child.start_kill();
+									}
+								}
+								#[cfg(not(unix))]
+								{
+									let _ = child.start_kill();
+								}
+								break;
+							}
                             line = async {
                                 match stdout_lines.as_mut() {
                                     Some(r) => r.next_line().await,
@@ -861,6 +891,19 @@ impl BashTool {
                                 }
                             }
                         }
+                    }
+
+                    if timed_out {
+                        let _ = child.wait().await;
+                        let timeout_line = format!(
+                            "\n--- Command timed out after {}ms ---\n",
+                            timeout_ms
+                        );
+                        file.write_all(timeout_line.as_bytes()).await.ok();
+                        return Ok(TaskResult::failed(
+                            Some(124),
+                            format!("Command timed out after {}ms", timeout_ms),
+                        ));
                     }
 
                     let status = child.wait().await?;

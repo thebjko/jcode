@@ -473,6 +473,69 @@ async fn test_background_command_byte_ratio_output_updates_progress() {
     );
 }
 
+#[tokio::test]
+async fn test_background_command_respects_timeout() {
+    let tool = BashTool::new();
+    let ctx = make_ctx(None);
+
+    let result = tool
+        .execute(
+            json!({
+                "command": "sleep 5; echo should_not_print",
+                "run_in_background": true,
+                "timeout": 100,
+                "notify": false,
+                "wake": false,
+            }),
+            ctx,
+        )
+        .await
+        .expect("background command should start");
+
+    let metadata = result.metadata.expect("expected metadata");
+    let task_id = metadata["task_id"]
+        .as_str()
+        .expect("task id should be present")
+        .to_string();
+
+    let mut final_status = None;
+    for _ in 0..50 {
+        let status = crate::background::global()
+            .status(&task_id)
+            .await
+            .expect("status should exist");
+        if status.status == BackgroundTaskStatus::Failed {
+            final_status = Some(status);
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+
+    let status = final_status.expect("background task should fail after timeout");
+    assert_eq!(status.exit_code, Some(124));
+    assert!(
+        status
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("timed out"),
+        "timeout failure should be recorded: {status:?}"
+    );
+
+    let output = crate::background::global()
+        .output(&task_id)
+        .await
+        .expect("output should exist");
+    assert!(
+        output.contains("timed out after 100ms"),
+        "output was: {output}"
+    );
+    assert!(
+        !output.contains("should_not_print"),
+        "timed-out command should not complete normally: {output}"
+    );
+}
+
 #[test]
 fn test_bash_tool_schema_advertises_background_progress_guidance() {
     let schema = BashTool::new().parameters_schema();
