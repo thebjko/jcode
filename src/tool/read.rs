@@ -123,7 +123,7 @@ impl Tool for ReadTool {
     }
 
     fn description(&self) -> &str {
-        "Read a file."
+        "Read a file. Supports text files, image files, and PDFs."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -133,15 +133,15 @@ impl Tool for ReadTool {
             "properties": {
                 "file_path": {
                     "type": "string",
-                    "description": "File path."
+                    "description": "Path to a file."
                 },
                 "start_line": {
                     "type": "integer",
-                    "description": "1-based start line."
+                    "description": "1-based start line for text files."
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "Max lines to read. Default 5000."
+                    "description": "Max text lines to read. Default 5000."
                 }
             }
         })
@@ -445,6 +445,21 @@ mod tests {
         assert!(properties.contains_key("limit"));
         assert!(!properties.contains_key("end_line"));
         assert!(!properties.contains_key("offset"));
+    }
+
+    #[test]
+    fn read_tool_description_advertises_supported_file_types() {
+        let tool = ReadTool::new();
+        let description = tool.description().to_lowercase();
+        assert!(description.contains("text"), "description={description}");
+        assert!(description.contains("image"), "description={description}");
+        assert!(description.contains("pdf"), "description={description}");
+
+        let schema = tool.parameters_schema();
+        let file_path_description = schema["properties"]["file_path"]["description"]
+            .as_str()
+            .expect("file_path should have a description");
+        assert_eq!(file_path_description, "Path to a file.");
     }
 
     #[tokio::test]
