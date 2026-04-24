@@ -217,7 +217,7 @@ fn install_macos_hotkey_listener(
 }
 
 fn startup_hints_for_launch(state: &SetupHintsState) -> Option<StartupHints> {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(test, target_os = "macos"))]
     let spawn_notice = if !state.hotkey_configured || state.startup_spawn_hint_dismissed {
         None
     } else {
@@ -226,7 +226,7 @@ fn startup_hints_for_launch(state: &SetupHintsState) -> Option<StartupHints> {
             effective_macos_terminal().label()
         ))
     };
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(test, target_os = "macos")))]
     let spawn_notice: Option<String> = None;
 
     if state.launch_count == 1 {

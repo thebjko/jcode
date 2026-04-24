@@ -63,6 +63,10 @@ impl Sidecar {
     /// Prefers OpenAI (codex-spark) if creds exist, falls back to Claude.
     pub fn new() -> Self {
         let configured_model = crate::config::config().agents.memory_model.clone();
+        Self::with_configured_model(configured_model)
+    }
+
+    fn with_configured_model(configured_model: Option<String>) -> Self {
         let (backend, model) = if let Some(model) = configured_model {
             match crate::provider::provider_for_model(&model) {
                 Some("openai") => (SidecarBackend::OpenAI, model),
@@ -793,24 +797,23 @@ mod tests {
         let _home = EnvVarGuard::set_path("JCODE_HOME", temp.path());
         let _openai = EnvVarGuard::unset("OPENAI_API_KEY");
 
-        let external_dir = temp.path().join("external");
-        std::fs::create_dir_all(external_dir.join(".codex")).expect("create codex dir");
-        std::fs::create_dir_all(external_dir.join(".claude")).expect("create claude dir");
+        codex::upsert_account_from_tokens("openai-1", "sk-test-key-123", "", None, None)
+            .expect("write OpenAI test auth");
+        crate::auth::claude::upsert_account(crate::auth::claude::AnthropicAccount {
+            label: "claude-1".to_string(),
+            access: "claude-access".to_string(),
+            refresh: "claude-refresh".to_string(),
+            expires: 4_102_444_800_000,
+            email: None,
+            subscription_type: None,
+        })
+        .expect("write Claude test auth");
 
-        std::fs::write(
-            external_dir.join(".codex").join("auth.json"),
-            r#"{"OPENAI_API_KEY":"sk-test-key-123"}"#,
-        )
-        .expect("write codex auth");
-        std::fs::write(
-            external_dir.join(".claude").join(".credentials.json"),
-            r#"{"claudeAiOauth":{"accessToken":"claude-access","refreshToken":"claude-refresh","expiresAt":4102444800000}}"#,
-        )
-        .expect("write claude auth");
-
-        let sidecar = Sidecar::new();
+        let sidecar = Sidecar::with_configured_model(None);
         assert_eq!(sidecar.backend, SidecarBackend::OpenAI);
         assert_eq!(sidecar.model, SIDECAR_OPENAI_MODEL);
+        codex::set_active_account_override(None);
+        crate::auth::claude::set_active_account_override(None);
     }
 
     #[test]
