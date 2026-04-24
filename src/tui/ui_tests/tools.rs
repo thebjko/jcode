@@ -115,19 +115,15 @@ fn test_render_tool_message_batch_flat_subcall_params_include_read_details() {
     let lines = render_tool_message(&msg, 120, crate::config::DiffDisplayMode::Off);
     let rendered: Vec<String> = lines.iter().map(extract_line_text).collect();
 
+    assert_eq!(rendered.len(), 3, "rendered={rendered:?}");
+    assert!(rendered[0].contains("✓ batch 2 calls"), "rendered={rendered:?}");
     assert!(
-        rendered
-            .iter()
-            .any(|line| line.contains("read src/session.rs:0-420")),
-        "missing first read summary in {:?}",
-        rendered
+        rendered.iter().any(|line| line.contains("✓ read src/session.rs:0-420")),
+        "missing first read subtool in {rendered:?}"
     );
     assert!(
-        rendered
-            .iter()
-            .any(|line| line.contains("read src/main.rs:2320-2540")),
-        "missing second read summary in {:?}",
-        rendered
+        rendered.iter().any(|line| line.contains("✓ read src/main.rs:2320-2540")),
+        "missing second read subtool in {rendered:?}"
     );
 }
 
@@ -158,6 +154,7 @@ fn test_render_tool_message_batch_subcalls_show_individual_token_badges() {
     let rendered: Vec<String> = lines.iter().map(extract_line_text).collect();
 
     assert_eq!(rendered.len(), 3, "rendered={rendered:?}");
+    assert!(rendered[0].contains("✓ batch 2 calls"), "rendered={rendered:?}");
     assert!(
         rendered[1].contains("read src/session.rs:0-1") && rendered[1].contains("1 tok"),
         "rendered={rendered:?}"
@@ -204,6 +201,61 @@ fn test_render_tool_message_batch_last_subcall_keeps_token_badge_without_trailin
 }
 
 #[test]
+fn test_render_tool_message_batch_partial_failure_shows_all_subcalls() {
+    let msg = DisplayMessage {
+        role: "tool".to_string(),
+        content: "--- [1] read ---
+ok
+
+--- [2] agentgrep ---
+Error: missing field `mode`
+
+--- [3] grep ---
+ok
+
+Completed: 2 succeeded, 1 failed"
+            .to_string(),
+        tool_calls: vec![],
+        duration_secs: None,
+        title: None,
+        tool_data: Some(ToolCall {
+            id: "call_batch_partial".to_string(),
+            name: "batch".to_string(),
+            input: serde_json::json!({
+                "tool_calls": [
+                    {"tool": "read", "file_path": "src/lib.rs"},
+                    {"tool": "agentgrep"},
+                    {"tool": "grep", "pattern": "TODO", "path": "src"}
+                ]
+            }),
+            intent: Some("Inspect schemas".to_string()),
+        }),
+    };
+
+    let lines = render_tool_message(&msg, 120, crate::config::DiffDisplayMode::Off);
+    let rendered: Vec<String> = lines.iter().map(extract_line_text).collect();
+
+    assert!(
+        rendered[0].contains("⚠ batch · Inspect schemas · 2/3 succeeded"),
+        "rendered={rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("✗ agentgrep missing mode")),
+        "failed subcall should be attributed to agentgrep: {rendered:?}"
+    );
+    assert!(
+        rendered.iter().any(|line| line.contains("✓ read src/lib.rs")),
+        "successful read subcall should still be visible: {rendered:?}"
+    );
+    assert!(
+        rendered.iter().any(|line| line.contains("✓ grep 'TODO' in src")),
+        "successful grep subcall should still be visible: {rendered:?}"
+    );
+}
+
+#[test]
 fn test_tool_summary_read_supports_start_line_end_line() {
     let tool = ToolCall {
         id: "call_read_range".to_string(),
@@ -243,12 +295,11 @@ fn test_render_tool_message_batch_includes_start_end_read_details() {
     let lines = render_tool_message(&msg, 120, crate::config::DiffDisplayMode::Off);
     let rendered: Vec<String> = lines.iter().map(extract_line_text).collect();
 
+    assert_eq!(rendered.len(), 2, "rendered={rendered:?}");
+    assert!(rendered[0].contains("✓ batch 1 calls"), "rendered={rendered:?}");
     assert!(
-        rendered
-            .iter()
-            .any(|line| line.contains("read src/tool/read.rs:10-20")),
-        "missing start/end read summary in {:?}",
-        rendered
+        rendered.iter().any(|line| line.contains("✓ read src/tool/read.rs:10-20")),
+        "missing read subtool in {rendered:?}"
     );
 }
 
@@ -419,7 +470,7 @@ fn test_common_tool_summaries_keep_full_text_when_row_budget_fits() {
                 id: "open-wide".to_string(),
                 name: "open".to_string(),
                 input: serde_json::json!({
-                    "mode": "open",
+                    "action": "open",
                     "target": "src/tui/ui.rs"
                 }),
                 intent: None,

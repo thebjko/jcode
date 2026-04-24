@@ -182,15 +182,13 @@ fn test_prepare_messages_shows_live_batch_progress_in_chat_history() {
     assert!(
         rendered
             .iter()
-            .any(|line| line.contains("⠋ batch 2 calls · 1/2 done")),
+            .any(|line| line.contains("⠋ batch · 1/2 done")),
         "missing live batch header in {:?}",
         rendered
     );
     assert!(
-        rendered
-            .iter()
-            .any(|line| line.contains("✓ read Cargo.toml")),
-        "missing completed batch subcall in {:?}",
+        rendered.iter().any(|line| line.contains("… 1 completed")),
+        "missing completed subcall summary in {:?}",
         rendered
     );
     assert!(
@@ -259,7 +257,7 @@ fn test_prepare_messages_places_live_batch_after_committed_assistant_text() {
         .expect("missing assistant text");
     let batch_idx = rendered
         .iter()
-        .position(|line| line.contains("batch 1 calls · 0/1 done"))
+        .position(|line| line.contains("batch · 0/1 done"))
         .expect("missing live batch progress");
 
     assert!(
@@ -322,14 +320,14 @@ fn test_prepare_messages_live_batch_spinner_advances_between_frames() {
     assert!(
         first_rendered
             .iter()
-            .any(|line| line.contains("⠋ batch 1 calls · 0/1 done")),
+            .any(|line| line.contains("⠋ batch · 0/1 done")),
         "expected first spinner frame in {:?}",
         first_rendered
     );
     assert!(
         second_rendered
             .iter()
-            .any(|line| line.contains("⠙ batch 1 calls · 0/1 done")),
+            .any(|line| line.contains("⠙ batch · 0/1 done")),
         "expected second spinner frame in {:?}",
         second_rendered
     );
@@ -660,12 +658,11 @@ fn test_render_tool_message_batch_nested_subcall_params_still_render() {
     let lines = render_tool_message(&msg, 120, crate::config::DiffDisplayMode::Off);
     let rendered: Vec<String> = lines.iter().map(extract_line_text).collect();
 
+    assert_eq!(rendered.len(), 2, "rendered={rendered:?}");
+    assert!(rendered[0].contains("✓ batch 1 calls"), "rendered={rendered:?}");
     assert!(
-        rendered
-            .iter()
-            .any(|line| line.contains("grep 'TODO' in src")),
-        "missing grep summary in {:?}",
-        rendered
+        rendered.iter().any(|line| line.contains("✓ grep 'TODO' in src")),
+        "missing grep subtool in {rendered:?}"
     );
 }
 
@@ -692,12 +689,11 @@ fn test_render_tool_message_batch_flat_grep_subcall_uses_pattern_and_path() {
     let lines = render_tool_message(&msg, 120, crate::config::DiffDisplayMode::Off);
     let rendered: Vec<String> = lines.iter().map(extract_line_text).collect();
 
+    assert_eq!(rendered.len(), 2, "rendered={rendered:?}");
+    assert!(rendered[0].contains("✓ batch 1 calls"), "rendered={rendered:?}");
     assert!(
-        rendered
-            .iter()
-            .any(|line| line.contains("grep 'TODO' in src")),
-        "missing flat grep summary in {:?}",
-        rendered
+        rendered.iter().any(|line| line.contains("✓ grep 'TODO' in src")),
+        "missing grep subtool in {rendered:?}"
     );
 }
 

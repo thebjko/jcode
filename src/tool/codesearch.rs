@@ -27,8 +27,8 @@ impl CodeSearchTool {
 #[derive(Deserialize)]
 struct CodeSearchInput {
     query: String,
-    #[serde(rename = "tokensNum", default)]
-    tokens_num: Option<u32>,
+    #[serde(default)]
+    max_tokens: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -65,7 +65,7 @@ impl Tool for CodeSearchTool {
                     "type": "string",
                     "description": "Search query."
                 },
-                "tokensNum": {
+                "max_tokens": {
                     "type": "integer",
                     "minimum": MIN_TOKENS,
                     "maximum": MAX_TOKENS,
@@ -78,7 +78,7 @@ impl Tool for CodeSearchTool {
     async fn execute(&self, input: Value, _ctx: ToolContext) -> Result<ToolOutput> {
         let params: CodeSearchInput = serde_json::from_value(input)?;
         let tokens_num = params
-            .tokens_num
+            .max_tokens
             .unwrap_or(DEFAULT_TOKENS)
             .clamp(MIN_TOKENS, MAX_TOKENS);
 

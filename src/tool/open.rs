@@ -22,8 +22,6 @@ impl OpenTool {
 #[derive(Debug, Deserialize)]
 struct OpenInput {
     #[serde(default)]
-    mode: Option<String>,
-    #[serde(default)]
     action: Option<String>,
     target: String,
 }
@@ -51,20 +49,6 @@ impl OpenAction {
             Self::Open => "open",
             Self::Reveal => "reveal",
         }
-    }
-
-    fn from_params(mode: Option<&str>, action: Option<&str>) -> Result<Self> {
-        if let (Some(mode), Some(action)) = (mode, action)
-            && mode != action
-        {
-            anyhow::bail!(
-                "Conflicting open parameters: mode='{}' and action='{}'. Use only 'mode', or provide matching values.",
-                mode,
-                action
-            );
-        }
-
-        Self::parse(mode.or(action))
     }
 }
 
@@ -119,15 +103,10 @@ impl Tool for OpenTool {
             "type": "object",
             "required": ["target"],
             "properties": {
-                "mode": {
-                    "type": "string",
-                    "enum": ["open", "reveal"],
-                    "description": "Open mode."
-                },
                 "action": {
                     "type": "string",
                     "enum": ["open", "reveal"],
-                    "description": "Alias for mode."
+                    "description": "Open action. Use 'open' to open the target or 'reveal' to show it in the file manager."
                 },
                 "target": {
                     "type": "string",
@@ -138,9 +117,12 @@ impl Tool for OpenTool {
     }
 
     async fn execute(&self, input: Value, ctx: ToolContext) -> Result<ToolOutput> {
+        if input.get("mode").is_some() {
+            anyhow::bail!("open.mode was removed. Use action='open' or action='reveal'.");
+        }
         let params: OpenInput = serde_json::from_value(input)?;
         let requested_target = params.target.clone();
-        let action = OpenAction::from_params(params.mode.as_deref(), params.action.as_deref())?;
+        let action = OpenAction::parse(params.action.as_deref())?;
         let action_name = action.as_str();
         let target = match resolve_target(&params.target, &ctx)
             .with_context(|| format!("Invalid open target: {}", params.target))
@@ -561,7 +543,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn execute_accepts_mode_alias() {
+    async fn execute_rejects_removed_mode_parameter() {
         let tool = OpenTool::new();
         let err = tool
             .execute(
@@ -571,24 +553,8 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            err.to_string()
-                .contains("The reveal action only supports local filesystem paths")
-        );
-    }
-
-    #[tokio::test]
-    async fn execute_rejects_conflicting_mode_and_action() {
-        let tool = OpenTool::new();
-        let err = tool
-            .execute(
-                json!({"mode": "open", "action": "reveal", "target": "https://example.com"}),
-                make_ctx(),
-            )
-            .await
-            .unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("Conflicting open parameters: mode='open' and action='reveal'")
+            err.to_string().contains("open.mode was removed"),
+            "err={err}"
         );
     }
 

@@ -28,7 +28,6 @@ impl LspTool {
 #[derive(Deserialize)]
 struct LspInput {
     operation: String,
-    #[serde(rename = "filePath")]
     file_path: String,
     line: u32,
     character: u32,
@@ -41,20 +40,20 @@ impl Tool for LspTool {
     }
 
     fn description(&self) -> &str {
-        "Run an LSP operation."
+        "Run an LSP operation. Stub only: LSP is not integrated yet, so prefer agentgrep/read for symbol inspection."
     }
 
     fn parameters_schema(&self) -> Value {
         json!({
             "type": "object",
-            "required": ["operation", "filePath", "line", "character"],
+            "required": ["operation", "file_path", "line", "character"],
             "properties": {
                 "operation": {
                     "type": "string",
                     "enum": OPERATIONS,
                     "description": "LSP operation."
                 },
-                "filePath": {
+                "file_path": {
                     "type": "string",
                     "description": "File path."
                 },

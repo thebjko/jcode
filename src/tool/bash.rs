@@ -423,7 +423,7 @@ impl BashTool {
 struct BashInput {
     command: String,
     #[serde(default)]
-    description: Option<String>,
+    intent: Option<String>,
     #[serde(default)]
     timeout: Option<u64>,
     #[serde(default)]
@@ -465,10 +465,6 @@ impl Tool for BashTool {
                 "command": {
                     "type": "string",
                     "description": cmd_desc
-                },
-                "description": {
-                    "type": "string",
-                    "description": "Short command description."
                 },
                 "timeout": {
                     "type": "integer",
@@ -672,7 +668,7 @@ impl BashTool {
                 let output = format_command_output(output, status.code());
                 Ok(ToolOutput::new(output).with_title(
                     params
-                        .description
+                        .intent
                         .clone()
                         .unwrap_or_else(|| params.command.clone()),
                 ))
@@ -707,8 +703,7 @@ impl BashTool {
         let started = Instant::now();
         let manager = crate::background::global();
         let info = manager.reserve_task_info();
-        let display_name =
-            summarize_background_command(params.description.as_deref(), &params.command);
+        let display_name = summarize_background_command(params.intent.as_deref(), &params.command);
 
         let mut cmd = build_detached_shell_wrapper(&params.command);
         let stdout = OpenOptions::new()
@@ -735,7 +730,7 @@ impl BashTool {
                 return Ok(
                     ToolOutput::new(format_command_output(output, status.code())).with_title(
                         params
-                            .description
+                            .intent
                             .clone()
                             .unwrap_or_else(|| params.command.clone()),
                     ),
@@ -776,7 +771,7 @@ impl BashTool {
                 return Ok(ToolOutput::new(output)
                     .with_title(
                         params
-                            .description
+                            .intent
                             .clone()
                             .unwrap_or_else(|| params.command.clone()),
                     )
@@ -797,7 +792,7 @@ impl BashTool {
     /// Execute a command in the background
     async fn execute_background(&self, params: BashInput, ctx: ToolContext) -> Result<ToolOutput> {
         let command = params.command.clone();
-        let description = params.description.clone();
+        let description = params.intent.clone();
         let display_name = summarize_background_command(description.as_deref(), &command);
         let working_dir = ctx.working_dir.clone();
 

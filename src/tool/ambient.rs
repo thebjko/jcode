@@ -723,7 +723,7 @@ struct ScheduleToolInput {
     #[serde(default)]
     relevant_files: Vec<String>,
     #[serde(default)]
-    background: Option<String>,
+    background_context: Option<String>,
     #[serde(default)]
     success_criteria: Option<String>,
     #[serde(default)]
@@ -759,7 +759,10 @@ impl Tool for ScheduleTool {
                     "type": "array",
                     "items": { "type": "string" }
                 },
-                "background": { "type": "string" },
+                "background_context": {
+                    "type": "string",
+                    "description": "Optional background context for the scheduled task."
+                },
                 "success_criteria": { "type": "string" },
                 "target": {
                     "type": "string",
@@ -835,7 +838,7 @@ impl Tool for ScheduleTool {
             git_branch,
             additional_context: {
                 let mut parts = Vec::new();
-                if let Some(ref bg) = params.background {
+                if let Some(ref bg) = params.background_context {
                     parts.push(format!("Background: {}", bg));
                 }
                 if let Some(ref sc) = params.success_criteria {
@@ -1270,7 +1273,7 @@ mod tests {
             "wake_in_minutes": 120,
             "priority": "high",
             "relevant_files": ["src/main.rs", "tests/e2e/main.rs"],
-            "background": "We just merged PR #42 which changed the parser",
+            "background_context": "We just merged PR #42 which changed the parser",
             "success_criteria": "All tests pass, or a summary of failures is stored"
         });
 
@@ -1281,7 +1284,7 @@ mod tests {
         assert_eq!(parsed.priority.as_deref(), Some("high"));
         assert_eq!(parsed.relevant_files.len(), 2);
         assert_eq!(
-            parsed.background.as_deref(),
+            parsed.background_context.as_deref(),
             Some("We just merged PR #42 which changed the parser")
         );
         assert_eq!(
@@ -1325,7 +1328,7 @@ mod tests {
         assert_eq!(parsed.task, "Check CI");
         assert_eq!(parsed.wake_in_minutes, Some(30));
         assert!(parsed.relevant_files.is_empty());
-        assert!(parsed.background.is_none());
+        assert!(parsed.background_context.is_none());
         assert!(parsed.success_criteria.is_none());
     }
 

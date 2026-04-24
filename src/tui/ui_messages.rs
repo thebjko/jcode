@@ -1249,21 +1249,7 @@ pub(crate) fn render_tool_message(
     if tc.name == "batch"
         && let Some(calls) = tc.input.get("tool_calls").and_then(|v| v.as_array())
     {
-        if batch_counts
-            .map(|counts| counts.failed == 0)
-            .unwrap_or(false)
-        {
-            if centered {
-                left_pad_lines_for_centered_mode(&mut lines, width);
-            }
-            return lines;
-        }
-
         let sub_results = tools_ui::parse_batch_sub_outputs_by_index(&msg.content);
-        let show_only_failures = batch_counts
-            .map(|counts| counts.failed > 0)
-            .unwrap_or_else(|| sub_results.values().any(|result| result.errored));
-        let mut hidden_successes = 0usize;
 
         for (i, call) in calls.iter().enumerate() {
             let raw_name = call
@@ -1285,10 +1271,6 @@ pub(crate) fn render_tool_message(
 
             let sub_result = sub_results.get(&(i + 1));
             let sub_errored = sub_result.map(|result| result.errored).unwrap_or(false);
-            if show_only_failures && !sub_errored {
-                hidden_successes += 1;
-                continue;
-            }
             let (sub_icon, sub_icon_color) = if sub_errored {
                 ("✗", rgb(220, 100, 100))
             } else {
@@ -1303,13 +1285,6 @@ pub(crate) fn render_tool_message(
                 Some(row_width),
                 sub_result.map(|result| result.content.as_str()),
             ));
-        }
-
-        if show_only_failures && hidden_successes > 0 {
-            lines.push(Line::from(Span::styled(
-                format!("    … {} successful subcalls hidden", hidden_successes),
-                Style::default().fg(dim_color()),
-            )));
         }
     }
 

@@ -93,8 +93,29 @@ pub(super) struct BatchSubResult {
     pub content: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct BatchCompletionCounts {
+    pub succeeded: usize,
+    pub failed: usize,
+}
+
+impl BatchCompletionCounts {
+    pub(super) fn total(self) -> usize {
+        self.succeeded + self.failed
+    }
+}
+
 fn is_batch_section_header(line: &str) -> bool {
     line.starts_with("--- [") && line.ends_with(" ---")
+}
+
+fn batch_section_index(line: &str) -> Option<usize> {
+    if !is_batch_section_header(line) {
+        return None;
+    }
+    let rest = line.strip_prefix("--- [")?;
+    let (index, _) = rest.split_once(']')?;
+    index.parse::<usize>().ok()
 }
 
 fn is_batch_footer_line(line: &str) -> bool {
@@ -114,6 +135,29 @@ fn is_batch_footer_line(line: &str) -> bool {
         && failures.chars().all(|ch| ch.is_ascii_digit())
 }
 
+pub(super) fn parse_batch_completion_counts(content: &str) -> Option<BatchCompletionCounts> {
+    for line in content.lines().rev() {
+        let line = line.trim();
+        let Some(rest) = line.strip_prefix("Completed: ") else {
+            continue;
+        };
+        let Some((successes, rest)) = rest.split_once(" succeeded, ") else {
+            continue;
+        };
+        let Some(failures) = rest.strip_suffix(" failed") else {
+            continue;
+        };
+        let Ok(succeeded) = successes.parse::<usize>() else {
+            continue;
+        };
+        let Ok(failed) = failures.parse::<usize>() else {
+            continue;
+        };
+        return Some(BatchCompletionCounts { succeeded, failed });
+    }
+    None
+}
+
 fn finalize_batch_section(raw: &str) -> BatchSubResult {
     let mut content = raw.trim_end_matches(['\n', '\r']).to_string();
     if let Some((body, footer)) = content.rsplit_once("\n\n") {
@@ -131,8 +175,18 @@ fn finalize_batch_section(raw: &str) -> BatchSubResult {
     BatchSubResult { errored, content }
 }
 
+#[cfg(test)]
 pub(super) fn parse_batch_sub_outputs(content: &str) -> Vec<BatchSubResult> {
-    let mut results = Vec::new();
+    parse_batch_sub_outputs_by_index(content)
+        .into_values()
+        .collect()
+}
+
+pub(super) fn parse_batch_sub_outputs_by_index(
+    content: &str,
+) -> std::collections::BTreeMap<usize, BatchSubResult> {
+    let mut results = std::collections::BTreeMap::new();
+    let mut current_index: Option<usize> = None;
     let mut current_content_start: Option<usize> = None;
     let mut current_pos = 0usize;
 
@@ -148,15 +202,20 @@ pub(super) fn parse_batch_sub_outputs(content: &str) -> Vec<BatchSubResult> {
         current_pos = next_pos;
         let trimmed = line.trim_end_matches(['\n', '\r']);
 
-        if is_batch_section_header(trimmed)
-            && let Some(start) = current_content_start.replace(current_pos)
-        {
-            results.push(finalize_batch_section(&content[start..line_start]));
+        if let Some(index) = batch_section_index(trimmed) {
+            if let (Some(prev_index), Some(start)) = (current_index, current_content_start) {
+                results.insert(
+                    prev_index,
+                    finalize_batch_section(&content[start..line_start]),
+                );
+            }
+            current_index = Some(index);
+            current_content_start = Some(current_pos);
         }
     }
 
-    if let Some(start) = current_content_start {
-        results.push(finalize_batch_section(&content[start..]));
+    if let (Some(index), Some(start)) = (current_index, current_content_start) {
+        results.insert(index, finalize_batch_section(&content[start..]));
     }
 
     results
@@ -173,7 +232,7 @@ pub(crate) fn batch_subcall_params(call: &serde_json::Value) -> serde_json::Valu
     if let Some(obj) = call.as_object() {
         let mut flat = serde_json::Map::new();
         for (k, v) in obj {
-            if k != "tool" && k != "name" {
+            if k != "tool" && k != "name" && k != "intent" {
                 flat.insert(k.clone(), v.clone());
             }
         }
@@ -411,7 +470,7 @@ fn summarize_swarm_tool_action(tool: &ToolCall, bounded: &dyn Fn(usize) -> usize
         .input
         .get("action")
         .and_then(|v| v.as_str())
-        .unwrap_or("?");
+        .unwrap_or("action missing");
     let target = tool
         .input
         .get("to_session")
@@ -679,7 +738,7 @@ fn browser_summary(tool: &ToolCall, max_width: Option<usize>) -> String {
                 .input
                 .get("key")
                 .and_then(|v| v.as_str())
-                .unwrap_or("?");
+                .unwrap_or("key missing");
             if let Some(target) = browser_target_summary(tool, max_width, false) {
                 format!("press {} on {}", key, target)
             } else {
@@ -937,9 +996,15 @@ pub(super) fn get_tool_summary_with_budget(
             .get("command")
             .and_then(|v| v.as_str())
             .map(|cmd| {
+                let has_intent = tool
+                    .intent
+                    .as_deref()
+                    .map(str::trim)
+                    .is_some_and(|intent| !intent.is_empty());
                 let cmd_budget = max_width
                     .map(|w| w.saturating_sub(2))
-                    .unwrap_or(bash_max_chars);
+                    .unwrap_or(bash_max_chars)
+                    .min(if has_intent { 28 } else { usize::MAX });
                 format!("$ {}", truncate_command_display(cmd, cmd_budget))
             })
             .unwrap_or_default(),
@@ -1062,11 +1127,9 @@ pub(super) fn get_tool_summary_with_budget(
             }
         }
         "agentgrep" => {
-            let mode = tool
-                .input
-                .get("mode")
-                .and_then(|v| v.as_str())
-                .unwrap_or("?");
+            let Some(mode) = tool.input.get("mode").and_then(|v| v.as_str()) else {
+                return "missing mode".to_string();
+            };
             match mode {
                 "grep" | "find" => {
                     let query = tool
@@ -1161,9 +1224,8 @@ pub(super) fn get_tool_summary_with_budget(
         "open" | "launch" => {
             let action = tool
                 .input
-                .get("mode")
+                .get("action")
                 .and_then(|v| v.as_str())
-                .or_else(|| tool.input.get("action").and_then(|v| v.as_str()))
                 .unwrap_or("open");
             let target = tool
                 .input
@@ -1227,7 +1289,7 @@ pub(super) fn get_tool_summary_with_budget(
                 .input
                 .get("action")
                 .and_then(|v| v.as_str())
-                .unwrap_or("?");
+                .unwrap_or("action missing");
             match action {
                 "remember" => {
                     let content = tool
@@ -1260,16 +1322,28 @@ pub(super) fn get_tool_summary_with_budget(
                     )
                 }
                 "forget" => {
-                    let id = tool.input.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+                    let id = tool
+                        .input
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("id missing");
                     format!("forget {}", truncate_identifier_display(id, bounded(30)))
                 }
                 "tag" => {
-                    let id = tool.input.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+                    let id = tool
+                        .input
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("id missing");
                     format!("tag {}", truncate_identifier_display(id, bounded(30)))
                 }
                 "link" => "link".to_string(),
                 "related" => {
-                    let id = tool.input.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+                    let id = tool
+                        .input
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("id missing");
                     format!("related {}", truncate_identifier_display(id, bounded(30)))
                 }
                 _ => action.to_string(),
@@ -1280,7 +1354,7 @@ pub(super) fn get_tool_summary_with_budget(
                 .input
                 .get("action")
                 .and_then(|v| v.as_str())
-                .unwrap_or("?");
+                .unwrap_or("action missing");
             let id = tool.input.get("id").and_then(|v| v.as_str());
             let title = tool.input.get("title").and_then(|v| v.as_str());
             match (action, id, title) {
@@ -1304,7 +1378,7 @@ pub(super) fn get_tool_summary_with_budget(
                 .input
                 .get("action")
                 .and_then(|v| v.as_str())
-                .unwrap_or("?");
+                .unwrap_or("action missing");
             action.to_string()
         }
         "side_panel" => {
@@ -1312,7 +1386,7 @@ pub(super) fn get_tool_summary_with_budget(
                 .input
                 .get("action")
                 .and_then(|v| v.as_str())
-                .unwrap_or("?");
+                .unwrap_or("action missing");
             let target = tool
                 .input
                 .get("title")
@@ -1362,10 +1436,10 @@ pub(super) fn get_tool_summary_with_budget(
                 .input
                 .get("operation")
                 .and_then(|v| v.as_str())
-                .unwrap_or("?");
+                .unwrap_or("command missing");
             let file = tool
                 .input
-                .get("filePath")
+                .get("file_path")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
             let short_file = file.rsplit('/').next().unwrap_or(file);
@@ -1377,7 +1451,7 @@ pub(super) fn get_tool_summary_with_budget(
                 .input
                 .get("action")
                 .and_then(|v| v.as_str())
-                .unwrap_or("?");
+                .unwrap_or("action missing");
             let task_id = tool.input.get("task_id").and_then(|v| v.as_str());
             if let Some(id) = task_id {
                 format!(
@@ -1416,7 +1490,7 @@ pub(super) fn get_tool_summary_with_budget(
                 .input
                 .get("command")
                 .and_then(|v| v.as_str())
-                .unwrap_or("?");
+                .unwrap_or("command missing");
             truncate_middle_display(cmd, bounded(40))
         }
         name if name.starts_with("mcp__") => tool
@@ -1448,27 +1522,36 @@ pub(super) fn render_batch_subcall_line(
         };
         (crate::util::format_approx_token_count(tokens), color)
     });
-    let reserved = UnicodeWidthStr::width(format!("    {} {}", icon, display_name).as_str())
-        + 1
-        + token_badge.as_ref().map_or(0, |(label, _)| {
-            UnicodeWidthStr::width(format!(" · {label}").as_str())
-        });
-    let summary_budget = max_width.map(|w| w.saturating_sub(reserved));
-    let summary = get_tool_summary_with_budget(tool, bash_max_chars, summary_budget);
     let intent = tool
         .intent
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty());
+    let intent_display = intent.map(|intent| {
+        max_width
+            .map(|width| truncate_end_display(intent, (width / 3).max(16)))
+            .unwrap_or_else(|| intent.to_string())
+    });
+    let intent_width = intent_display.as_ref().map_or(0, |intent| {
+        UnicodeWidthStr::width(" · ") + UnicodeWidthStr::width(intent.as_str())
+    });
+    let reserved = UnicodeWidthStr::width(format!("    {} {}", icon, display_name).as_str())
+        + 1
+        + intent_width
+        + token_badge.as_ref().map_or(0, |(label, _)| {
+            UnicodeWidthStr::width(format!(" · {label}").as_str())
+        });
+    let summary_budget = max_width.map(|w| w.saturating_sub(reserved));
+    let summary = get_tool_summary_with_budget(tool, bash_max_chars, summary_budget);
 
     let mut spans = vec![
         Span::styled(format!("    {} ", icon), Style::default().fg(icon_color)),
         Span::styled(display_name, Style::default().fg(tool_color())),
     ];
-    if let Some(intent) = intent {
+    if let Some(intent) = intent_display {
         spans.push(Span::styled(" · ", Style::default().fg(dim_color())));
         spans.push(Span::styled(
-            intent.to_string(),
+            intent.clone(),
             Style::default().fg(tool_color()),
         ));
         if !summary.is_empty() && summary != intent {

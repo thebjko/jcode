@@ -41,7 +41,7 @@ impl Tool for PatchTool {
     }
 
     fn description(&self) -> &str {
-        "Apply a unified diff patch."
+        "Apply a standard unified diff patch using ---/+++ headers. Prefer apply_patch for Codex-style patches."
     }
 
     fn parameters_schema(&self) -> Value {
