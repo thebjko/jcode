@@ -575,7 +575,7 @@ fn score_and_filter_prioritizes_matching_skill_memories() {
     let ranked = MemoryManager::score_and_filter(
         vec![generic, skill],
         &[1.0, 0.0],
-        "Please make the todo list for this long debugging and validation task.",
+        "Please make the todo list for this task.",
         0.0,
         2,
     )

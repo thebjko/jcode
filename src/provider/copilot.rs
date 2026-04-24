@@ -1085,7 +1085,10 @@ impl Provider for CopilotApiProvider {
         {
             return models.clone();
         }
-        Vec::new()
+        FALLBACK_MODELS
+            .iter()
+            .map(|model| model.to_string())
+            .collect()
     }
 
     fn available_models_for_switching(&self) -> Vec<String> {
