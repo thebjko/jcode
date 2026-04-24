@@ -2755,6 +2755,106 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn reload_starting_rejects_new_turns_for_multiple_sessions() {
+        let _guard = crate::storage::lock_test_env();
+        let _runtime = IsolatedRuntimeDir::new();
+        crate::server::write_reload_state(
+            "reload-lifecycle-multi-starting",
+            "test-hash",
+            crate::server::ReloadPhase::Starting,
+            Some("session_alpha".to_string()),
+        );
+
+        let forked = Arc::new(AtomicBool::new(false));
+        let provider: Arc<dyn Provider> = Arc::new(PanicOnForkProvider {
+            forked: Arc::clone(&forked),
+        });
+        let registry = Registry::new(Arc::clone(&provider)).await;
+        let swarm_members = Arc::new(RwLock::new(HashMap::new()));
+        let swarms_by_id = Arc::new(RwLock::new(HashMap::new()));
+        let event_history = Arc::new(RwLock::new(std::collections::VecDeque::new()));
+        let event_counter = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let (swarm_event_tx, _) = broadcast::channel(8);
+
+        for (message_id, session_id) in [
+            (101, "session_alpha"),
+            (102, "session_beta"),
+            (103, "session_gamma"),
+        ] {
+            let mut session =
+                crate::session::Session::create_with_id(session_id.to_string(), None, None);
+            session.model = Some("panic-on-fork".to_string());
+            let agent = Arc::new(Mutex::new(Agent::new_with_session(
+                Arc::clone(&provider),
+                registry.clone(),
+                session,
+                None,
+            )));
+
+            let (client_event_tx, mut client_event_rx) = mpsc::unbounded_channel::<ServerEvent>();
+            let (processing_done_tx, mut processing_done_rx) = mpsc::unbounded_channel();
+            let mut client_is_processing = false;
+            let mut processing_message_id = None;
+            let mut processing_session_id = None;
+            let mut processing_task = None;
+
+            start_processing_message(
+                message_id,
+                format!("do not start {session_id} during reload"),
+                Vec::new(),
+                None,
+                session_id,
+                &mut client_is_processing,
+                &mut processing_message_id,
+                &mut processing_session_id,
+                &mut processing_task,
+                &agent,
+                &client_event_tx,
+                &processing_done_tx,
+                &swarm_members,
+                &swarms_by_id,
+                &event_history,
+                &event_counter,
+                &swarm_event_tx,
+            )
+            .await;
+
+            let event = tokio::time::timeout(
+                std::time::Duration::from_millis(250),
+                client_event_rx.recv(),
+            )
+            .await
+            .expect("reload guard should emit promptly for every session")
+            .expect("reload event should be sent to client");
+            assert!(
+                matches!(event, ServerEvent::Reloading { new_socket: None }),
+                "expected Reloading event for {session_id}, got {event:?}"
+            );
+            assert!(
+                client_event_rx.try_recv().is_err(),
+                "reload guard should only emit one reload notification for {session_id}"
+            );
+            assert!(
+                !client_is_processing,
+                "{session_id} should not enter processing during reload"
+            );
+            assert_eq!(processing_message_id, None);
+            assert_eq!(processing_session_id, None);
+            assert!(
+                processing_task.is_none(),
+                "{session_id} should not spawn a processing task during reload"
+            );
+            assert!(processing_done_rx.try_recv().is_err());
+        }
+
+        assert!(
+            !forked.load(Ordering::SeqCst),
+            "rejecting multiple sessions during reload should not fork or invoke provider work"
+        );
+    }
+
+    #[tokio::test]
     async fn lightweight_comm_request_skips_full_session_initialization() {
         let (server_stream, client_stream) = crate::transport::Stream::pair().expect("socket pair");
         let forked = Arc::new(AtomicBool::new(false));
