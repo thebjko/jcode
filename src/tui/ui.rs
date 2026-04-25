@@ -98,7 +98,10 @@ mod viewport;
 
 #[cfg(test)]
 use box_utils::truncate_line_to_width;
-use box_utils::{line_plain_text, render_rounded_box, truncate_line_with_ellipsis_to_width};
+use box_utils::{
+    line_plain_text, render_rounded_box, truncate_line_preserving_suffix_to_width,
+    truncate_line_with_ellipsis_to_width,
+};
 use changelog::get_grouped_changelog;
 #[cfg(test)]
 use changelog::{ChangelogEntry, group_changelog_entries, parse_changelog_from};

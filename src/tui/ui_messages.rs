@@ -1243,14 +1243,14 @@ pub(crate) fn render_tool_message(
         ));
         tool_line.push(Span::styled(")", Style::default().fg(dim_color())));
     }
-    tool_line.push(Span::styled(" · ", Style::default().fg(dim_color())));
-    tool_line.push(Span::styled(
-        token_badge.label,
-        Style::default().fg(token_badge.color),
-    ));
+    let token_suffix = Line::from(vec![
+        Span::styled(" · ", Style::default().fg(dim_color())),
+        Span::styled(token_badge.label, Style::default().fg(token_badge.color)),
+    ]);
 
-    lines.push(super::truncate_line_with_ellipsis_to_width(
+    lines.push(super::truncate_line_preserving_suffix_to_width(
         &Line::from(tool_line),
+        &token_suffix,
         row_width,
     ));
 

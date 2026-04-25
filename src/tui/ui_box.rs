@@ -156,6 +156,41 @@ pub(super) fn truncate_line_with_ellipsis_to_width(
     truncated
 }
 
+pub(super) fn truncate_line_preserving_suffix_to_width(
+    prefix: &Line<'static>,
+    suffix: &Line<'static>,
+    width: usize,
+) -> Line<'static> {
+    if width == 0 {
+        return Line::from("");
+    }
+
+    if suffix.width() == 0 {
+        return truncate_line_with_ellipsis_to_width(prefix, width);
+    }
+
+    let mut combined_spans = prefix.spans.clone();
+    combined_spans.extend(suffix.spans.clone());
+    let mut combined = Line::from(combined_spans);
+    combined.alignment = prefix.alignment;
+    if combined.width() <= width {
+        return combined;
+    }
+
+    let suffix_width = suffix.width();
+    if suffix_width >= width {
+        let mut truncated = truncate_line_with_ellipsis_to_width(suffix, width);
+        truncated.alignment = prefix.alignment;
+        return truncated;
+    }
+
+    let prefix_budget = width.saturating_sub(suffix_width);
+    let mut prefix_part = truncate_line_with_ellipsis_to_width(prefix, prefix_budget);
+    prefix_part.spans.extend(suffix.spans.clone());
+    prefix_part.alignment = prefix.alignment;
+    prefix_part
+}
+
 pub(crate) fn line_plain_text(line: &Line<'_>) -> String {
     line.spans
         .iter()

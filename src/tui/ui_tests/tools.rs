@@ -680,4 +680,35 @@ fn test_render_tool_message_batch_rows_do_not_soft_wrap_on_narrow_width() {
         "rendered={rendered:?}"
     );
     assert!(rendered[1].contains('…'), "rendered={rendered:?}");
+    assert!(rendered[1].contains("tok"), "rendered={rendered:?}");
+}
+
+#[test]
+fn test_render_tool_message_keeps_token_badge_when_intent_is_truncated() {
+    let msg = DisplayMessage {
+        role: "tool".to_string(),
+        content: "ok".to_string(),
+        tool_calls: vec![],
+        duration_secs: None,
+        title: None,
+        tool_data: Some(ToolCall {
+            id: "call_long_intent".to_string(),
+            name: "bash".to_string(),
+            input: serde_json::json!({
+                "command": "cargo test --package jcode --lib tui::ui::tests::very_long_test_name -- --nocapture"
+            }),
+            intent: Some(
+                "Inspect and validate the extremely long wrapping behavior for tool rows"
+                    .to_string(),
+            ),
+        }),
+    };
+
+    let lines = render_tool_message(&msg, 48, crate::config::DiffDisplayMode::Off);
+    let rendered: Vec<String> = lines.iter().map(extract_line_text).collect();
+
+    assert!(!rendered.is_empty(), "rendered={rendered:?}");
+    assert!(rendered[0].width() <= 47, "rendered={rendered:?}");
+    assert!(rendered[0].contains('…'), "rendered={rendered:?}");
+    assert!(rendered[0].contains("tok"), "rendered={rendered:?}");
 }
