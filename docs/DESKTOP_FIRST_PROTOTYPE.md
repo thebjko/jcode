@@ -3,10 +3,11 @@
 Status: Proposed
 Updated: 2026-04-25
 
-The first implementation step for Jcode Desktop should be a **fake-data spatial workspace prototype**.
+The first implementation step for Jcode Desktop should be **Phase 0: a fullscreen blank white canvas**.
 
 Do not start with:
 
+- fake workspace surfaces
 - real server integration
 - a full editor
 - any browser work
@@ -14,11 +15,52 @@ Do not start with:
 - packaging
 - perfect text rendering
 
-Start by proving the thing that makes the desktop app different:
+Start by proving the absolute foundation:
 
-> multiple agent sessions as navigable surfaces in a fast, custom, Niri-like workspace.
+> a native fullscreen window with a custom GPU-rendered white canvas.
 
-## First visual target
+## Phase 0 visual target
+
+```text
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                              blank white canvas                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+## What Phase 0 must prove
+
+1. A native window opens on Linux.
+2. The window enters fullscreen or borderless fullscreen mode.
+3. The app creates a GPU surface.
+4. The app clears the surface to white.
+5. The app handles resize/scale-factor changes without crashing.
+6. The app exits cleanly with `Esc` or close-window.
+7. The app uses an on-demand event loop rather than a busy render loop.
+8. The app can be built and run independently from the TUI.
+
+## Why this comes before the spatial workspace
+
+A blank canvas is intentionally tiny. It validates the platform/rendering foundation before adding product complexity.
+
+It answers:
+
+- Can we create the desktop crate cleanly?
+- Does `winit` work as the initial platform shell?
+- Does `wgpu` initialize on the Linux dev machine?
+- Can we render a frame without a web view or UI framework?
+- Can fullscreen behavior be tested early?
+
+## Phase 1 target after this
+
+Once Phase 0 works, the next prototype is the fake-data spatial workspace:
 
 ```text
 ┌────────────────────────────────────────────────────────────────────────────────────┐
@@ -39,32 +81,18 @@ Start by proving the thing that makes the desktop app different:
 └────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-## What this prototype must prove
+Phase 1 proves the actual product bet:
 
-1. A native window opens on Linux.
-2. The app renders custom surfaces, ideally through `wgpu`.
-3. There are multiple fake agent session surfaces.
-4. One surface is focused.
-5. `leader + h/j/k/l` moves focus.
-6. `leader + H/J/K/L` moves surfaces.
-7. `leader + n` creates a fake session surface.
-8. `leader + z` zooms the focused surface.
-9. `leader + x` closes the focused surface.
-10. Each fake transcript scrolls independently.
-11. The app idles at near-zero CPU.
-12. Debug HUD shows frame/layout/render stats.
+- multiple visible agent sessions
+- Niri-like spatial layout
+- leader + `h/j/k/l` navigation
+- move/close/zoom surfaces
+- independent fake transcripts
+- activity surface
+- custom rendering performance
+- near-zero idle CPU
 
-## Why this comes first
-
-This validates the core product bet before heavier features:
-
-- Is the spatial model good?
-- Does keyboard navigation feel right?
-- Can multiple sessions be visible without chaos?
-- Can the custom UI stay fast?
-- Does the app feel like Jcode mission control rather than another chat window?
-
-## Initial surface kinds
+## Initial Phase 1 surface kinds
 
 ```rust
 enum SurfaceKind {
@@ -78,46 +106,6 @@ enum SurfaceKind {
 
 No browser preplanning. No full editor yet.
 
-## Minimal fake state
+## Phase 1 success bar
 
-```rust
-struct WorkspaceLayoutState {
-    lanes: Vec<LaneNode>,
-    active_surface: SurfaceId,
-}
-
-struct LaneNode {
-    columns: Vec<ColumnNode>,
-}
-
-struct ColumnNode {
-    surfaces: Vec<SurfaceId>,
-    active_surface_index: usize,
-}
-
-struct SurfaceState {
-    id: SurfaceId,
-    kind: SurfaceKind,
-    title: String,
-    focused: bool,
-}
-```
-
-## Suggested first module layout
-
-Build this as a standalone fake-data binary before connecting to the server:
-
-```text
-crates/jcode-desktop/
-  src/main.rs
-  src/app.rs
-  src/workspace.rs
-  src/input.rs
-  src/views/root.rs
-  src/views/surface.rs
-  src/views/debug_hud.rs
-```
-
-## Success bar
-
-The prototype is successful when a user can launch it, see multiple fake sessions, move between them with leader+`h/j/k/l`, create/move/close/zoom surfaces, and confirm the app remains smooth and idle-efficient.
+The fake workspace prototype is successful when a user can launch it, see multiple fake sessions, move between them with leader+`h/j/k/l`, create/move/close/zoom surfaces, and confirm the app remains smooth and idle-efficient.
