@@ -228,14 +228,16 @@ fn test_record_connection_type_buckets_transport() {
     record_connection_type("cli subprocess");
     record_connection_type("weird-transport");
 
-    let guard = SESSION_STATE.lock().unwrap();
-    let state = guard.as_ref().expect("session telemetry state");
-    assert_eq!(state.transport_persistent_ws_fresh, 1);
-    assert_eq!(state.transport_persistent_ws_reuse, 1);
-    assert_eq!(state.transport_https, 1);
-    assert_eq!(state.transport_native_http2, 1);
-    assert_eq!(state.transport_cli_subprocess, 1);
-    assert_eq!(state.transport_other, 1);
+    {
+        let guard = SESSION_STATE.lock().unwrap();
+        let state = guard.as_ref().expect("session telemetry state");
+        assert_eq!(state.transport_persistent_ws_fresh, 1);
+        assert_eq!(state.transport_persistent_ws_reuse, 1);
+        assert_eq!(state.transport_https, 1);
+        assert_eq!(state.transport_native_http2, 1);
+        assert_eq!(state.transport_cli_subprocess, 1);
+        assert_eq!(state.transport_other, 1);
+    }
     if let Ok(mut session) = SESSION_STATE.lock() {
         *session = None;
     }
