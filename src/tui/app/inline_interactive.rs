@@ -851,9 +851,18 @@ impl App {
                 .unwrap_or(usize::MAX)
         }
 
+        let openrouter_created_timestamps =
+            crate::provider::openrouter::load_model_timestamp_index();
+        let openrouter_created_timestamp = |model: &str| {
+            crate::provider::openrouter::model_created_timestamp_from_index(
+                model,
+                &openrouter_created_timestamps,
+            )
+        };
+
         let latest_recommended_ts: Option<u64> = RECOMMENDED_MODELS
             .iter()
-            .filter_map(|m| crate::provider::openrouter::model_created_timestamp(m))
+            .filter_map(|m| openrouter_created_timestamp(m))
             .max();
         let old_threshold_secs = latest_recommended_ts
             .map(|ts| ts.saturating_sub(30 * 86400))
@@ -892,7 +901,7 @@ impl App {
                     let display_name = format!("{} ({})", name, effort_label);
                     let is_this_current =
                         *name == current_model && current_effort.as_deref() == Some(*effort);
-                    let or_created = crate::provider::openrouter::model_created_timestamp(name);
+                    let or_created = openrouter_created_timestamp(name);
                     entries.push(PickerEntry {
                         name: display_name,
                         options: entry_routes.clone(),
@@ -919,7 +928,7 @@ impl App {
                     });
                 }
             } else {
-                let or_created = crate::provider::openrouter::model_created_timestamp(name);
+                let or_created = openrouter_created_timestamp(name);
                 let is_old = old_threshold_secs > 0
                     && or_created.map(|t| t < old_threshold_secs).unwrap_or(false);
                 let is_recommended = RECOMMENDED_MODELS.contains(&name.as_str())

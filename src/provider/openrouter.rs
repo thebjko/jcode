@@ -24,9 +24,9 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
 pub use jcode_provider_openrouter::{
-    EndpointInfo, ModelInfo, ModelPricing, ProviderRouting, all_model_timestamps,
-    load_endpoints_disk_cache_public, load_model_pricing_disk_cache_public,
-    model_created_timestamp,
+    EndpointInfo, ModelInfo, ModelPricing, ModelTimestampIndex, ProviderRouting,
+    all_model_timestamps, load_endpoints_disk_cache_public, load_model_pricing_disk_cache_public,
+    load_model_timestamp_index, model_created_timestamp, model_created_timestamp_from_index,
 };
 use jcode_provider_openrouter::{
     KIMI_FALLBACK_PROVIDERS, ModelCatalogRefreshState, ModelsCache, ParsedProvider, PinSource,
