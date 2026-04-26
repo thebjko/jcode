@@ -1,10 +1,30 @@
-# jcode Mobile Simulator Foundation
+# jcode Mobile App Simulator Foundation
 
 This document describes the first simulation slice now checked into the repo.
 
+For the full target architecture and milestone plan, see
+[`docs/MOBILE_AGENT_SIMULATOR.md`](../docs/MOBILE_AGENT_SIMULATOR.md).
+
+## Product direction
+
+The simulator is intended to be a **Linux-native simulator for the jcode mobile
+application itself**. It is not Apple iOS Simulator, not an iPhone mirror, and
+not a substitute for final on-device validation. Its purpose is to let humans
+and AI agents build, run, inspect, test, and iterate on the mobile app without a
+MacBook, Xcode, or a live iPhone.
+
+The mobile app should be **Rust-first**. Shared behavior should live in Rust and
+be exercised by both the Linux simulator and the eventual iOS host. The iOS app
+should become a thin platform shell for OS-specific capabilities such as
+window/view hosting, secure storage, push notifications, camera/photo picker,
+microphone, and haptics.
+
 ## What exists now
 
-The simulator foundation is currently **headless-first** and focused on automation, logging, and deterministic state transitions.
+The simulator foundation is currently **headless-first** and focused on
+automation, logging, and deterministic state transitions. This is the seed of
+the larger app simulator. It should evolve from a mocked flow into the real
+shared mobile application core plus an agent-native automation surface.
 
 ### Workspace crates
 
@@ -24,7 +44,7 @@ The simulator foundation is currently **headless-first** and focused on automati
 
 This first slice intentionally does **not** include a GUI renderer yet.
 
-Instead, it gives us a solid automation and state foundation so the agent can:
+Instead, it gives us a solid automation and state foundation so agents can:
 
 - start the simulator
 - query state snapshots
@@ -34,6 +54,21 @@ Instead, it gives us a solid automation and state foundation so the agent can:
 - load scenarios
 - inspect transition/effect logs
 - reset and shut down the simulator
+
+The long-term simulator must also support human-like interaction and visual
+inspection:
+
+- deterministic layout export
+- hit testing by coordinates
+- screenshots
+- image/layout diffs
+- replay bundles
+- high-level assertions
+- fake backend scenarios
+- integration with jcode debug/tester tooling
+
+The goal is for an agent to test autonomously in every way a human would, while
+also having richer semantic APIs than a human has.
 
 ## Default transport
 
@@ -196,6 +231,9 @@ Not included yet:
 - live render inspector
 - iOS host integration
 - shared custom renderer backend
+- fake jcode backend that exercises real pairing/WebSocket/protocol flows
+- complete semantic automation operations such as assert/wait/scroll/type/gesture
+- Rust-owned mobile protocol adapters equivalent to the current Swift SDK
 
 ## Recommended first workflow
 

@@ -1,9 +1,17 @@
 # jcode iOS Client
 
-> **Status:** Phase 1 implemented (app shell + SDK), awaiting on-device validation
+> **Status:** Phase 1 Swift app shell + SDK exists, but the product direction is
+> Rust-first shared mobile app core with a Linux-native, agent-native app
+> simulator. See [`MOBILE_AGENT_SIMULATOR.md`](MOBILE_AGENT_SIMULATOR.md).
 > **Updated:** 2026-02-23
 
 A native iOS application that connects to a jcode server running on the user's laptop or desktop. The phone is a rich, touch-optimized client; all heavy lifting (LLM calls, tool execution, file I/O, git, MCP) stays on the server.
+
+The current Swift implementation is useful as a prototype and platform shell,
+but it should not remain the source of truth for app behavior. Shared mobile
+state, protocol handling, semantic UI, and simulator automation should move into
+Rust so that agents can iterate on the app on Linux without MacBook, Xcode,
+Apple iOS Simulator, or a physical iPhone.
 
 ---
 
