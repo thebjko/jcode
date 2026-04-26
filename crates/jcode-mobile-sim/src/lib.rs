@@ -184,6 +184,82 @@ async fn handle_request(
                 false,
             ))
         }
+        "find_node" => {
+            let node_id = required_str(&request.params, "node_id");
+            match node_id {
+                Ok(node_id) => {
+                    let store = store.lock().await;
+                    let tree = serde_json::to_value(store.semantic_tree()).unwrap_or(Value::Null);
+                    find_node_json(&tree, node_id)
+                        .cloned()
+                        .map(|node| (node, false))
+                        .ok_or_else(|| anyhow!("node not found: {node_id}"))
+                }
+                Err(err) => Err(err),
+            }
+        }
+        "assert_screen" => {
+            let expected = required_str(&request.params, "screen");
+            match expected {
+                Ok(expected) => {
+                    let store = store.lock().await;
+                    let actual = format!("{:?}", store.state().screen).to_lowercase();
+                    if actual == expected {
+                        Ok((json!({"screen": actual}), false))
+                    } else {
+                        Err(anyhow!("expected screen {expected}, got {actual}"))
+                    }
+                }
+                Err(err) => Err(err),
+            }
+        }
+        "assert_text" => {
+            let contains = required_str(&request.params, "contains");
+            match contains {
+                Ok(contains) => {
+                    let store = store.lock().await;
+                    let haystack = serde_json::to_string(store.state()).unwrap_or_default();
+                    if haystack.contains(contains) {
+                        Ok((json!({"contains": contains}), false))
+                    } else {
+                        Err(anyhow!("text not found: {contains}"))
+                    }
+                }
+                Err(err) => Err(err),
+            }
+        }
+        "assert_node" => {
+            let node_id = required_str(&request.params, "node_id");
+            match node_id {
+                Ok(node_id) => {
+                    let store = store.lock().await;
+                    let tree = serde_json::to_value(store.semantic_tree()).unwrap_or(Value::Null);
+                    match find_node_json(&tree, node_id)
+                        .cloned()
+                        .ok_or_else(|| anyhow!("node not found: {node_id}"))
+                        .and_then(|node| {
+                            assert_optional_bool(&node, &request.params, "visible")?;
+                            assert_optional_bool(&node, &request.params, "enabled")?;
+                            assert_optional_string(&node, &request.params, "role")?;
+                            assert_optional_string(&node, &request.params, "label")?;
+                            assert_optional_string(&node, &request.params, "value")?;
+                            Ok(node)
+                        }) {
+                        Ok(node) => Ok((json!({"node": node}), false)),
+                        Err(err) => Err(err),
+                    }
+                }
+                Err(err) => Err(err),
+            }
+        }
+        "assert_no_error" => {
+            let store = store.lock().await;
+            if let Some(error) = &store.state().error_message {
+                Err(anyhow!("unexpected error banner: {error}"))
+            } else {
+                Ok((json!({"ok": true}), false))
+            }
+        }
         "log" => {
             let limit = request
                 .params
@@ -267,6 +343,65 @@ async fn handle_request(
             },
             false,
         ),
+    }
+}
+
+fn required_str<'a>(params: &'a Value, field: &str) -> Result<&'a str> {
+    params
+        .get(field)
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("missing {field}"))
+}
+
+fn find_node_json<'a>(value: &'a Value, node_id: &str) -> Option<&'a Value> {
+    if value.get("id").and_then(Value::as_str) == Some(node_id) {
+        return Some(value);
+    }
+    for child in value
+        .get("children")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        if let Some(found) = find_node_json(child, node_id) {
+            return Some(found);
+        }
+    }
+    if let Some(root) = value.get("root") {
+        return find_node_json(root, node_id);
+    }
+    None
+}
+
+fn assert_optional_bool(node: &Value, params: &Value, field: &str) -> Result<()> {
+    let Some(expected) = params.get(field).and_then(Value::as_bool) else {
+        return Ok(());
+    };
+    let actual = node
+        .get(field)
+        .and_then(Value::as_bool)
+        .ok_or_else(|| anyhow!("node has no boolean field {field}"))?;
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(anyhow!("expected node {field}={expected}, got {actual}"))
+    }
+}
+
+fn assert_optional_string(node: &Value, params: &Value, field: &str) -> Result<()> {
+    let Some(expected) = params.get(field).and_then(Value::as_str) else {
+        return Ok(());
+    };
+    let actual = node
+        .get(field)
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("node has no string field {field}"))?;
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "expected node {field}={expected:?}, got {actual:?}"
+        ))
     }
 }
 
@@ -368,6 +503,66 @@ mod tests {
         .expect("tree");
         let tree_json = serde_json::to_string(&tree.result).expect("tree json");
         assert!(tree_json.contains("chat.send"));
+
+        let assert_screen = send_request(
+            &socket,
+            AutomationRequest {
+                id: "assert-screen".to_string(),
+                method: "assert_screen".to_string(),
+                params: json!({"screen": "chat"}),
+            },
+        )
+        .await
+        .expect("assert screen");
+        assert!(assert_screen.ok);
+
+        let find_node = send_request(
+            &socket,
+            AutomationRequest {
+                id: "find-node".to_string(),
+                method: "find_node".to_string(),
+                params: json!({"node_id": "chat.send"}),
+            },
+        )
+        .await
+        .expect("find node");
+        assert!(find_node.ok);
+
+        let assert_node = send_request(
+            &socket,
+            AutomationRequest {
+                id: "assert-node".to_string(),
+                method: "assert_node".to_string(),
+                params: json!({"node_id": "chat.send", "enabled": true, "role": "button"}),
+            },
+        )
+        .await
+        .expect("assert node");
+        assert!(assert_node.ok);
+
+        let assert_text = send_request(
+            &socket,
+            AutomationRequest {
+                id: "assert-text".to_string(),
+                method: "assert_text".to_string(),
+                params: json!({"contains": "Connected to simulated jcode server."}),
+            },
+        )
+        .await
+        .expect("assert text");
+        assert!(assert_text.ok);
+
+        let assert_no_error = send_request(
+            &socket,
+            AutomationRequest {
+                id: "assert-no-error".to_string(),
+                method: "assert_no_error".to_string(),
+                params: Value::Null,
+            },
+        )
+        .await
+        .expect("assert no error");
+        assert!(assert_no_error.ok);
 
         let _ = send_request(
             &socket,

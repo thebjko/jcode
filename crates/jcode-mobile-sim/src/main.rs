@@ -41,6 +41,40 @@ enum Command {
         #[arg(long)]
         socket: Option<PathBuf>,
     },
+    FindNode {
+        #[arg(long)]
+        socket: Option<PathBuf>,
+        node_id: String,
+    },
+    AssertScreen {
+        #[arg(long)]
+        socket: Option<PathBuf>,
+        screen: String,
+    },
+    AssertText {
+        #[arg(long)]
+        socket: Option<PathBuf>,
+        contains: String,
+    },
+    AssertNode {
+        #[arg(long)]
+        socket: Option<PathBuf>,
+        node_id: String,
+        #[arg(long)]
+        visible: Option<bool>,
+        #[arg(long)]
+        enabled: Option<bool>,
+        #[arg(long)]
+        role: Option<String>,
+        #[arg(long)]
+        label: Option<String>,
+        #[arg(long)]
+        value: Option<String>,
+    },
+    AssertNoError {
+        #[arg(long)]
+        socket: Option<PathBuf>,
+    },
     Log {
         #[arg(long)]
         socket: Option<PathBuf>,
@@ -99,6 +133,56 @@ async fn main() -> Result<()> {
         Command::Tree { socket } => {
             print_result(send_simple(&resolve_socket(socket), "tree", Value::Null).await?)
         }
+        Command::FindNode { socket, node_id } => print_result(
+            send_simple(
+                &resolve_socket(socket),
+                "find_node",
+                json!({ "node_id": node_id }),
+            )
+            .await?,
+        ),
+        Command::AssertScreen { socket, screen } => print_result(
+            send_simple(
+                &resolve_socket(socket),
+                "assert_screen",
+                json!({ "screen": screen }),
+            )
+            .await?,
+        ),
+        Command::AssertText { socket, contains } => print_result(
+            send_simple(
+                &resolve_socket(socket),
+                "assert_text",
+                json!({ "contains": contains }),
+            )
+            .await?,
+        ),
+        Command::AssertNode {
+            socket,
+            node_id,
+            visible,
+            enabled,
+            role,
+            label,
+            value,
+        } => print_result(
+            send_simple(
+                &resolve_socket(socket),
+                "assert_node",
+                json!({
+                    "node_id": node_id,
+                    "visible": visible,
+                    "enabled": enabled,
+                    "role": role,
+                    "label": label,
+                    "value": value,
+                }),
+            )
+            .await?,
+        ),
+        Command::AssertNoError { socket } => print_result(
+            send_simple(&resolve_socket(socket), "assert_no_error", Value::Null).await?,
+        ),
         Command::Log { socket, limit } => print_result(
             send_simple(&resolve_socket(socket), "log", json!({ "limit": limit })).await?,
         ),
