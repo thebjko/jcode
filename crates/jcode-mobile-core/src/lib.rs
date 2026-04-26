@@ -858,11 +858,11 @@ mod tests {
             node_id: "chat.send".to_string(),
         });
 
-        let last = store
-            .state()
-            .messages
-            .last()
-            .expect("assistant reply present");
+        let last = store.state().messages.last();
+        assert!(last.is_some(), "assistant reply present");
+        let Some(last) = last else {
+            return;
+        };
         assert_eq!(last.role, MessageRole::Assistant);
         assert!(last.text.contains("hello simulator"));
         assert!(!store.state().is_processing);
@@ -890,8 +890,11 @@ mod tests {
             .root
             .children
             .iter()
-            .find(|node| node.id == "pair.submit")
-            .expect("pair submit node");
+            .find(|node| node.id == "pair.submit");
+        assert!(pair_submit.is_some(), "pair submit node");
+        let Some(pair_submit) = pair_submit else {
+            return;
+        };
         assert_eq!(
             pair_submit.accessibility_label.as_deref(),
             Some("Pair & Connect")
@@ -902,8 +905,11 @@ mod tests {
             .root
             .children
             .iter()
-            .find(|node| node.id == "pair.host")
-            .expect("pair host node");
+            .find(|node| node.id == "pair.host");
+        assert!(pair_host.is_some(), "pair host node");
+        let Some(pair_host) = pair_host else {
+            return;
+        };
         assert!(pair_host.supported_actions.contains(&UiNodeAction::SetText));
         assert!(
             pair_host

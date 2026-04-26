@@ -321,8 +321,13 @@ mod tests {
             content: "hello".to_string(),
             images: vec![("image/jpeg".to_string(), "abc".to_string())],
         };
+        let value = serde_json::to_value(request);
+        assert!(value.is_ok(), "request should serialize");
+        let Ok(value) = value else {
+            return;
+        };
         assert_eq!(
-            serde_json::to_value(request).unwrap(),
+            value,
             json!({"type":"message","id":7,"content":"hello","images":[["image/jpeg","abc"]]})
         );
     }
@@ -333,16 +338,22 @@ mod tests {
             id: 1,
             working_dir: None,
         };
-        assert_eq!(
-            serde_json::to_value(request).unwrap(),
-            json!({"type":"subscribe","id":1})
-        );
+        let value = serde_json::to_value(request);
+        assert!(value.is_ok(), "request should serialize");
+        let Ok(value) = value else {
+            return;
+        };
+        assert_eq!(value, json!({"type":"subscribe","id":1}));
     }
 
     #[test]
     fn mobile_event_decodes_text_replace() {
-        let event: MobileServerEvent =
-            serde_json::from_value(json!({"type":"text_replace","text":"replacement"})).unwrap();
+        let event: Result<MobileServerEvent, _> =
+            serde_json::from_value(json!({"type":"text_replace","text":"replacement"}));
+        assert!(event.is_ok(), "text_replace event should decode");
+        let Ok(event) = event else {
+            return;
+        };
         assert_eq!(
             event,
             MobileServerEvent::TextReplace {
@@ -353,9 +364,19 @@ mod tests {
 
     #[test]
     fn history_payload_decodes_server_metadata() {
-        let event: MobileServerEvent = serde_json::from_value(json!({"type":"history","session_id":"s1","server_name":"jcode","provider_model":"gpt-5","available_models":["gpt-5","claude-sonnet-4"],"all_sessions":["s1","s2"],"messages":[{"role":"assistant","content":"hi"}]})).unwrap();
+        let event: Result<MobileServerEvent, _> = serde_json::from_value(
+            json!({"type":"history","session_id":"s1","server_name":"jcode","provider_model":"gpt-5","available_models":["gpt-5","claude-sonnet-4"],"all_sessions":["s1","s2"],"messages":[{"role":"assistant","content":"hi"}]}),
+        );
+        assert!(event.is_ok(), "history event should decode");
+        let Ok(event) = event else {
+            return;
+        };
+        assert!(
+            matches!(event, MobileServerEvent::History(_)),
+            "expected history event"
+        );
         let MobileServerEvent::History(payload) = event else {
-            panic!("expected history event");
+            return;
         };
         assert_eq!(payload.session_id, "s1");
         assert_eq!(payload.provider_model.as_deref(), Some("gpt-5"));
@@ -370,8 +391,13 @@ mod tests {
             device_name: "simulator".to_string(),
             apns_token: None,
         };
+        let value = serde_json::to_value(request);
+        assert!(value.is_ok(), "pair request should serialize");
+        let Ok(value) = value else {
+            return;
+        };
         assert_eq!(
-            serde_json::to_value(request).unwrap(),
+            value,
             json!({"code":"123456","device_id":"ios-test","device_name":"simulator"})
         );
     }

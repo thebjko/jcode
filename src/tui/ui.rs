@@ -2419,7 +2419,9 @@ mod draw_recovery;
 mod profile;
 #[path = "ui/url.rs"]
 mod url_regex_support;
-use self::copy_selection::{copy_selection_text_from_raw_lines, link_target_from_snapshot};
+use self::copy_selection::{
+    copy_point_from_snapshot, copy_selection_text_from_raw_lines, link_target_from_snapshot,
+};
 use self::display_width::{clamp_display_col, display_col_slice, line_display_width};
 use self::draw_recovery::render_recovered_panic_frame;
 use self::profile::{profile_enabled, record_profile};
@@ -2662,38 +2664,6 @@ pub(crate) fn record_side_pane_snapshot(
         content_area,
         visible_left_margins,
     );
-}
-
-fn copy_point_from_snapshot(
-    snapshot: &CopyViewportSnapshot,
-    column: u16,
-    row: u16,
-) -> Option<crate::tui::CopySelectionPoint> {
-    let area = snapshot.content_area;
-    if row < area.y
-        || row >= area.y.saturating_add(area.height)
-        || column < area.x
-        || column >= area.x.saturating_add(area.width)
-    {
-        return None;
-    }
-
-    let rel_row = row.saturating_sub(area.y) as usize;
-    let abs_line = snapshot.scroll.saturating_add(rel_row);
-    if abs_line >= snapshot.visible_end || abs_line >= snapshot.wrapped_plain_line_count() {
-        return None;
-    }
-
-    let left_margin = snapshot.left_margins.get(rel_row).copied().unwrap_or(0);
-    let content_x = area.x.saturating_add(left_margin);
-    let rel_col = column.saturating_sub(content_x) as usize;
-    let text = snapshot.wrapped_plain_line(abs_line)?;
-    let copy_start = snapshot.wrapped_copy_offset(abs_line).unwrap_or(0);
-    Some(crate::tui::CopySelectionPoint {
-        pane: snapshot.pane,
-        abs_line,
-        column: clamp_display_col(&text, rel_col).max(copy_start),
-    })
 }
 
 pub(crate) fn copy_point_from_screen(
