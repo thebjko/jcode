@@ -47,6 +47,7 @@ impl Tool for SkillTool {
         json!({
             "type": "object",
             "properties": {
+                "intent": super::intent_schema_property(),
                 "action": {
                     "type": "string",
                     "enum": ["load", "list", "reload", "reload_all", "read"],

@@ -182,6 +182,7 @@ impl Tool for AgentGrepTool {
         json!({
             "type": "object",
             "properties": {
+                "intent": super::intent_schema_property(),
                 "mode": {
                     "type": "string",
                     "enum": ["grep", "find", "outline", "trace"],

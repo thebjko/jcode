@@ -374,9 +374,10 @@ impl Tool for SelfDevTool {
         json!({
             "type": "object",
             "properties": {
+                "intent": super::intent_schema_property(),
                 "action": {
                     "type": "string",
-                        "enum": [
+                    "enum": [
                         "enter",
                         "build",
                         "cancel-build",

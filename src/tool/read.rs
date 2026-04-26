@@ -131,6 +131,7 @@ impl Tool for ReadTool {
             "type": "object",
             "required": ["file_path"],
             "properties": {
+                "intent": super::intent_schema_property(),
                 "file_path": {
                     "type": "string",
                     "description": "Path to a file."

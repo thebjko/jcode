@@ -46,6 +46,7 @@ impl Tool for WebSearchTool {
             "type": "object",
             "required": ["query"],
             "properties": {
+                "intent": super::intent_schema_property(),
                 "query": {
                     "type": "string",
                     "description": "Search query."

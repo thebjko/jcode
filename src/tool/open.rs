@@ -103,6 +103,7 @@ impl Tool for OpenTool {
             "type": "object",
             "required": ["target"],
             "properties": {
+                "intent": super::intent_schema_property(),
                 "action": {
                     "type": "string",
                     "enum": ["open", "reveal"],

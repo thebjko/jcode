@@ -42,6 +42,7 @@ impl Tool for EditTool {
             "type": "object",
             "required": ["file_path", "old_string", "new_string"],
             "properties": {
+                "intent": super::intent_schema_property(),
                 "file_path": {
                     "type": "string",
                     "description": "File path."

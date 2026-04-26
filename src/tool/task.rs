@@ -71,6 +71,7 @@ impl Tool for SubagentTool {
             "type": "object",
             "required": ["description", "prompt", "subagent_type"],
             "properties": {
+                "intent": super::intent_schema_property(),
                 "description": {
                     "type": "string",
                     "description": "Task description."

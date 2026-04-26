@@ -171,6 +171,7 @@ impl Tool for BrowserTool {
 
     fn parameters_schema(&self) -> Value {
         let mut properties = Map::new();
+        properties.insert("intent".into(), super::intent_schema_property());
         properties.insert(
             "action".into(),
             json!({

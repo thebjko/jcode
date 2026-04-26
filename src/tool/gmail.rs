@@ -65,6 +65,7 @@ impl Tool for GmailTool {
             "type": "object",
             "required": ["action"],
             "properties": {
+                "intent": super::intent_schema_property(),
                 "action": {
                     "type": "string",
                     "enum": ["search", "read", "list", "draft", "send", "send_draft", "threads", "thread", "labels", "trash", "modify_labels"],

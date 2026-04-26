@@ -33,6 +33,7 @@ impl Tool for TodoTool {
         json!({
             "type": "object",
             "properties": {
+                "intent": super::intent_schema_property(),
                 "todos": {
                     "type": "array",
                     "description": "Todo list to save.",

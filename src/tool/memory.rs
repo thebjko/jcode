@@ -91,6 +91,7 @@ impl Tool for MemoryTool {
         json!({
             "type": "object",
             "properties": {
+                "intent": super::intent_schema_property(),
                 "action": {
                     "type": "string",
                     "enum": ["remember", "recall", "search", "list", "forget", "tag", "link", "related"],

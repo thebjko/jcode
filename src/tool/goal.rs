@@ -116,6 +116,7 @@ impl Tool for GoalTool {
         "type": "object",
         "required": ["action"],
             "properties": {
+                "intent": super::intent_schema_property(),
                 "action": {
                     "type": "string",
                     "enum": ["create", "list", "show", "resume", "update", "checkpoint", "focus"],

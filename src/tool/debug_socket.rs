@@ -53,6 +53,7 @@ impl Tool for DebugSocketTool {
         json!({
             "type": "object",
             "properties": {
+                "intent": super::intent_schema_property(),
                 "command": {
                     "type": "string",
                     "description": "Debug command."

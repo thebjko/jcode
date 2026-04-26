@@ -470,6 +470,7 @@ impl Tool for BgTool {
             "type": "object",
             "required": ["action"],
             "properties": {
+                "intent": super::intent_schema_property(),
                 "action": {
                     "type": "string",
                     "enum": ["list", "status", "output", "tail", "cancel", "cleanup", "watch", "delivery", "subscribe", "wait"],

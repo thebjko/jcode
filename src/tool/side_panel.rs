@@ -46,6 +46,7 @@ impl Tool for SidePanelTool {
             "type": "object",
             "required": ["action"],
             "properties": {
+                "intent": super::intent_schema_property(),
                 "action": {
                     "type": "string",
                     "enum": ["status", "write", "append", "load", "focus", "delete"],

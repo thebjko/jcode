@@ -39,6 +39,7 @@ impl Tool for WriteTool {
             "type": "object",
             "required": ["file_path", "content"],
             "properties": {
+                "intent": super::intent_schema_property(),
                 "file_path": {
                     "type": "string",
                     "description": "File path."

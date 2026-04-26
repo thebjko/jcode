@@ -43,6 +43,7 @@ impl Tool for MultiEditTool {
             "type": "object",
             "required": ["file_path", "edits"],
             "properties": {
+                "intent": super::intent_schema_property(),
                 "file_path": {
                     "type": "string",
                     "description": "The path to the file to edit"

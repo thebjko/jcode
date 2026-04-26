@@ -105,6 +105,7 @@ impl Tool for SessionSearchTool {
         json!({
             "type": "object",
             "properties": {
+                "intent": super::intent_schema_property(),
                 "query": {
                     "type": "string",
                     "description": "Search query."

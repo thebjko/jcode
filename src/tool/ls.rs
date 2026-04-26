@@ -57,6 +57,7 @@ impl Tool for LsTool {
         json!({
             "type": "object",
             "properties": {
+                "intent": super::intent_schema_property(),
                 "path": {
                     "type": "string",
                     "description": "Directory path."

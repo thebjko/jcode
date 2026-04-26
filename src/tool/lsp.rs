@@ -48,6 +48,7 @@ impl Tool for LspTool {
             "type": "object",
             "required": ["operation", "file_path", "line", "character"],
             "properties": {
+                "intent": super::intent_schema_property(),
                 "operation": {
                     "type": "string",
                     "enum": OPERATIONS,

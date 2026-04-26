@@ -50,6 +50,7 @@ impl Tool for GrepTool {
             "type": "object",
             "required": ["pattern"],
             "properties": {
+                "intent": super::intent_schema_property(),
                 "pattern": {
                     "type": "string",
                     "description": "Regex pattern."

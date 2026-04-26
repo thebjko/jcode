@@ -56,6 +56,7 @@ impl Tool for McpManagementTool {
         json!({
             "type": "object",
             "properties": {
+                "intent": super::intent_schema_property(),
                 "action": {
                     "type": "string",
                     "enum": ["list", "connect", "disconnect", "reload"],

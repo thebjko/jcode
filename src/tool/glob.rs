@@ -38,6 +38,7 @@ impl Tool for GlobTool {
             "type": "object",
             "required": ["pattern"],
             "properties": {
+                "intent": super::intent_schema_property(),
                 "pattern": {
                     "type": "string",
                     "description": "Glob pattern."

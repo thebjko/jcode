@@ -521,6 +521,7 @@ impl Tool for BashTool {
             "type": "object",
             "required": ["command"],
             "properties": {
+                "intent": super::intent_schema_property(),
                 "command": {
                     "type": "string",
                     "description": cmd_desc

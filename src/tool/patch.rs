@@ -49,6 +49,7 @@ impl Tool for PatchTool {
             "type": "object",
             "required": ["patch_text"],
             "properties": {
+                "intent": super::intent_schema_property(),
                 "patch_text": {
                     "type": "string",
                     "description": "Patch text."

@@ -33,6 +33,7 @@ impl Tool for InvalidTool {
             "type": "object",
             "required": ["tool", "error"],
             "properties": {
+                "intent": super::intent_schema_property(),
                 "tool": {
                     "type": "string",
                     "description": "Tool name."

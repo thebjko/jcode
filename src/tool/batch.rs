@@ -14,6 +14,7 @@ pub(crate) fn generic_batch_schema() -> Value {
         "type": "object",
         "required": ["tool_calls"],
         "properties": {
+            "intent": super::intent_schema_property(),
             "tool_calls": {
                 "type": "array",
                 "items": {

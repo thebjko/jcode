@@ -46,6 +46,7 @@ impl Tool for WebFetchTool {
             "type": "object",
             "required": ["url"],
             "properties": {
+                "intent": super::intent_schema_property(),
                 "url": {
                     "type": "string",
                     "description": "URL."
