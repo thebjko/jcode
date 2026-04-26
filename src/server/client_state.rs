@@ -2,8 +2,10 @@ use super::ClientConnectionInfo;
 use super::server_has_newer_binary;
 use crate::agent::Agent;
 use crate::bus::Bus;
+use crate::message::{ContentBlock, Role};
 use crate::protocol::{ServerEvent, SessionActivitySnapshot, encode_event};
 use crate::provider::Provider;
+use crate::session::{Session, SessionStatus};
 use crate::transport::WriteHalf;
 use anyhow::Result;
 use std::collections::{BTreeMap, HashMap};
@@ -19,6 +21,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::{Mutex, RwLock};
 
 const ATTACH_MODEL_PREFETCH_DEBOUNCE_SECS: u64 = 15;
+const RELOAD_RESTORE_MARKER_MAX_AGE: Duration = Duration::from_secs(60);
 
 static LAST_ATTACH_MODEL_PREFETCH: LazyLock<StdMutex<HashMap<String, Instant>>> =
     LazyLock::new(|| StdMutex::new(HashMap::new()));
@@ -148,12 +151,81 @@ fn history_reload_recovery_snapshot(
     let reload_ctx = crate::tool::selfdev::ReloadContext::peek_for_session(session_id)
         .ok()
         .flatten();
-    crate::tool::selfdev::ReloadContext::recovery_directive_for_session(
+    let inferred_interrupted = was_interrupted
+        .unwrap_or_else(|| infer_persisted_session_interrupted_by_reload(session_id));
+    let directive = crate::tool::selfdev::ReloadContext::recovery_directive_for_session(
         session_id,
         reload_ctx.as_ref(),
-        was_interrupted.unwrap_or(false),
+        inferred_interrupted,
         None,
-    )
+    );
+    crate::logging::info(&format!(
+        "history_reload_recovery_snapshot: session={} explicit_was_interrupted={:?} inferred_was_interrupted={} has_reload_ctx={} directive={}",
+        session_id,
+        was_interrupted,
+        inferred_interrupted,
+        reload_ctx.is_some(),
+        directive.is_some()
+    ));
+    directive
+}
+
+fn persisted_session_has_reload_interruption_marker(session: &Session) -> bool {
+    let Some(last) = session.messages.last() else {
+        return false;
+    };
+
+    last.content.iter().any(|block| match block {
+        ContentBlock::Text { text, .. } => {
+            text.ends_with("[generation interrupted - server reloading]")
+        }
+        ContentBlock::ToolResult {
+            content, is_error, ..
+        } => {
+            content == "Reload initiated. Process restarting..."
+                || (is_error.unwrap_or(false)
+                    && (content.contains("interrupted by server reload")
+                        || content.contains("Skipped - server reloading")))
+        }
+        _ => false,
+    })
+}
+
+fn infer_persisted_session_interrupted_by_reload(session_id: &str) -> bool {
+    let session = match Session::load_for_remote_startup(session_id)
+        .or_else(|_| Session::load_startup_stub(session_id))
+    {
+        Ok(session) => session,
+        Err(err) => {
+            crate::logging::warn(&format!(
+                "history_reload_recovery_snapshot: could not inspect persisted session {} for reload interruption fallback: {}",
+                session_id, err
+            ));
+            return false;
+        }
+    };
+
+    let last_is_user = session
+        .messages
+        .last()
+        .map(|message| message.role == Role::User)
+        .unwrap_or(false);
+    let marker_active = crate::server::reload_marker_active(RELOAD_RESTORE_MARKER_MAX_AGE);
+    let interrupted = matches!(session.status, SessionStatus::Crashed { .. })
+        || (matches!(session.status, SessionStatus::Active) && last_is_user && marker_active)
+        || (matches!(session.status, SessionStatus::Closed) && last_is_user && marker_active)
+        || persisted_session_has_reload_interruption_marker(&session);
+
+    crate::logging::info(&format!(
+        "history_reload_recovery_snapshot: fallback inspect session={} status={} last_is_user={} marker_active={} interrupted={}",
+        session_id,
+        session.status.display(),
+        last_is_user,
+        marker_active,
+        interrupted
+    ));
+
+    interrupted
 }
 
 #[expect(
@@ -766,5 +838,96 @@ mod tests {
         } else {
             crate::env::remove_var("JCODE_HOME");
         }
+    }
+
+    struct ReloadHistoryEnvGuard {
+        prev_home: Option<std::ffi::OsString>,
+        prev_runtime: Option<std::ffi::OsString>,
+    }
+
+    impl ReloadHistoryEnvGuard {
+        fn new(home: &std::path::Path, runtime: &std::path::Path) -> Self {
+            let prev_home = std::env::var_os("JCODE_HOME");
+            let prev_runtime = std::env::var_os("JCODE_RUNTIME_DIR");
+            crate::env::set_var("JCODE_HOME", home);
+            crate::env::set_var("JCODE_RUNTIME_DIR", runtime);
+            Self {
+                prev_home,
+                prev_runtime,
+            }
+        }
+    }
+
+    impl Drop for ReloadHistoryEnvGuard {
+        fn drop(&mut self) {
+            crate::server::clear_reload_marker();
+            if let Some(prev_home) = self.prev_home.take() {
+                crate::env::set_var("JCODE_HOME", prev_home);
+            } else {
+                crate::env::remove_var("JCODE_HOME");
+            }
+            if let Some(prev_runtime) = self.prev_runtime.take() {
+                crate::env::set_var("JCODE_RUNTIME_DIR", prev_runtime);
+            } else {
+                crate::env::remove_var("JCODE_RUNTIME_DIR");
+            }
+        }
+    }
+
+    fn write_pending_user_session(
+        session_id: &str,
+        status: crate::session::SessionStatus,
+    ) -> Result<()> {
+        let mut session =
+            crate::session::Session::create_with_id(session_id.to_string(), None, None);
+        session.status = status;
+        session.add_message(
+            crate::message::Role::User,
+            vec![crate::message::ContentBlock::Text {
+                text: "continue this after reload".to_string(),
+                cache_control: None,
+            }],
+        );
+        session.save()
+    }
+
+    #[test]
+    fn history_reload_recovery_infers_pending_active_user_turn_during_reload() -> Result<()> {
+        let _lock = crate::storage::lock_test_env();
+        let home = tempfile::TempDir::new()?;
+        let runtime = tempfile::TempDir::new()?;
+        let _guard = ReloadHistoryEnvGuard::new(home.path(), runtime.path());
+        let session_id = "session_history_reload_fallback";
+        write_pending_user_session(session_id, crate::session::SessionStatus::Active)?;
+        crate::server::write_reload_state(
+            "reload-history-fallback",
+            "test-hash",
+            crate::server::ReloadPhase::SocketReady,
+            Some(session_id.to_string()),
+        );
+
+        let snapshot = super::history_reload_recovery_snapshot(session_id, None)
+            .expect("pending user turn during reload should get recovery directive");
+
+        assert!(
+            snapshot
+                .continuation_message
+                .contains("interrupted by a server reload")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn history_reload_recovery_does_not_infer_pending_user_turn_without_reload_marker() -> Result<()>
+    {
+        let _lock = crate::storage::lock_test_env();
+        let home = tempfile::TempDir::new()?;
+        let runtime = tempfile::TempDir::new()?;
+        let _guard = ReloadHistoryEnvGuard::new(home.path(), runtime.path());
+        let session_id = "session_history_no_reload_fallback";
+        write_pending_user_session(session_id, crate::session::SessionStatus::Active)?;
+
+        assert!(super::history_reload_recovery_snapshot(session_id, None).is_none());
+        Ok(())
     }
 }
