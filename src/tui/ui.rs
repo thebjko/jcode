@@ -2426,7 +2426,7 @@ struct CopyViewportSnapshots {
 static LAST_COPY_VIEWPORT: OnceLock<Mutex<CopyViewportSnapshots>> = OnceLock::new();
 #[path = "ui/url.rs"]
 mod url_regex_support;
-use self::url_regex_support::url_regex;
+use self::url_regex_support::{trim_url_candidate, url_regex};
 
 #[cfg(not(test))]
 fn copy_viewport_state() -> &'static Mutex<CopyViewportSnapshots> {
@@ -2950,29 +2950,6 @@ fn raw_selection_point(
                 .saturating_sub(display_copy_start)
                 .min(segment_width),
     })
-}
-
-fn trim_url_candidate(candidate: &str) -> &str {
-    let mut trimmed = candidate;
-    loop {
-        let next = if trimmed.ends_with(['.', ',', ';', ':', '!', '?'])
-            || (trimmed.ends_with(')')
-                && trimmed.matches(')').count() > trimmed.matches('(').count())
-            || (trimmed.ends_with(']')
-                && trimmed.matches(']').count() > trimmed.matches('[').count())
-            || (trimmed.ends_with('}')
-                && trimmed.matches('}').count() > trimmed.matches('{').count())
-        {
-            &trimmed[..trimmed.len() - 1]
-        } else {
-            trimmed
-        };
-
-        if next.len() == trimmed.len() {
-            return trimmed;
-        }
-        trimmed = next;
-    }
 }
 
 fn link_target_from_snapshot(
