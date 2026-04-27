@@ -54,7 +54,6 @@ pub(super) use server_events::handle_server_event;
 
 const CONNECTION_MESSAGE_TITLE: &str = "Connection";
 const RELOAD_MARKER_MAX_AGE: Duration = Duration::from_secs(30);
-
 pub(super) enum RemoteEventOutcome {
     Continue,
     Reconnect,
