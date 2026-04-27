@@ -453,9 +453,74 @@ pub struct DispatchReport {
     pub final_state: SimulatorState,
 }
 
+pub const REPLAY_TRACE_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReplayTrace {
+    pub schema_version: u32,
+    pub name: String,
+    pub initial_state: SimulatorState,
+    pub actions: Vec<SimulatorAction>,
+    pub transitions: Vec<TransitionRecord>,
+    pub effects: Vec<EffectRecord>,
+    pub final_state: SimulatorState,
+}
+
+impl ReplayTrace {
+    pub fn record(
+        name: impl Into<String>,
+        initial_state: SimulatorState,
+        actions: Vec<SimulatorAction>,
+    ) -> Self {
+        let mut store = SimulatorStore::new(initial_state.clone());
+        for action in actions.iter().cloned() {
+            store.dispatch(action);
+        }
+        Self {
+            schema_version: REPLAY_TRACE_SCHEMA_VERSION,
+            name: name.into(),
+            initial_state,
+            actions,
+            transitions: store.transition_log().to_vec(),
+            effects: store.effect_log().to_vec(),
+            final_state: store.state().clone(),
+        }
+    }
+
+    pub fn replay(&self) -> Self {
+        Self::record(
+            self.name.clone(),
+            self.initial_state.clone(),
+            self.actions.clone(),
+        )
+    }
+
+    pub fn assert_replays(&self) -> anyhow::Result<()> {
+        if self.schema_version != REPLAY_TRACE_SCHEMA_VERSION {
+            anyhow::bail!(
+                "unsupported replay trace schema version {}, expected {}",
+                self.schema_version,
+                REPLAY_TRACE_SCHEMA_VERSION
+            );
+        }
+        let replayed = self.replay();
+        if &replayed != self {
+            anyhow::bail!(
+                "replay trace mismatch for {}\nexpected:\n{}\nactual:\n{}",
+                self.name,
+                serde_json::to_string_pretty(self)?,
+                serde_json::to_string_pretty(&replayed)?
+            );
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SimulatorStore {
+    initial_state: SimulatorState,
     state: SimulatorState,
+    action_log: Vec<SimulatorAction>,
     transition_log: Vec<TransitionRecord>,
     effect_log: Vec<EffectRecord>,
     next_seq: u64,
@@ -471,7 +536,9 @@ impl Default for SimulatorStore {
 impl SimulatorStore {
     pub fn new(initial_state: SimulatorState) -> Self {
         Self {
+            initial_state: initial_state.clone(),
             state: initial_state,
+            action_log: Vec::new(),
             transition_log: Vec::new(),
             effect_log: Vec::new(),
             next_seq: 1,
@@ -485,6 +552,10 @@ impl SimulatorStore {
 
     pub fn transition_log(&self) -> &[TransitionRecord] {
         &self.transition_log
+    }
+
+    pub fn action_log(&self) -> &[SimulatorAction] {
+        &self.action_log
     }
 
     pub fn effect_log(&self) -> &[EffectRecord] {
@@ -507,7 +578,20 @@ impl SimulatorStore {
         Ok(serde_json::to_string_pretty(&self.transition_log)?)
     }
 
+    pub fn replay_trace(&self, name: impl Into<String>) -> ReplayTrace {
+        ReplayTrace {
+            schema_version: REPLAY_TRACE_SCHEMA_VERSION,
+            name: name.into(),
+            initial_state: self.initial_state.clone(),
+            actions: self.action_log.clone(),
+            transitions: self.transition_log.clone(),
+            effects: self.effect_log.clone(),
+            final_state: self.state.clone(),
+        }
+    }
+
     pub fn dispatch(&mut self, action: SimulatorAction) -> DispatchReport {
+        self.action_log.push(action.clone());
         let mut pending = vec![action];
         let mut transitions = Vec::new();
         let mut effect_records = Vec::new();
@@ -1156,5 +1240,44 @@ mod tests {
                 .unwrap_or_default()
                 .contains("unreachable")
         );
+    }
+
+    #[test]
+    fn replay_trace_records_and_replays_deterministically() {
+        let actions = vec![
+            SimulatorAction::TapNode {
+                node_id: "pair.submit".to_string(),
+            },
+            SimulatorAction::SetDraft {
+                value: "hello replay".to_string(),
+            },
+            SimulatorAction::TapNode {
+                node_id: "chat.send".to_string(),
+            },
+        ];
+        let trace = ReplayTrace::record(
+            "pairing-ready-chat-send",
+            SimulatorState::for_scenario(ScenarioName::PairingReady),
+            actions,
+        );
+        trace.assert_replays().expect("trace replays");
+        assert_eq!(trace.actions.len(), 3);
+        assert_eq!(trace.transitions.len(), 7);
+        assert_eq!(trace.effects.len(), 2);
+        assert_eq!(trace.final_state.screen, Screen::Chat);
+        assert!(
+            trace
+                .final_state
+                .messages
+                .iter()
+                .any(|message| message.text.contains("hello replay"))
+        );
+    }
+
+    #[test]
+    fn golden_replay_trace_matches_core_behavior() {
+        let golden = include_str!("../tests/golden/pairing_ready_chat_send.json");
+        let trace: ReplayTrace = serde_json::from_str(golden).expect("parse golden replay trace");
+        trace.assert_replays().expect("golden trace replays");
     }
 }

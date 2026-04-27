@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{Parser, Subcommand};
-use jcode_mobile_core::{ScenarioName, SimulatorAction};
+use jcode_mobile_core::{ReplayTrace, ScenarioName, SimulatorAction};
 use jcode_mobile_sim::{
     AutomationRequest, default_socket_path, request_status, run_server, send_request,
 };
@@ -96,6 +96,22 @@ enum Command {
         socket: Option<PathBuf>,
         #[arg(long)]
         limit: Option<usize>,
+    },
+    ExportReplay {
+        #[arg(long)]
+        socket: Option<PathBuf>,
+        #[arg(long, default_value = "mobile-sim-replay")]
+        name: String,
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
+    AssertReplay {
+        path: PathBuf,
+    },
+    AssertLiveReplay {
+        #[arg(long)]
+        socket: Option<PathBuf>,
+        path: PathBuf,
     },
     Reset {
         #[arg(long)]
@@ -226,6 +242,31 @@ async fn main() -> Result<()> {
         Command::Log { socket, limit } => print_result(
             send_simple(&resolve_socket(socket), "log", json!({ "limit": limit })).await?,
         ),
+        Command::ExportReplay {
+            socket,
+            name,
+            output,
+        } => {
+            let replay =
+                send_simple(&resolve_socket(socket), "replay", json!({ "name": name })).await?;
+            write_or_print_json(replay, output)
+        }
+        Command::AssertReplay { path } => {
+            let trace = read_replay_trace(&path)?;
+            trace.assert_replays()?;
+            print_result(json!({ "name": trace.name, "matched": true }))
+        }
+        Command::AssertLiveReplay { socket, path } => {
+            let trace = read_replay_trace(&path)?;
+            print_result(
+                send_simple(
+                    &resolve_socket(socket),
+                    "assert_replay",
+                    json!({ "trace": trace }),
+                )
+                .await?,
+            )
+        }
         Command::Reset { socket } => {
             print_result(send_simple(&resolve_socket(socket), "reset", Value::Null).await?)
         }
@@ -313,6 +354,27 @@ async fn send_simple(socket: &Path, method: &str, params: Value) -> Result<Value
 fn print_result(value: Value) -> Result<()> {
     println!("{}", serde_json::to_string_pretty(&value)?);
     Ok(())
+}
+
+fn write_or_print_json(value: Value, output: Option<PathBuf>) -> Result<()> {
+    let json = serde_json::to_string_pretty(&value)?;
+    if let Some(output) = output {
+        if let Some(parent) = output.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("create replay output directory {}", parent.display()))?;
+        }
+        std::fs::write(&output, format!("{json}\n"))
+            .with_context(|| format!("write replay trace {}", output.display()))?;
+    } else {
+        println!("{json}");
+    }
+    Ok(())
+}
+
+fn read_replay_trace(path: &Path) -> Result<ReplayTrace> {
+    let json = std::fs::read_to_string(path)
+        .with_context(|| format!("read replay trace {}", path.display()))?;
+    serde_json::from_str(&json).with_context(|| format!("parse replay trace {}", path.display()))
 }
 
 async fn start_background(socket: Option<PathBuf>, scenario: &str) -> Result<()> {

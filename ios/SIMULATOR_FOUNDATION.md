@@ -172,6 +172,22 @@ cargo run -p jcode-mobile-sim -- log
 cargo run -p jcode-mobile-sim -- log --limit 10
 ```
 
+### Export and assert replay traces
+
+Replay traces capture the initial app state, top-level agent actions,
+transition log, effect log, and final state in a deterministic JSON bundle.
+They can be replayed without a live simulator process or compared against a
+running simulator.
+
+```bash
+cargo run -p jcode-mobile-sim -- export-replay --name pairing-ready-chat-send --output crates/jcode-mobile-core/tests/golden/pairing_ready_chat_send.json
+cargo run -p jcode-mobile-sim -- assert-replay crates/jcode-mobile-core/tests/golden/pairing_ready_chat_send.json
+cargo run -p jcode-mobile-sim -- assert-live-replay crates/jcode-mobile-core/tests/golden/pairing_ready_chat_send.json
+```
+
+The checked-in golden trace `crates/jcode-mobile-core/tests/golden/pairing_ready_chat_send.json`
+locks the current pairing-to-chat-send behavior for regression tests.
+
 ### Set fields
 
 ```bash
@@ -268,7 +284,7 @@ Not included yet:
 - visible desktop renderer
 - layout geometry export
 - screenshot export
-- richer fixtures/replay DSL
+- richer replay DSL beyond deterministic JSON action bundles
 - live render inspector
 - iOS host integration
 - shared custom renderer backend

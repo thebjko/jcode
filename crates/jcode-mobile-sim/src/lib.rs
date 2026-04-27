@@ -303,6 +303,53 @@ async fn handle_request(
                 false,
             ))
         }
+        "replay" => {
+            let name = request
+                .params
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("mobile-sim-replay");
+            let store = store.lock().await;
+            Ok((
+                serde_json::to_value(store.replay_trace(name)).unwrap_or(Value::Null),
+                false,
+            ))
+        }
+        "assert_replay" => {
+            let trace_value = request
+                .params
+                .get("trace")
+                .cloned()
+                .ok_or_else(|| anyhow!("missing trace field"));
+            match trace_value.and_then(|value| {
+                serde_json::from_value::<jcode_mobile_core::ReplayTrace>(value).map_err(Into::into)
+            }) {
+                Ok(expected) => match expected.assert_replays() {
+                    Err(err) => Err(err),
+                    Ok(()) => {
+                        let store = store.lock().await;
+                        let actual = store.replay_trace(expected.name.clone());
+                        if actual == expected {
+                            Ok((json!({"name": expected.name, "matched": true}), false))
+                        } else {
+                            let expected_json = serde_json::to_string_pretty(&expected)
+                                .unwrap_or_else(|_| {
+                                    "<failed to encode expected trace>".to_string()
+                                });
+                            let actual_json = serde_json::to_string_pretty(&actual)
+                                .unwrap_or_else(|_| "<failed to encode actual trace>".to_string());
+                            Err(anyhow!(
+                                "live replay trace mismatch for {}\nexpected:\n{}\nactual:\n{}",
+                                expected.name,
+                                expected_json,
+                                actual_json
+                            ))
+                        }
+                    }
+                },
+                Err(err) => Err(err),
+            }
+        }
         "dispatch" => {
             let action_value = request
                 .params
@@ -668,6 +715,30 @@ mod tests {
         )
         .await?;
         assert!(assert_effect.ok);
+
+        let replay = send_request(
+            &socket,
+            AutomationRequest {
+                id: "replay".to_string(),
+                method: "replay".to_string(),
+                params: json!({"name": "automation-round-trip"}),
+            },
+        )
+        .await?;
+        assert!(replay.ok);
+        assert_eq!(replay.result["name"], "automation-round-trip");
+        let actions = replay.result["actions"].as_array().map_or(0, Vec::len);
+        assert!(actions >= 3, "replay includes top-level actions");
+        let assert_replay = send_request(
+            &socket,
+            AutomationRequest {
+                id: "assert-replay".to_string(),
+                method: "assert_replay".to_string(),
+                params: json!({"trace": replay.result}),
+            },
+        )
+        .await?;
+        assert!(assert_replay.ok);
 
         let _ = send_request(
             &socket,
