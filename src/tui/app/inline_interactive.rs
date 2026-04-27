@@ -1221,17 +1221,73 @@ impl App {
     }
 
     pub(super) fn open_session_picker(&mut self) {
-        match session_picker::load_sessions_grouped() {
-            Ok((server_groups, orphan_sessions)) => {
-                let picker = SessionPicker::new_grouped(server_groups, orphan_sessions);
-                self.session_picker_overlay = Some(RefCell::new(picker));
-                self.session_picker_mode = SessionPickerMode::Resume;
+        let picker = SessionPicker::loading();
+        self.session_picker_overlay = Some(RefCell::new(picker));
+        self.session_picker_mode = SessionPickerMode::Resume;
+        self.set_status_notice("Loading sessions...");
+        self.start_session_picker_load();
+    }
+
+    fn start_session_picker_load(&mut self) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.pending_session_picker_load = Some(super::PendingSessionPickerLoad { receiver: rx });
+
+        tokio::task::spawn_blocking(move || {
+            let result = session_picker::load_sessions_grouped();
+            let _ = tx.send(result);
+        });
+    }
+
+    pub(super) fn poll_session_picker_load(&mut self) -> bool {
+        let recv_result = {
+            let Some(pending) = self.pending_session_picker_load.as_ref() else {
+                return false;
+            };
+            pending.receiver.try_recv()
+        };
+
+        match recv_result {
+            Ok(Ok((server_groups, orphan_sessions))) => {
+                self.pending_session_picker_load = None;
+                if self.session_picker_overlay.is_some()
+                    && self.session_picker_mode == SessionPickerMode::Resume
+                {
+                    let picker = SessionPicker::new_grouped(server_groups, orphan_sessions);
+                    self.session_picker_overlay = Some(RefCell::new(picker));
+                    self.set_status_notice("Sessions loaded");
+                    return true;
+                }
+                false
             }
-            Err(e) => {
-                self.push_display_message(DisplayMessage::error(format!(
-                    "Failed to load sessions: {}",
-                    e
-                )));
+            Ok(Err(e)) => {
+                self.pending_session_picker_load = None;
+                if self.session_picker_overlay.is_some()
+                    && self.session_picker_mode == SessionPickerMode::Resume
+                {
+                    self.session_picker_overlay = None;
+                    self.push_display_message(DisplayMessage::error(format!(
+                        "Failed to load sessions: {}",
+                        e
+                    )));
+                    self.set_status_notice("Session load failed");
+                    return true;
+                }
+                false
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => false,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.pending_session_picker_load = None;
+                if self.session_picker_overlay.is_some()
+                    && self.session_picker_mode == SessionPickerMode::Resume
+                {
+                    self.session_picker_overlay = None;
+                    self.push_display_message(DisplayMessage::error(
+                        "Session loading stopped before returning a result.".to_string(),
+                    ));
+                    self.set_status_notice("Session load failed");
+                    return true;
+                }
+                false
             }
         }
     }

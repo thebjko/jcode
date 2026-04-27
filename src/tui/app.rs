@@ -101,6 +101,15 @@ struct PendingLocalTransfer {
     receiver: mpsc::Receiver<anyhow::Result<PreparedTransferSession>>,
 }
 
+struct PendingSessionPickerLoad {
+    receiver: mpsc::Receiver<
+        anyhow::Result<(
+            Vec<super::session_picker::ServerGroup>,
+            Vec<super::session_picker::SessionInfo>,
+        )>,
+    >,
+}
+
 #[derive(Debug, Clone)]
 struct PreparedTransferSession {
     session_id: String,
@@ -739,6 +748,7 @@ pub struct App {
     /// Session picker overlay (None = not visible)
     session_picker_overlay: Option<RefCell<super::session_picker::SessionPicker>>,
     session_picker_mode: SessionPickerMode,
+    pending_session_picker_load: Option<PendingSessionPickerLoad>,
     catchup_return_stack: Vec<String>,
     pending_catchup_resume: Option<PendingCatchupResume>,
     in_flight_catchup_resume: Option<PendingCatchupResume>,

@@ -337,6 +337,8 @@ pub struct SessionPicker {
     cached_search_query: String,
     /// Session refs that matched the cached search query.
     cached_search_refs: Vec<SessionRef>,
+    /// Lightweight placeholder shown while the picker list is loading.
+    loading_message: Option<String>,
 }
 
 impl SessionPicker {
@@ -373,9 +375,41 @@ impl SessionPicker {
             last_mouse_scroll: None,
             cached_search_query: String::new(),
             cached_search_refs: Vec::new(),
+            loading_message: None,
         };
         picker.rebuild_items();
         picker
+    }
+
+    /// Create a lightweight picker that can render immediately while sessions
+    /// are scanned in the background.
+    pub fn loading() -> Self {
+        Self {
+            items: Vec::new(),
+            visible_sessions: Vec::new(),
+            all_sessions: Vec::new(),
+            all_server_groups: Vec::new(),
+            all_orphan_sessions: Vec::new(),
+            item_to_session: Vec::new(),
+            list_state: ListState::default(),
+            scroll_offset: 0,
+            auto_scroll_preview: true,
+            crashed_sessions: None,
+            crashed_session_ids: HashSet::new(),
+            last_list_area: None,
+            last_preview_area: None,
+            show_test_sessions: false,
+            filter_mode: SessionFilterMode::All,
+            search_query: String::new(),
+            search_active: false,
+            hidden_test_count: 0,
+            focus: PaneFocus::Sessions,
+            selected_session_ids: HashSet::new(),
+            last_mouse_scroll: None,
+            cached_search_query: String::new(),
+            cached_search_refs: Vec::new(),
+            loading_message: Some("Loading sessions…".to_string()),
+        }
     }
 
     pub fn debug_memory_profile(&self) -> serde_json::Value {
@@ -410,6 +444,11 @@ impl SessionPicker {
             .map(|value| value.capacity())
             .sum();
         let search_query_bytes = self.search_query.capacity();
+        let loading_message_bytes = self
+            .loading_message
+            .as_ref()
+            .map(|message| message.capacity())
+            .unwrap_or(0);
         let total_estimate_bytes = items_estimate_bytes
             + visible_sessions_estimate_bytes
             + all_sessions_estimate_bytes
@@ -418,7 +457,8 @@ impl SessionPicker {
             + item_to_session_estimate_bytes
             + crashed_session_ids_estimate_bytes
             + selected_session_ids_estimate_bytes
-            + search_query_bytes;
+            + search_query_bytes
+            + loading_message_bytes;
 
         serde_json::json!({
             "items_count": self.items.len(),
@@ -429,6 +469,7 @@ impl SessionPicker {
             "crashed_session_ids_count": self.crashed_session_ids.len(),
             "selected_session_ids_count": self.selected_session_ids.len(),
             "search_query_bytes": search_query_bytes,
+            "loading_message_bytes": loading_message_bytes,
             "items_estimate_bytes": items_estimate_bytes,
             "visible_sessions_estimate_bytes": visible_sessions_estimate_bytes,
             "all_sessions_estimate_bytes": all_sessions_estimate_bytes,
@@ -499,6 +540,7 @@ impl SessionPicker {
             last_mouse_scroll: None,
             cached_search_query: String::new(),
             cached_search_refs: Vec::new(),
+            loading_message: None,
         };
         picker.rebuild_items();
         picker
@@ -724,6 +766,16 @@ impl SessionPicker {
         code: KeyCode,
         modifiers: KeyModifiers,
     ) -> Result<OverlayAction> {
+        if self.loading_message.is_some() {
+            return match code {
+                KeyCode::Esc | KeyCode::Char('q') => Ok(OverlayAction::Close),
+                KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
+                    Ok(OverlayAction::Close)
+                }
+                _ => Ok(OverlayAction::Continue),
+            };
+        }
+
         if self.search_active {
             match code {
                 KeyCode::Esc => {
@@ -821,6 +873,34 @@ impl SessionPicker {
         } else {
             rgb(50, 50, 50)
         };
+
+        if let Some(message) = self.loading_message.as_deref() {
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .title(" Preview ")
+                .border_style(Style::default().fg(empty_border_color));
+            let body = vec![
+                Line::from(vec![
+                    Span::styled("⏳ ", Style::default().fg(rgb(255, 200, 100))),
+                    Span::styled(
+                        message.to_string(),
+                        Style::default()
+                            .fg(Color::White)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]),
+                Line::from(""),
+                Line::from(vec![Span::styled(
+                    "The picker will update as soon as the session index is ready.",
+                    Style::default().fg(Color::DarkGray),
+                )]),
+            ];
+            let paragraph = Paragraph::new(body).block(block);
+            frame.render_widget(paragraph, area);
+            return;
+        }
+
         self.ensure_selected_preview_loaded();
 
         let Some(session) = self.selected_session().cloned() else {
