@@ -473,6 +473,8 @@ impl App {
     pub(super) fn open_model_picker(&mut self) {
         use std::collections::BTreeMap;
 
+        let picker_started = std::time::Instant::now();
+
         let current_model = if self.is_remote {
             self.remote_provider_model
                 .clone()
@@ -496,6 +498,7 @@ impl App {
             }
         };
 
+        let routes_started = std::time::Instant::now();
         let routes: Vec<crate::provider::ModelRoute> = if self.is_remote {
             if !self.remote_model_options.is_empty() {
                 self.remote_model_options.clone()
@@ -507,6 +510,7 @@ impl App {
         } else {
             self.provider.model_routes()
         };
+        let routes_ms = routes_started.elapsed().as_millis();
 
         let routes = if routes.is_empty() && self.is_remote && current_model != "unknown" {
             vec![crate::provider::ModelRoute {
@@ -532,6 +536,7 @@ impl App {
             return;
         }
 
+        let grouping_started = std::time::Instant::now();
         let mut model_order: Vec<String> = Vec::new();
         let mut model_options: BTreeMap<String, Vec<PickerOption>> = BTreeMap::new();
         for r in &routes {
@@ -549,6 +554,7 @@ impl App {
                     estimated_reference_cost_micros: r.estimated_reference_cost_micros(),
                 });
         }
+        let grouping_ms = grouping_started.elapsed().as_millis();
 
         fn route_sort_key(r: &PickerOption) -> (u8, u8, u64, String) {
             let avail = if r.available { 0 } else { 1 };
@@ -587,8 +593,10 @@ impl App {
                 .unwrap_or(usize::MAX)
         }
 
+        let timestamp_started = std::time::Instant::now();
         let openrouter_created_timestamps =
             crate::provider::openrouter::load_model_timestamp_index();
+        let timestamp_ms = timestamp_started.elapsed().as_millis();
         let openrouter_created_timestamp = |model: &str| {
             crate::provider::openrouter::model_created_timestamp_from_index(
                 model,
@@ -617,6 +625,7 @@ impl App {
         let available_efforts = self.provider.available_efforts();
         let is_openai = !available_efforts.is_empty();
 
+        let entries_started = std::time::Instant::now();
         let mut entries: Vec<PickerEntry> = Vec::new();
         for name in &model_order {
             let mut entry_routes = model_options.remove(name).unwrap_or_default();
@@ -728,6 +737,24 @@ impl App {
                 .then(a_old.cmp(&b_old))
                 .then(a.name.cmp(&b.name))
         });
+        let entries_ms = entries_started.elapsed().as_millis();
+        let total_ms = picker_started.elapsed().as_millis();
+
+        if total_ms >= 250 || std::env::var("JCODE_LOG_MODEL_PICKER_TIMING").is_ok() {
+            crate::logging::info(&format!(
+                "[TIMING] model_picker_open: remote={}, simplified={}, routes={}, models={}, entries={}, routes={}ms, grouping={}ms, timestamps={}ms, entries_sort={}ms, total={}ms",
+                self.is_remote,
+                crate::perf::tui_policy().simplified_model_picker,
+                routes.len(),
+                model_order.len(),
+                entries.len(),
+                routes_ms,
+                grouping_ms,
+                timestamp_ms,
+                entries_ms,
+                total_ms,
+            ));
+        }
 
         self.inline_view_state = None;
         self.inline_interactive_state = Some(InlineInteractiveState {

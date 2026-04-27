@@ -1344,10 +1344,15 @@ impl Provider for MultiProvider {
     }
 
     fn model_routes(&self) -> Vec<ModelRoute> {
+        let routes_started = std::time::Instant::now();
         self.spawn_anthropic_catalog_refresh_if_needed();
         self.spawn_openai_catalog_refresh_if_needed();
 
         let mut routes = Vec::new();
+        let mut openrouter_models = 0usize;
+        let mut openrouter_endpoint_cache_hits = 0usize;
+        let mut openrouter_endpoint_routes = 0usize;
+        let mut openrouter_scheduled_endpoint_refreshes = 0usize;
         let has_oauth = self.has_claude_runtime();
         let has_api_key = std::env::var("ANTHROPIC_API_KEY").is_ok();
         let anthropic_models = if let Some(anthropic) = self.anthropic_provider() {
@@ -1490,6 +1495,7 @@ impl Provider for MultiProvider {
             let current_openrouter_model = openrouter.model();
             let mut scheduled_endpoint_refreshes = 0usize;
             for model in openrouter.available_models_display() {
+                openrouter_models += 1;
                 let cached = openrouter::load_endpoints_disk_cache_public(&model);
                 let cache_age = cached.as_ref().map(|(_, age)| *age);
                 if (model == current_openrouter_model || scheduled_endpoint_refreshes < 8)
@@ -1500,6 +1506,7 @@ impl Provider for MultiProvider {
                     )
                 {
                     scheduled_endpoint_refreshes += 1;
+                    openrouter_scheduled_endpoint_refreshes += 1;
                 }
                 let age_str = cached.as_ref().map(|(_, age)| {
                     if *age < 3600 {
@@ -1522,8 +1529,10 @@ impl Provider for MultiProvider {
                 ));
                 // Add per-provider routes from endpoints cache
                 if let Some((ref endpoints, _)) = cached {
+                    openrouter_endpoint_cache_hits += 1;
                     let stale_suffix = age_str.as_deref().unwrap_or("");
                     for ep in endpoints {
+                        openrouter_endpoint_routes += 1;
                         routes.push(build_openrouter_endpoint_route(
                             &model,
                             ep,
@@ -1552,7 +1561,9 @@ impl Provider for MultiProvider {
                 if let Some((endpoints, _)) =
                     openrouter::load_endpoints_disk_cache_public(&or_model)
                 {
+                    openrouter_endpoint_cache_hits += 1;
                     for ep in &endpoints {
+                        openrouter_endpoint_routes += 1;
                         routes.push(build_openrouter_endpoint_route(&model, ep, true, None));
                     }
                 } else {
@@ -1569,7 +1580,9 @@ impl Provider for MultiProvider {
                 if let Some((endpoints, _)) =
                     openrouter::load_endpoints_disk_cache_public(&or_model)
                 {
+                    openrouter_endpoint_cache_hits += 1;
                     for ep in &endpoints {
+                        openrouter_endpoint_routes += 1;
                         routes.push(build_openrouter_endpoint_route(model, ep, true, None));
                     }
                 } else {
@@ -1578,6 +1591,20 @@ impl Provider for MultiProvider {
                     ));
                 }
             }
+        }
+
+        let total_ms = routes_started.elapsed().as_millis();
+        if total_ms >= 250 || std::env::var("JCODE_LOG_MODEL_PICKER_TIMING").is_ok() {
+            crate::logging::info(&format!(
+                "[TIMING] model_routes: routes={}, openrouter_configured={}, openrouter_models={}, openrouter_endpoint_cache_hits={}, openrouter_endpoint_routes={}, openrouter_scheduled_endpoint_refreshes={}, total={}ms",
+                routes.len(),
+                has_openrouter,
+                openrouter_models,
+                openrouter_endpoint_cache_hits,
+                openrouter_endpoint_routes,
+                openrouter_scheduled_endpoint_refreshes,
+                total_ms,
+            ));
         }
 
         routes
