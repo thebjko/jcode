@@ -112,6 +112,7 @@ fn main() -> Result<()> {
 
 async fn run() -> Result<()> {
     let fullscreen = std::env::args().any(|arg| arg == "--fullscreen");
+    let workspace_mode = std::env::args().any(|arg| arg == "--workspace");
     let event_loop = EventLoop::new().context("failed to create event loop")?;
     let mut window_builder = WindowBuilder::new()
         .with_title("Jcode Desktop")
@@ -130,12 +131,17 @@ async fn run() -> Result<()> {
             .context("failed to create desktop window")?,
     ));
 
-    let session_cards = load_session_cards_for_desktop();
-    let mut workspace = Workspace::from_session_cards(session_cards);
-    if let Some(preferences) = load_desktop_preferences() {
-        workspace.apply_preferences(preferences);
-    }
-    window.set_title(&workspace.status_title());
+    let mut app = if workspace_mode {
+        let session_cards = load_session_cards_for_desktop();
+        let mut workspace = Workspace::from_session_cards(session_cards);
+        if let Some(preferences) = load_desktop_preferences() {
+            workspace.apply_preferences(preferences);
+        }
+        DesktopApp::Workspace(workspace)
+    } else {
+        DesktopApp::SingleSession(SingleSessionApp::new(load_primary_session_card()))
+    };
+    window.set_title(&app.status_title());
     let mut canvas = Canvas::new(window).await?;
     let mut modifiers = ModifiersState::empty();
 
@@ -160,23 +166,29 @@ async fn run() -> Result<()> {
                     if event.state == ElementState::Pressed =>
                 {
                     let key_input = to_key_input(&event.logical_key, modifiers);
-                    if key_input == KeyInput::RefreshSessions {
-                        workspace.replace_session_cards(load_session_cards_for_desktop());
-                        save_desktop_preferences(&workspace);
-                        window.set_title(&workspace.status_title());
+                    if key_input == KeyInput::RefreshSessions && app.is_workspace() {
+                        if let DesktopApp::Workspace(workspace) = &mut app {
+                            workspace.replace_session_cards(load_session_cards_for_desktop());
+                            save_desktop_preferences(workspace);
+                        }
+                        window.set_title(&app.status_title());
                         window.request_redraw();
                         return;
                     }
 
-                    match workspace.handle_key(key_input) {
+                    match app.handle_key(key_input) {
                         KeyOutcome::Exit => target.exit(),
                         KeyOutcome::Redraw => {
-                            save_desktop_preferences(&workspace);
-                            window.set_title(&workspace.status_title());
+                            if let DesktopApp::Workspace(workspace) = &app {
+                                save_desktop_preferences(workspace);
+                            }
+                            window.set_title(&app.status_title());
                             window.request_redraw();
                         }
                         KeyOutcome::OpenSession { session_id, title } => {
-                            save_desktop_preferences(&workspace);
+                            if let DesktopApp::Workspace(workspace) = &app {
+                                save_desktop_preferences(workspace);
+                            }
                             if let Err(error) =
                                 session_launch::launch_validated_resume_session(&session_id, &title)
                             {
@@ -190,9 +202,11 @@ async fn run() -> Result<()> {
                                 eprintln!("jcode-desktop: failed to spawn session: {error:#}");
                             } else {
                                 std::thread::sleep(SESSION_SPAWN_REFRESH_DELAY);
-                                workspace.replace_session_cards(load_session_cards_for_desktop());
-                                save_desktop_preferences(&workspace);
-                                window.set_title(&workspace.status_title());
+                                app.refresh_sessions();
+                                if let DesktopApp::Workspace(workspace) = &app {
+                                    save_desktop_preferences(workspace);
+                                }
+                                window.set_title(&app.status_title());
                                 window.request_redraw();
                             }
                         }
@@ -211,19 +225,20 @@ async fn run() -> Result<()> {
                                 );
                             } else {
                                 std::thread::sleep(SESSION_SPAWN_REFRESH_DELAY);
-                                workspace.replace_session_cards(load_session_cards_for_desktop());
-                                save_desktop_preferences(&workspace);
-                                window.set_title(&workspace.status_title());
+                                app.refresh_sessions();
+                                if let DesktopApp::Workspace(workspace) = &app {
+                                    save_desktop_preferences(workspace);
+                                }
+                                window.set_title(&app.status_title());
                                 window.request_redraw();
                             }
                         }
                         KeyOutcome::None => {}
                     }
                 }
-                WindowEvent::RedrawRequested => match canvas.render(
-                    &workspace,
-                    window.current_monitor().map(|monitor| monitor.size()),
-                ) {
+                WindowEvent::RedrawRequested => match canvas
+                    .render(&app, window.current_monitor().map(|monitor| monitor.size()))
+                {
                     Ok(animation_active) => {
                         if animation_active {
                             window.request_redraw();
@@ -276,6 +291,182 @@ fn load_desktop_preferences() -> Option<workspace::DesktopPreferences> {
 fn save_desktop_preferences(workspace: &Workspace) {
     if let Err(error) = desktop_prefs::save_preferences(&workspace.preferences()) {
         eprintln!("jcode-desktop: failed to save desktop preferences: {error:#}");
+    }
+}
+
+fn load_primary_session_card() -> Option<workspace::SessionCard> {
+    load_session_cards_for_desktop().into_iter().next()
+}
+
+enum DesktopApp {
+    SingleSession(SingleSessionApp),
+    Workspace(Workspace),
+}
+
+impl DesktopApp {
+    fn is_workspace(&self) -> bool {
+        matches!(self, Self::Workspace(_))
+    }
+
+    fn status_title(&self) -> String {
+        match self {
+            Self::SingleSession(app) => app.status_title(),
+            Self::Workspace(workspace) => workspace.status_title(),
+        }
+    }
+
+    fn handle_key(&mut self, key: KeyInput) -> KeyOutcome {
+        match self {
+            Self::SingleSession(app) => app.handle_key(key),
+            Self::Workspace(workspace) => workspace.handle_key(key),
+        }
+    }
+
+    fn refresh_sessions(&mut self) {
+        match self {
+            Self::SingleSession(app) => app.replace_session(load_primary_session_card()),
+            Self::Workspace(workspace) => {
+                workspace.replace_session_cards(load_session_cards_for_desktop())
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct SingleSessionApp {
+    mode: InputMode,
+    session: Option<workspace::SessionCard>,
+    draft: String,
+    detail_scroll: usize,
+}
+
+impl SingleSessionApp {
+    fn new(session: Option<workspace::SessionCard>) -> Self {
+        Self {
+            mode: InputMode::Navigation,
+            session,
+            draft: String::new(),
+            detail_scroll: 0,
+        }
+    }
+
+    fn replace_session(&mut self, session: Option<workspace::SessionCard>) {
+        self.session = session;
+        self.detail_scroll = 0;
+    }
+
+    fn status_title(&self) -> String {
+        let mode = match self.mode {
+            InputMode::Navigation => "NAV",
+            InputMode::Insert => "INSERT",
+        };
+        let title = self
+            .session
+            .as_ref()
+            .map(|session| session.title.as_str())
+            .unwrap_or("new session");
+        format!(
+            "Jcode Desktop · single session · {mode} · {title} · Ctrl+; spawn · Ctrl+R refresh · i insert · Esc quit · --workspace for Niri layout"
+        )
+    }
+
+    fn handle_key(&mut self, key: KeyInput) -> KeyOutcome {
+        match self.mode {
+            InputMode::Navigation => self.handle_navigation_key(key),
+            InputMode::Insert => self.handle_insert_key(key),
+        }
+    }
+
+    fn handle_navigation_key(&mut self, key: KeyInput) -> KeyOutcome {
+        match key {
+            KeyInput::Escape => KeyOutcome::Exit,
+            KeyInput::SpawnPanel => KeyOutcome::SpawnSession,
+            KeyInput::RefreshSessions => KeyOutcome::Redraw,
+            KeyInput::Enter => self.open_session(),
+            KeyInput::Character(text) if text == "i" => {
+                self.mode = InputMode::Insert;
+                KeyOutcome::Redraw
+            }
+            KeyInput::Character(text) if text == "o" || text == "O" => self.open_session(),
+            KeyInput::Character(text) if text == "j" => self.scroll_detail(1),
+            KeyInput::Character(text) if text == "k" => self.scroll_detail(-1),
+            KeyInput::Character(text) if text == "g" => {
+                self.detail_scroll = 0;
+                KeyOutcome::Redraw
+            }
+            KeyInput::Character(text) if text == "G" => {
+                self.detail_scroll = self.detail_line_count().saturating_sub(1);
+                KeyOutcome::Redraw
+            }
+            _ => KeyOutcome::None,
+        }
+    }
+
+    fn handle_insert_key(&mut self, key: KeyInput) -> KeyOutcome {
+        match key {
+            KeyInput::SpawnPanel => KeyOutcome::SpawnSession,
+            KeyInput::RefreshSessions => KeyOutcome::Redraw,
+            KeyInput::SubmitDraft => self.submit_draft(),
+            KeyInput::Escape => {
+                self.mode = InputMode::Navigation;
+                KeyOutcome::Redraw
+            }
+            KeyInput::Enter => {
+                self.draft.push('\n');
+                KeyOutcome::Redraw
+            }
+            KeyInput::Backspace => {
+                self.draft.pop();
+                KeyOutcome::Redraw
+            }
+            KeyInput::Character(text) => {
+                self.draft.push_str(&text);
+                KeyOutcome::Redraw
+            }
+            _ => KeyOutcome::None,
+        }
+    }
+
+    fn open_session(&self) -> KeyOutcome {
+        let Some(session) = &self.session else {
+            return KeyOutcome::SpawnSession;
+        };
+        KeyOutcome::OpenSession {
+            session_id: session.session_id.clone(),
+            title: session.title.clone(),
+        }
+    }
+
+    fn submit_draft(&mut self) -> KeyOutcome {
+        let message = self.draft.trim().to_string();
+        if message.is_empty() {
+            return KeyOutcome::None;
+        }
+        let Some(session) = &self.session else {
+            return KeyOutcome::None;
+        };
+        let session_id = session.session_id.clone();
+        let title = session.title.clone();
+        self.draft.clear();
+        self.mode = InputMode::Navigation;
+        KeyOutcome::SendDraft {
+            session_id,
+            title,
+            message,
+        }
+    }
+
+    fn detail_line_count(&self) -> usize {
+        single_session_lines(self.session.as_ref()).len()
+    }
+
+    fn scroll_detail(&mut self, delta: isize) -> KeyOutcome {
+        let max_scroll = self.detail_line_count().saturating_sub(1);
+        self.detail_scroll = self
+            .detail_scroll
+            .saturating_add_signed(delta)
+            .min(max_scroll);
+        KeyOutcome::Redraw
     }
 }
 
@@ -449,7 +640,7 @@ impl<'window> Canvas<'window> {
 
     fn render(
         &mut self,
-        workspace: &Workspace,
+        app: &DesktopApp,
         monitor_size: Option<PhysicalSize<u32>>,
     ) -> std::result::Result<bool, SurfaceError> {
         let frame = self.surface.get_current_texture()?;
@@ -462,12 +653,27 @@ impl<'window> Canvas<'window> {
                 label: Some("jcode-desktop-render-workspace"),
             });
         let now = Instant::now();
-        let target_layout = workspace_render_layout(workspace, self.size, monitor_size);
-        let render_layout = self.viewport_animation.frame(target_layout, now);
-        let focus_pulse = self.focus_pulse.frame(workspace.focused_id, now);
-        let animation_active =
-            self.viewport_animation.is_animating() || self.focus_pulse.is_animating();
-        let vertices = build_vertices(workspace, self.size, render_layout, focus_pulse);
+        let (vertices, animation_active) = match app {
+            DesktopApp::SingleSession(single_session) => {
+                let focus_pulse = self.focus_pulse.frame(1, now);
+                let animation_active = self.focus_pulse.is_animating();
+                (
+                    build_single_session_vertices(single_session, self.size, focus_pulse),
+                    animation_active,
+                )
+            }
+            DesktopApp::Workspace(workspace) => {
+                let target_layout = workspace_render_layout(workspace, self.size, monitor_size);
+                let render_layout = self.viewport_animation.frame(target_layout, now);
+                let focus_pulse = self.focus_pulse.frame(workspace.focused_id, now);
+                let animation_active =
+                    self.viewport_animation.is_animating() || self.focus_pulse.is_animating();
+                (
+                    build_vertices(workspace, self.size, render_layout, focus_pulse),
+                    animation_active,
+                )
+            }
+        };
         let vertex_buffer = self
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -680,6 +886,105 @@ fn ease_out_cubic(progress: f32) -> f32 {
 
 fn lerp(start: f32, end: f32, progress: f32) -> f32 {
     start + (end - start) * progress
+}
+
+fn build_single_session_vertices(
+    app: &SingleSessionApp,
+    size: PhysicalSize<u32>,
+    focus_pulse: f32,
+) -> Vec<Vertex> {
+    let width = size.width as f32;
+    let height = size.height as f32;
+    let mut vertices = Vec::new();
+
+    push_gradient_rect(
+        &mut vertices,
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width,
+            height,
+        },
+        BACKGROUND_TOP_LEFT,
+        BACKGROUND_BOTTOM_LEFT,
+        BACKGROUND_BOTTOM_RIGHT,
+        BACKGROUND_TOP_RIGHT,
+        size,
+    );
+
+    let rect = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: width.max(1.0),
+        height: height.max(1.0),
+    };
+    let surface = single_session_surface(app.session.as_ref());
+    push_surface(
+        &mut vertices,
+        rect,
+        surface.color_index,
+        true,
+        focus_pulse,
+        size,
+    );
+    let draft = if app.mode == InputMode::Insert && !app.draft.trim().is_empty() {
+        Some(app.draft.trim())
+    } else {
+        None
+    };
+    push_panel_contents(
+        &mut vertices,
+        &surface,
+        rect,
+        size,
+        true,
+        app.detail_scroll,
+        draft,
+    );
+
+    vertices
+}
+
+fn single_session_surface(session: Option<&workspace::SessionCard>) -> workspace::Surface {
+    let lines = single_session_lines(session);
+    workspace::Surface {
+        id: 1,
+        title: session
+            .map(|session| session.title.clone())
+            .unwrap_or_else(|| "new jcode session".to_string()),
+        body_lines: lines.clone(),
+        detail_lines: lines,
+        session_id: session.map(|session| session.session_id.clone()),
+        lane: 0,
+        column: 0,
+        color_index: 0,
+    }
+}
+
+fn single_session_lines(session: Option<&workspace::SessionCard>) -> Vec<String> {
+    let Some(session) = session else {
+        return vec![
+            "single session mode".to_string(),
+            "press ctrl+; to spawn a jcode session".to_string(),
+            "press ctrl+r after it starts to attach the newest session card".to_string(),
+            "run with --workspace for the niri layout wrapper".to_string(),
+        ];
+    };
+
+    let mut lines = vec![
+        "single session mode".to_string(),
+        session.subtitle.clone(),
+        session.detail.clone(),
+    ];
+    if !session.preview_lines.is_empty() {
+        lines.push("recent transcript".to_string());
+        lines.extend(session.preview_lines.clone());
+    }
+    if !session.detail_lines.is_empty() {
+        lines.push("expanded transcript".to_string());
+        lines.extend(session.detail_lines.clone());
+    }
+    lines
 }
 
 fn build_vertices(
@@ -1057,6 +1362,78 @@ mod tests {
         assert_eq!(
             wrap_bitmap_text("ABCDEFGHI", 1.0, bitmap_char_advance(1.0) * 4.0),
             vec!["ABCD", "EFGH", "I"]
+        );
+    }
+
+    #[test]
+    fn single_session_without_session_spawns_on_open() {
+        let app = SingleSessionApp::new(None);
+
+        assert!(app.status_title().contains("single session"));
+        assert_eq!(app.open_session(), KeyOutcome::SpawnSession);
+        assert!(
+            single_session_lines(None)
+                .iter()
+                .any(|line| line.contains("ctrl+;"))
+        );
+    }
+
+    #[test]
+    fn single_session_wraps_one_session_card() {
+        let card = workspace::SessionCard {
+            session_id: "session_alpha".to_string(),
+            title: "alpha".to_string(),
+            subtitle: "active".to_string(),
+            detail: "3 msgs".to_string(),
+            preview_lines: vec!["user hello".to_string()],
+            detail_lines: vec!["assistant hi".to_string()],
+        };
+        let mut app = SingleSessionApp::new(Some(card));
+
+        assert_eq!(
+            app.handle_key(KeyInput::Enter),
+            KeyOutcome::OpenSession {
+                session_id: "session_alpha".to_string(),
+                title: "alpha".to_string(),
+            }
+        );
+        assert_eq!(
+            app.handle_key(KeyInput::Character("i".to_string())),
+            KeyOutcome::Redraw
+        );
+        assert_eq!(app.mode, InputMode::Insert);
+        app.handle_key(KeyInput::Character("draft".to_string()));
+        assert_eq!(
+            app.handle_key(KeyInput::SubmitDraft),
+            KeyOutcome::SendDraft {
+                session_id: "session_alpha".to_string(),
+                title: "alpha".to_string(),
+                message: "draft".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn single_session_surface_is_the_panel_primitive() {
+        let card = workspace::SessionCard {
+            session_id: "session_alpha".to_string(),
+            title: "alpha".to_string(),
+            subtitle: "active".to_string(),
+            detail: "3 msgs".to_string(),
+            preview_lines: Vec::new(),
+            detail_lines: Vec::new(),
+        };
+
+        let surface = single_session_surface(Some(&card));
+
+        assert_eq!(surface.id, 1);
+        assert_eq!(surface.title, "alpha");
+        assert_eq!(surface.session_id.as_deref(), Some("session_alpha"));
+        assert_eq!((surface.lane, surface.column), (0, 0));
+        assert!(
+            surface
+                .body_lines
+                .contains(&"single session mode".to_string())
         );
     }
 
