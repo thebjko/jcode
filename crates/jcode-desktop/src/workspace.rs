@@ -55,10 +55,11 @@ pub enum KeyInput {
     Other,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum KeyOutcome {
     None,
     Redraw,
+    OpenSession { session_id: String, title: String },
     Exit,
 }
 
@@ -268,6 +269,15 @@ impl Workspace {
             .find(|surface| surface.id == self.focused_id)
     }
 
+    pub fn focused_session_target(&self) -> Option<(String, String)> {
+        self.focused_surface().and_then(|surface| {
+            surface
+                .session_id
+                .as_ref()
+                .map(|id| (id.clone(), surface.title.clone()))
+        })
+    }
+
     pub fn is_focused(&self, surface_id: u64) -> bool {
         self.focused_id == surface_id
     }
@@ -294,6 +304,9 @@ impl Workspace {
             return match key {
                 KeyInput::Escape => KeyOutcome::Exit,
                 KeyInput::Enter => {
+                    if let Some((session_id, title)) = self.focused_session_target() {
+                        return KeyOutcome::OpenSession { session_id, title };
+                    }
                     self.mode = InputMode::Insert;
                     KeyOutcome::Redraw
                 }
@@ -306,6 +319,12 @@ impl Workspace {
             "j" => self.focus_workspace(Direction::Down),
             "k" => self.focus_workspace(Direction::Up),
             "l" => self.focus_column(Direction::Right),
+            "o" | "O" => {
+                if let Some((session_id, title)) = self.focused_session_target() {
+                    return KeyOutcome::OpenSession { session_id, title };
+                }
+                false
+            }
             "H" => self.move_focused_column(Direction::Left),
             "J" => self.move_focused_workspace(Direction::Down),
             "K" => self.move_focused_workspace(Direction::Up),
@@ -830,6 +849,38 @@ mod tests {
             Some("bravo refreshed")
         );
         assert_eq!(workspace.preferred_panel_screen_fraction(), 0.50);
+    }
+
+    #[test]
+    fn o_opens_focused_session_surface() {
+        let mut workspace = Workspace::from_session_cards(vec![session_card("a", "alpha")]);
+
+        assert_eq!(
+            workspace.handle_key(KeyInput::Character("o".to_string())),
+            KeyOutcome::OpenSession {
+                session_id: "a".to_string(),
+                title: "alpha".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn enter_opens_real_session_but_still_inserts_for_placeholder() {
+        let mut workspace = Workspace::from_session_cards(vec![session_card("a", "alpha")]);
+        assert_eq!(
+            workspace.handle_key(KeyInput::Enter),
+            KeyOutcome::OpenSession {
+                session_id: "a".to_string(),
+                title: "alpha".to_string()
+            }
+        );
+
+        let mut placeholder_workspace = Workspace::fake();
+        assert_eq!(
+            placeholder_workspace.handle_key(KeyInput::Enter),
+            KeyOutcome::Redraw
+        );
+        assert_eq!(placeholder_workspace.mode, InputMode::Insert);
     }
 
     fn assert_unique_positions(workspace: &Workspace) {

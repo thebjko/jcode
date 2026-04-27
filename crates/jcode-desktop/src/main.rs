@@ -1,4 +1,5 @@
 mod session_data;
+mod session_launch;
 mod workspace;
 
 use anyhow::{Context, Result};
@@ -163,6 +164,15 @@ async fn run() -> Result<()> {
                         KeyOutcome::Redraw => {
                             window.set_title(&workspace.status_title());
                             window.request_redraw();
+                        }
+                        KeyOutcome::OpenSession { session_id, title } => {
+                            if let Err(error) =
+                                session_launch::launch_validated_resume_session(&session_id, &title)
+                            {
+                                eprintln!(
+                                    "jcode-desktop: failed to open session {session_id}: {error:#}"
+                                );
+                            }
                         }
                         KeyOutcome::None => {}
                     }
