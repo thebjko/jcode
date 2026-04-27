@@ -1036,7 +1036,7 @@ pub(super) fn draw_pinned_content_cached(
     line_wrap: bool,
     focused: bool,
 ) {
-    use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Wrap};
+    use ratatui::widgets::{Paragraph, Wrap};
 
     if area.width < 10 || area.height < 3 {
         return;
@@ -1075,7 +1075,14 @@ pub(super) fn draw_pinned_content_cached(
         })
         .sum();
 
-    let mut title_parts = vec![Span::styled(" pinned ", Style::default().fg(tool_color()))];
+    let mut title_parts = vec![Span::styled(" side ", Style::default().fg(tool_color()))];
+    title_parts.push(Span::styled(
+        "Pinned",
+        Style::default()
+            .fg(rgb(180, 200, 255))
+            .add_modifier(ratatui::style::Modifier::BOLD),
+    ));
+    title_parts.push(Span::styled(" ", Style::default().fg(dim_color())));
     if total_diffs > 0 {
         title_parts.push(Span::styled(
             format!("+{}", total_additions),
@@ -1100,17 +1107,12 @@ pub(super) fn draw_pinned_content_cached(
             Style::default().fg(dim_color()),
         ));
     }
-    title_parts.push(Span::styled(" ", Style::default().fg(dim_color())));
-
-    let border_color = if focused { tool_color() } else { dim_color() };
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(border_color))
-        .title(Line::from(title_parts));
-
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    let border_style = side_panel_border_style(focused);
+    let Some(inner) =
+        super::draw_right_rail_chrome(frame, area, Line::from(title_parts), border_style)
+    else {
+        return;
+    };
 
     if inner.width == 0 || inner.height == 0 {
         return;
@@ -1329,6 +1331,7 @@ pub(super) fn draw_pinned_content_cached(
         visible_left_margins,
     );
     apply_side_selection_highlight(app, &mut visible_lines, clamped_scroll);
+    super::clear_area(frame, inner);
 
     let paragraph = if line_wrap {
         Paragraph::new(visible_lines).wrap(Wrap { trim: false })
