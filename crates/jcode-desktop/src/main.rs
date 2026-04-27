@@ -9,13 +9,12 @@ use winit::event::{ElementState, Event, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{Fullscreen, Window, WindowBuilder};
-use workspace::{InputMode, KeyInput, KeyOutcome, Workspace};
+use workspace::{InputMode, KeyInput, KeyOutcome, PanelSizePreset, Workspace};
 
 const DEFAULT_WINDOW_WIDTH: f64 = 1280.0;
 const DEFAULT_WINDOW_HEIGHT: f64 = 800.0;
 const OUTER_PADDING: f32 = 8.0;
 const GAP: f32 = 6.0;
-const COLUMN_WIDTH: f32 = 420.0;
 const STATUS_BAR_HEIGHT: f32 = 30.0;
 const HEADER_HEIGHT: f32 = 28.0;
 const FOCUSED_BORDER_WIDTH: f32 = 2.0;
@@ -23,6 +22,7 @@ const UNFOCUSED_BORDER_WIDTH: f32 = 1.0;
 const PANEL_RADIUS: f32 = 8.0;
 const STATUS_RADIUS: f32 = 7.0;
 const ROUNDED_CORNER_SEGMENTS: usize = 6;
+const PANEL_FIT_TOLERANCE: f32 = 0.15;
 
 const CLEAR_COLOR: wgpu::Color = wgpu::Color {
     r: 0.955,
@@ -38,7 +38,7 @@ const BACKGROUND_BOTTOM_LEFT: [f32; 4] = [0.953, 0.965, 0.984, 1.0];
 const GLASS_PANEL_FILL: [f32; 4] = [0.110, 0.125, 0.165, 0.10];
 const GLASS_PANEL_HEADER: [f32; 4] = [0.110, 0.125, 0.165, 0.07];
 const FOCUS_RING_COLOR: [f32; 4] = [0.255, 0.275, 0.315, 0.75];
-const UNFOCUSED_BORDER_COLOR: [f32; 4] = [0.235, 0.260, 0.305, 0.22];
+const UNFOCUSED_BORDER_COLOR: [f32; 4] = [0.235, 0.260, 0.305, 0.40];
 const NAV_STATUS_COLOR: [f32; 4] = [0.184, 0.204, 0.251, 1.0];
 const INSERT_STATUS_COLOR: [f32; 4] = [0.310, 0.435, 0.376, 1.0];
 
@@ -120,7 +120,10 @@ async fn run() -> Result<()> {
                         KeyOutcome::None => {}
                     }
                 }
-                WindowEvent::RedrawRequested => match canvas.render(&workspace) {
+                WindowEvent::RedrawRequested => match canvas.render(
+                    &workspace,
+                    window.current_monitor().map(|monitor| monitor.size()),
+                ) {
                     Ok(()) => {}
                     Err(SurfaceError::Lost | SurfaceError::Outdated) => {
                         canvas.resize(window.inner_size());
@@ -154,6 +157,18 @@ fn to_key_input(key: &Key, modifiers: ModifiersState) -> KeyInput {
         Key::Character(text) if modifiers.control_key() && text == ";" => KeyInput::SpawnPanel,
         Key::Character(text) if modifiers.control_key() && (text == "?" || text == "/") => {
             KeyInput::HotkeyHelp
+        }
+        Key::Character(text) if modifiers.control_key() && text == "1" => {
+            KeyInput::SetPanelSize(PanelSizePreset::Quarter)
+        }
+        Key::Character(text) if modifiers.control_key() && text == "2" => {
+            KeyInput::SetPanelSize(PanelSizePreset::Half)
+        }
+        Key::Character(text) if modifiers.control_key() && text == "3" => {
+            KeyInput::SetPanelSize(PanelSizePreset::ThreeQuarter)
+        }
+        Key::Character(text) if modifiers.control_key() && text == "4" => {
+            KeyInput::SetPanelSize(PanelSizePreset::Full)
         }
         Key::Character(text) => KeyInput::Character(text.to_string()),
         _ => KeyInput::Other,
@@ -294,7 +309,11 @@ impl<'window> Canvas<'window> {
         self.surface.configure(&self.device, &self.config);
     }
 
-    fn render(&mut self, workspace: &Workspace) -> std::result::Result<(), SurfaceError> {
+    fn render(
+        &mut self,
+        workspace: &Workspace,
+        monitor_size: Option<PhysicalSize<u32>>,
+    ) -> std::result::Result<(), SurfaceError> {
         let frame = self.surface.get_current_texture()?;
         let view = frame
             .texture
@@ -304,7 +323,7 @@ impl<'window> Canvas<'window> {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("jcode-desktop-render-workspace"),
             });
-        let vertices = build_vertices(workspace, self.size);
+        let vertices = build_vertices(workspace, self.size, monitor_size);
         let vertex_buffer = self
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -375,7 +394,11 @@ struct Rect {
     height: f32,
 }
 
-fn build_vertices(workspace: &Workspace, size: PhysicalSize<u32>) -> Vec<Vertex> {
+fn build_vertices(
+    workspace: &Workspace,
+    size: PhysicalSize<u32>,
+    monitor_size: Option<PhysicalSize<u32>>,
+) -> Vec<Vertex> {
     let width = size.width as f32;
     let height = size.height as f32;
     let mut vertices = Vec::new();
@@ -427,14 +450,32 @@ fn build_vertices(workspace: &Workspace, size: PhysicalSize<u32>) -> Vec<Vertex>
 
     let workspace_height = (height - STATUS_BAR_HEIGHT - OUTER_PADDING * 3.0).max(1.0);
     let workspace_width = (width - OUTER_PADDING * 2.0).max(1.0);
-    let column_width = COLUMN_WIDTH.min(workspace_width);
+    let visible_columns = inferred_visible_column_count(
+        size.width,
+        monitor_size.map(|size| size.width),
+        workspace.preferred_panel_screen_fraction(),
+    );
+    let visible_columns_f = visible_columns as f32;
+    let total_gap_width = GAP * (visible_columns_f - 1.0).max(0.0);
+    let column_width = ((workspace_width - total_gap_width) / visible_columns_f).max(1.0);
     let active_workspace = workspace.current_workspace();
     let focused_column = workspace
         .focused_surface()
         .map(|surface| surface.column)
-        .unwrap_or_default() as f32;
-    let scroll_offset =
-        focused_column * (column_width + GAP) + column_width / 2.0 - workspace_width / 2.0;
+        .unwrap_or_default();
+    let (min_column, max_column) = workspace
+        .surfaces
+        .iter()
+        .filter(|surface| surface.lane == active_workspace)
+        .map(|surface| surface.column)
+        .fold((focused_column, focused_column), |(min, max), column| {
+            (min.min(column), max.max(column))
+        });
+    let visible_columns_i = visible_columns as i32;
+    let max_first_column = (max_column - visible_columns_i + 1).max(min_column);
+    let preferred_first_column = focused_column - visible_columns_i / 2;
+    let first_visible_column = preferred_first_column.clamp(min_column, max_first_column);
+    let scroll_offset = first_visible_column as f32 * (column_width + GAP);
 
     for surface in workspace
         .surfaces
@@ -458,6 +499,20 @@ fn build_vertices(workspace: &Workspace, size: PhysicalSize<u32>) -> Vec<Vertex>
     }
 
     vertices
+}
+
+fn inferred_visible_column_count(
+    window_width: u32,
+    monitor_width: Option<u32>,
+    preferred_panel_screen_fraction: f32,
+) -> u32 {
+    let Some(monitor_width) = monitor_width.filter(|width| *width > 0) else {
+        return 1;
+    };
+
+    let preferred_panel_screen_fraction = preferred_panel_screen_fraction.clamp(0.25, 1.0);
+    let target_panel_width = monitor_width as f32 * preferred_panel_screen_fraction;
+    ((window_width as f32 / target_panel_width + PANEL_FIT_TOLERANCE).floor() as u32).clamp(1, 4)
 }
 
 fn push_surface(
@@ -668,4 +723,49 @@ fn push_gradient_rect(
 
 fn non_zero_size(size: PhysicalSize<u32>) -> PhysicalSize<u32> {
     PhysicalSize::new(size.width.max(1), size.height.max(1))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn quarter_size_preset_follows_quarter_screen_width_steps() {
+        let monitor_width = Some(2000);
+
+        assert_eq!(inferred_visible_column_count(500, monitor_width, 0.25), 1);
+        assert_eq!(inferred_visible_column_count(1000, monitor_width, 0.25), 2);
+        assert_eq!(inferred_visible_column_count(1500, monitor_width, 0.25), 3);
+        assert_eq!(inferred_visible_column_count(2000, monitor_width, 0.25), 4);
+    }
+
+    #[test]
+    fn preferred_panel_size_limits_visible_column_count() {
+        let monitor_width = Some(2000);
+
+        assert_eq!(inferred_visible_column_count(2000, monitor_width, 0.25), 4);
+        assert_eq!(inferred_visible_column_count(2000, monitor_width, 0.50), 2);
+        assert_eq!(inferred_visible_column_count(2000, monitor_width, 0.75), 1);
+        assert_eq!(inferred_visible_column_count(2000, monitor_width, 1.00), 1);
+
+        assert_eq!(inferred_visible_column_count(500, monitor_width, 0.25), 1);
+        assert_eq!(inferred_visible_column_count(500, monitor_width, 1.00), 1);
+    }
+
+    #[test]
+    fn visible_column_count_tolerates_window_manager_gaps() {
+        let monitor_width = Some(2000);
+
+        assert_eq!(inferred_visible_column_count(1940, monitor_width, 0.25), 4);
+        assert_eq!(inferred_visible_column_count(970, monitor_width, 0.25), 2);
+        assert_eq!(inferred_visible_column_count(1940, monitor_width, 0.50), 2);
+    }
+
+    #[test]
+    fn visible_column_count_is_clamped_and_safe_without_monitor() {
+        assert_eq!(inferred_visible_column_count(1, Some(2000), 0.25), 1);
+        assert_eq!(inferred_visible_column_count(3000, Some(2000), 0.25), 4);
+        assert_eq!(inferred_visible_column_count(1000, Some(0), 0.25), 1);
+        assert_eq!(inferred_visible_column_count(1000, None, 0.25), 1);
+    }
 }

@@ -12,6 +12,34 @@ pub enum Direction {
     Right,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PanelSizePreset {
+    Quarter,
+    Half,
+    ThreeQuarter,
+    Full,
+}
+
+impl PanelSizePreset {
+    pub fn screen_fraction(self) -> f32 {
+        match self {
+            Self::Quarter => 0.25,
+            Self::Half => 0.50,
+            Self::ThreeQuarter => 0.75,
+            Self::Full => 1.00,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Quarter => "25%",
+            Self::Half => "50%",
+            Self::ThreeQuarter => "75%",
+            Self::Full => "100%",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum KeyInput {
     Escape,
@@ -19,6 +47,7 @@ pub enum KeyInput {
     Backspace,
     SpawnPanel,
     HotkeyHelp,
+    SetPanelSize(PanelSizePreset),
     Character(String),
     Other,
 }
@@ -48,6 +77,7 @@ pub struct Workspace {
     pub focused_id: u64,
     pub zoomed: bool,
     pub draft: String,
+    panel_size: PanelSizePreset,
     next_id: u64,
 }
 
@@ -111,8 +141,13 @@ impl Workspace {
             focused_id: 1,
             zoomed: false,
             draft: String::new(),
+            panel_size: PanelSizePreset::Quarter,
             next_id: 8,
         }
+    }
+
+    pub fn preferred_panel_screen_fraction(&self) -> f32 {
+        self.panel_size.screen_fraction()
     }
 
     pub fn current_workspace(&self) -> i32 {
@@ -132,10 +167,11 @@ impl Workspace {
             .map(|surface| surface.title.as_str())
             .unwrap_or("no surface");
         let workspace = self.current_workspace();
+        let panel_size = self.panel_size.label();
 
         match self.mode {
             InputMode::Navigation => format!(
-                "Jcode Desktop · {mode}{zoom} · workspace {workspace} · {focused} · h/l columns · j/k workspaces · Ctrl+; new · Ctrl+? help · z zoom · i insert · Esc quit"
+                "Jcode Desktop · {mode}{zoom} · workspace {workspace} · panel {panel_size} · {focused} · h/l columns · j/k workspaces · Ctrl+1-4 panel size · Ctrl+; new · Ctrl+? help · z zoom · i insert · Esc quit"
             ),
             InputMode::Insert => {
                 format!(
@@ -170,6 +206,10 @@ impl Workspace {
             }
             KeyInput::HotkeyHelp => {
                 self.open_hotkey_help();
+                return KeyOutcome::Redraw;
+            }
+            KeyInput::SetPanelSize(size) => {
+                self.panel_size = size;
                 return KeyOutcome::Redraw;
             }
             _ => {}
@@ -221,6 +261,10 @@ impl Workspace {
             }
             KeyInput::HotkeyHelp => {
                 self.open_hotkey_help();
+                KeyOutcome::Redraw
+            }
+            KeyInput::SetPanelSize(size) => {
+                self.panel_size = size;
                 KeyOutcome::Redraw
             }
             KeyInput::Escape => {
@@ -598,6 +642,27 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn panel_size_presets_update_preferred_screen_fraction() {
+        let mut workspace = Workspace::fake();
+        assert_eq!(workspace.preferred_panel_screen_fraction(), 0.25);
+        assert_eq!(
+            workspace.handle_key(KeyInput::SetPanelSize(PanelSizePreset::Half)),
+            KeyOutcome::Redraw
+        );
+        assert_eq!(workspace.preferred_panel_screen_fraction(), 0.50);
+        assert_eq!(
+            workspace.handle_key(KeyInput::SetPanelSize(PanelSizePreset::ThreeQuarter)),
+            KeyOutcome::Redraw
+        );
+        assert_eq!(workspace.preferred_panel_screen_fraction(), 0.75);
+        assert_eq!(
+            workspace.handle_key(KeyInput::SetPanelSize(PanelSizePreset::Full)),
+            KeyOutcome::Redraw
+        );
+        assert_eq!(workspace.preferred_panel_screen_fraction(), 1.00);
     }
 
     fn assert_unique_positions(workspace: &Workspace) {
