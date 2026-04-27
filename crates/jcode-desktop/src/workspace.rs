@@ -40,6 +40,25 @@ impl PanelSizePreset {
             Self::Full => "100%",
         }
     }
+
+    pub fn storage_key(self) -> &'static str {
+        match self {
+            Self::Quarter => "quarter",
+            Self::Half => "half",
+            Self::ThreeQuarter => "three_quarter",
+            Self::Full => "full",
+        }
+    }
+
+    pub fn from_storage_key(raw: &str) -> Option<Self> {
+        match raw {
+            "quarter" | "25" | "25%" => Some(Self::Quarter),
+            "half" | "50" | "50%" => Some(Self::Half),
+            "three_quarter" | "75" | "75%" => Some(Self::ThreeQuarter),
+            "full" | "100" | "100%" => Some(Self::Full),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -69,6 +88,13 @@ pub struct SessionCard {
     pub title: String,
     pub subtitle: String,
     pub detail: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DesktopPreferences {
+    pub panel_size: PanelSizePreset,
+    pub focused_session_id: Option<String>,
+    pub workspace_lane: i32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -261,6 +287,36 @@ impl Workspace {
         }
 
         *self = replacement;
+    }
+
+    pub fn preferences(&self) -> DesktopPreferences {
+        DesktopPreferences {
+            panel_size: self.panel_size,
+            focused_session_id: self
+                .focused_surface()
+                .and_then(|surface| surface.session_id.clone()),
+            workspace_lane: self.current_workspace(),
+        }
+    }
+
+    pub fn apply_preferences(&mut self, preferences: DesktopPreferences) {
+        self.panel_size = preferences.panel_size;
+
+        if let Some(focused_session_id) = preferences.focused_session_id
+            && let Some(surface) = self
+                .surfaces
+                .iter()
+                .find(|surface| surface.session_id.as_deref() == Some(focused_session_id.as_str()))
+        {
+            self.focused_id = surface.id;
+            self.zoomed = false;
+            return;
+        }
+
+        if self.is_lane_navigable(preferences.workspace_lane) {
+            self.focused_id = self.ensure_workspace_surface(preferences.workspace_lane, 0);
+            self.zoomed = false;
+        }
     }
 
     pub fn focused_surface(&self) -> Option<&Surface> {

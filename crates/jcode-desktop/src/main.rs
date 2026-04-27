@@ -1,3 +1,4 @@
+mod desktop_prefs;
 mod session_data;
 mod session_launch;
 mod workspace;
@@ -127,6 +128,9 @@ async fn run() -> Result<()> {
 
     let session_cards = load_session_cards_for_desktop();
     let mut workspace = Workspace::from_session_cards(session_cards);
+    if let Some(preferences) = load_desktop_preferences() {
+        workspace.apply_preferences(preferences);
+    }
     window.set_title(&workspace.status_title());
     let mut canvas = Canvas::new(window).await?;
     let mut modifiers = ModifiersState::empty();
@@ -154,6 +158,7 @@ async fn run() -> Result<()> {
                     let key_input = to_key_input(&event.logical_key, modifiers);
                     if key_input == KeyInput::RefreshSessions {
                         workspace.replace_session_cards(load_session_cards_for_desktop());
+                        save_desktop_preferences(&workspace);
                         window.set_title(&workspace.status_title());
                         window.request_redraw();
                         return;
@@ -162,10 +167,12 @@ async fn run() -> Result<()> {
                     match workspace.handle_key(key_input) {
                         KeyOutcome::Exit => target.exit(),
                         KeyOutcome::Redraw => {
+                            save_desktop_preferences(&workspace);
                             window.set_title(&workspace.status_title());
                             window.request_redraw();
                         }
                         KeyOutcome::OpenSession { session_id, title } => {
+                            save_desktop_preferences(&workspace);
                             if let Err(error) =
                                 session_launch::launch_validated_resume_session(&session_id, &title)
                             {
@@ -217,6 +224,22 @@ fn load_session_cards_for_desktop() -> Vec<workspace::SessionCard> {
             eprintln!("jcode-desktop: failed to load session metadata: {error:#}");
             Vec::new()
         }
+    }
+}
+
+fn load_desktop_preferences() -> Option<workspace::DesktopPreferences> {
+    match desktop_prefs::load_preferences() {
+        Ok(preferences) => preferences,
+        Err(error) => {
+            eprintln!("jcode-desktop: failed to load desktop preferences: {error:#}");
+            None
+        }
+    }
+}
+
+fn save_desktop_preferences(workspace: &Workspace) {
+    if let Err(error) = desktop_prefs::save_preferences(&workspace.preferences()) {
+        eprintln!("jcode-desktop: failed to save desktop preferences: {error:#}");
     }
 }
 
