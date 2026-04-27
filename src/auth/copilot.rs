@@ -548,7 +548,7 @@ pub async fn exchange_github_token(
 
     if !resp.status().is_success() {
         let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
+        let body = crate::util::http_error_body(resp, "HTTP error").await;
         anyhow::bail!("Copilot token exchange failed (HTTP {}): {}", status, body);
     }
 
@@ -578,7 +578,7 @@ pub async fn initiate_device_flow(client: &reqwest::Client) -> Result<DeviceCode
         .context("Failed to initiate GitHub device flow")?;
 
     if !resp.status().is_success() {
-        let body = resp.text().await.unwrap_or_default();
+        let body = crate::util::http_error_body(resp, "HTTP error").await;
         anyhow::bail!("GitHub device flow failed: {}", body);
     }
 
@@ -760,7 +760,7 @@ pub async fn fetch_available_models(
 
     if !resp.status().is_success() {
         let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
+        let body = crate::util::http_error_body(resp, "HTTP error").await;
         anyhow::bail!("Copilot models fetch failed (HTTP {}): {}", status, body);
     }
 

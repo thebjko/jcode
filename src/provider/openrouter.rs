@@ -378,7 +378,7 @@ async fn fetch_models_from_api(
 
     if !response.status().is_success() {
         let status = response.status();
-        let body = response.text().await.unwrap_or_default();
+        let body = crate::util::http_error_body(response, "HTTP error").await;
         anyhow::bail!("Model catalog API error ({}): {}", status, body);
     }
 
@@ -1235,7 +1235,7 @@ impl OpenRouterProvider {
 
         if !response.status().is_success() {
             let status = response.status();
-            let body = response.text().await.unwrap_or_default();
+            let body = crate::util::http_error_body(response, "HTTP error").await;
             anyhow::bail!("Endpoints API error ({}): {}", status, body);
         }
 
@@ -1290,7 +1290,7 @@ impl OpenRouterProvider {
 
         if !response.status().is_success() {
             let status = response.status();
-            let body = response.text().await.unwrap_or_default();
+            let body = crate::util::http_error_body(response, "HTTP error").await;
             anyhow::bail!("Endpoints API error ({}): {}", status, body);
         }
 
