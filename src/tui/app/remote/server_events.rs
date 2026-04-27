@@ -192,22 +192,6 @@ pub(in crate::tui::app) fn handle_server_event(
                 title: Some("Generated image".to_string()),
                 tool_data: Some(tool_call),
             });
-            if let Some(session_id) = app.active_client_session_id().map(str::to_string) {
-                match crate::tui::write_generated_image_side_panel_page(
-                    &session_id,
-                    &id,
-                    &path,
-                    metadata_path.as_deref(),
-                    &output_format,
-                    revised_prompt.as_deref(),
-                ) {
-                    Ok(snapshot) => app.set_side_panel_snapshot(snapshot),
-                    Err(err) => crate::logging::warn(&format!(
-                        "Failed to write generated image side panel page: {}",
-                        err
-                    )),
-                }
-            }
             app.status = ProcessingStatus::Streaming;
             true
         }

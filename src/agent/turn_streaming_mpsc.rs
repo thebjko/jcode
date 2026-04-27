@@ -340,29 +340,14 @@ impl Agent {
                         output_format,
                         revised_prompt,
                     } => {
-                        match crate::tui::write_generated_image_side_panel_page(
-                            &self.session.id,
+                        if let Some(snapshot) = self.update_generated_image_side_panel(
                             &id,
                             &path,
                             metadata_path.as_deref(),
                             &output_format,
                             revised_prompt.as_deref(),
                         ) {
-                            Ok(snapshot) => {
-                                let _ = event_tx.send(ServerEvent::SidePanelState {
-                                    snapshot: snapshot.clone(),
-                                });
-                                Bus::global().publish(BusEvent::SidePanelUpdated(
-                                    crate::bus::SidePanelUpdated {
-                                        session_id: self.session.id.clone(),
-                                        snapshot,
-                                    },
-                                ));
-                            }
-                            Err(err) => crate::logging::warn(&format!(
-                                "Failed to write generated image side panel page: {}",
-                                err
-                            )),
+                            let _ = event_tx.send(ServerEvent::SidePanelState { snapshot });
                         }
                         let _ = event_tx.send(ServerEvent::GeneratedImage {
                             id,
