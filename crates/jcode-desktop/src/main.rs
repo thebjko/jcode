@@ -16,13 +16,19 @@ const DEFAULT_WINDOW_HEIGHT: f64 = 800.0;
 const OUTER_PADDING: f32 = 8.0;
 const GAP: f32 = 6.0;
 const STATUS_BAR_HEIGHT: f32 = 30.0;
-const HEADER_HEIGHT: f32 = 28.0;
 const FOCUSED_BORDER_WIDTH: f32 = 2.0;
 const UNFOCUSED_BORDER_WIDTH: f32 = 1.0;
 const PANEL_RADIUS: f32 = 8.0;
 const STATUS_RADIUS: f32 = 7.0;
 const ROUNDED_CORNER_SEGMENTS: usize = 6;
 const PANEL_FIT_TOLERANCE: f32 = 0.15;
+const MINIMAP_WIDTH: f32 = 170.0;
+const MINIMAP_HEIGHT: f32 = 96.0;
+const MINIMAP_RADIUS: f32 = 7.0;
+const MINIMAP_INSET: f32 = 9.0;
+const MINIMAP_LANE_RADIUS: i32 = 2;
+const MINIMAP_ROW_GAP: f32 = 4.0;
+const MINIMAP_COLUMN_GAP: f32 = 2.0;
 
 const CLEAR_COLOR: wgpu::Color = wgpu::Color {
     r: 0.955,
@@ -36,11 +42,18 @@ const BACKGROUND_TOP_RIGHT: [f32; 4] = [0.957, 0.925, 1.000, 1.0];
 const BACKGROUND_BOTTOM_RIGHT: [f32; 4] = [0.918, 0.984, 0.953, 1.0];
 const BACKGROUND_BOTTOM_LEFT: [f32; 4] = [0.953, 0.965, 0.984, 1.0];
 const GLASS_PANEL_FILL: [f32; 4] = [0.110, 0.125, 0.165, 0.10];
-const GLASS_PANEL_HEADER: [f32; 4] = [0.110, 0.125, 0.165, 0.07];
 const FOCUS_RING_COLOR: [f32; 4] = [0.255, 0.275, 0.315, 0.75];
 const UNFOCUSED_BORDER_COLOR: [f32; 4] = [0.235, 0.260, 0.305, 0.40];
 const NAV_STATUS_COLOR: [f32; 4] = [0.184, 0.204, 0.251, 1.0];
 const INSERT_STATUS_COLOR: [f32; 4] = [0.310, 0.435, 0.376, 1.0];
+const MINIMAP_BORDER_COLOR: [f32; 4] = [0.235, 0.260, 0.305, 0.45];
+const MINIMAP_FILL_COLOR: [f32; 4] = [0.110, 0.125, 0.165, 0.16];
+const MINIMAP_ACTIVE_ROW_COLOR: [f32; 4] = [0.184, 0.204, 0.251, 0.30];
+const MINIMAP_INACTIVE_ROW_COLOR: [f32; 4] = [0.235, 0.260, 0.305, 0.12];
+const MINIMAP_SURFACE_COLOR: [f32; 4] = [0.110, 0.125, 0.165, 0.38];
+const MINIMAP_ACTIVE_SURFACE_COLOR: [f32; 4] = [0.110, 0.125, 0.165, 0.58];
+const MINIMAP_FOCUSED_SURFACE_COLOR: [f32; 4] = [0.255, 0.275, 0.315, 0.86];
+const MINIMAP_VIEWPORT_COLOR: [f32; 4] = [0.255, 0.275, 0.315, 0.72];
 
 const SHADER: &str = r#"
 struct VertexOutput {
@@ -394,6 +407,12 @@ struct Rect {
     height: f32,
 }
 
+#[derive(Clone, Copy)]
+struct VisibleColumnLayout {
+    visible_columns: u32,
+    first_visible_column: i32,
+}
+
 fn build_vertices(
     workspace: &Workspace,
     size: PhysicalSize<u32>,
@@ -426,7 +445,7 @@ fn build_vertices(
         &mut vertices,
         Rect {
             x: OUTER_PADDING,
-            y: height - STATUS_BAR_HEIGHT - OUTER_PADDING,
+            y: OUTER_PADDING,
             width: (width - OUTER_PADDING * 2.0).max(1.0),
             height: STATUS_BAR_HEIGHT,
         },
@@ -435,30 +454,84 @@ fn build_vertices(
         size,
     );
 
+    let active_workspace = workspace.current_workspace();
+    let visible_layout = visible_column_layout(
+        workspace,
+        size.width,
+        monitor_size.map(|size| size.width),
+        active_workspace,
+    );
+
     if workspace.zoomed {
         if let Some(surface) = workspace.focused_surface() {
             let rect = Rect {
                 x: OUTER_PADDING,
-                y: OUTER_PADDING,
+                y: STATUS_BAR_HEIGHT + OUTER_PADDING * 2.0,
                 width: (width - OUTER_PADDING * 2.0).max(1.0),
-                height: (height - STATUS_BAR_HEIGHT - OUTER_PADDING * 2.0).max(1.0),
+                height: (height - STATUS_BAR_HEIGHT - OUTER_PADDING * 3.0).max(1.0),
             };
             push_surface(&mut vertices, rect, surface.color_index, true, size);
         }
+        push_minimap(
+            &mut vertices,
+            workspace,
+            active_workspace,
+            visible_layout,
+            size,
+        );
         return vertices;
     }
 
     let workspace_height = (height - STATUS_BAR_HEIGHT - OUTER_PADDING * 3.0).max(1.0);
     let workspace_width = (width - OUTER_PADDING * 2.0).max(1.0);
-    let visible_columns = inferred_visible_column_count(
-        size.width,
-        monitor_size.map(|size| size.width),
-        workspace.preferred_panel_screen_fraction(),
-    );
-    let visible_columns_f = visible_columns as f32;
+    let visible_columns_f = visible_layout.visible_columns as f32;
     let total_gap_width = GAP * (visible_columns_f - 1.0).max(0.0);
     let column_width = ((workspace_width - total_gap_width) / visible_columns_f).max(1.0);
-    let active_workspace = workspace.current_workspace();
+    let scroll_offset = visible_layout.first_visible_column as f32 * (column_width + GAP);
+
+    for surface in workspace
+        .surfaces
+        .iter()
+        .filter(|surface| surface.lane == active_workspace)
+    {
+        let column = surface.column as f32;
+        let rect = Rect {
+            x: OUTER_PADDING + column * (column_width + GAP) - scroll_offset,
+            y: STATUS_BAR_HEIGHT + OUTER_PADDING * 2.0,
+            width: column_width,
+            height: workspace_height,
+        };
+        push_surface(
+            &mut vertices,
+            rect,
+            surface.color_index,
+            workspace.is_focused(surface.id),
+            size,
+        );
+    }
+
+    push_minimap(
+        &mut vertices,
+        workspace,
+        active_workspace,
+        visible_layout,
+        size,
+    );
+
+    vertices
+}
+
+fn visible_column_layout(
+    workspace: &Workspace,
+    window_width: u32,
+    monitor_width: Option<u32>,
+    active_workspace: i32,
+) -> VisibleColumnLayout {
+    let visible_columns = inferred_visible_column_count(
+        window_width,
+        monitor_width,
+        workspace.preferred_panel_screen_fraction(),
+    );
     let focused_column = workspace
         .focused_surface()
         .map(|surface| surface.column)
@@ -475,30 +548,11 @@ fn build_vertices(
     let max_first_column = (max_column - visible_columns_i + 1).max(min_column);
     let preferred_first_column = focused_column - visible_columns_i / 2;
     let first_visible_column = preferred_first_column.clamp(min_column, max_first_column);
-    let scroll_offset = first_visible_column as f32 * (column_width + GAP);
 
-    for surface in workspace
-        .surfaces
-        .iter()
-        .filter(|surface| surface.lane == active_workspace)
-    {
-        let column = surface.column as f32;
-        let rect = Rect {
-            x: OUTER_PADDING + column * (column_width + GAP) - scroll_offset,
-            y: OUTER_PADDING,
-            width: column_width,
-            height: workspace_height,
-        };
-        push_surface(
-            &mut vertices,
-            rect,
-            surface.color_index,
-            workspace.is_focused(surface.id),
-            size,
-        );
+    VisibleColumnLayout {
+        visible_columns,
+        first_visible_column,
     }
-
-    vertices
 }
 
 fn inferred_visible_column_count(
@@ -513,6 +567,126 @@ fn inferred_visible_column_count(
     let preferred_panel_screen_fraction = preferred_panel_screen_fraction.clamp(0.25, 1.0);
     let target_panel_width = monitor_width as f32 * preferred_panel_screen_fraction;
     ((window_width as f32 / target_panel_width + PANEL_FIT_TOLERANCE).floor() as u32).clamp(1, 4)
+}
+
+fn push_minimap(
+    vertices: &mut Vec<Vertex>,
+    workspace: &Workspace,
+    active_workspace: i32,
+    visible_layout: VisibleColumnLayout,
+    size: PhysicalSize<u32>,
+) {
+    let screen_width = size.width as f32;
+    let screen_height = size.height as f32;
+    let width = MINIMAP_WIDTH.min((screen_width - OUTER_PADDING * 2.0).max(1.0));
+    let height = MINIMAP_HEIGHT.min(
+        (screen_height - STATUS_BAR_HEIGHT - OUTER_PADDING * 3.0)
+            .max(1.0)
+            .min(MINIMAP_HEIGHT),
+    );
+
+    if width < 80.0 || height < 48.0 {
+        return;
+    }
+
+    let rect = Rect {
+        x: (screen_width - OUTER_PADDING - width).max(OUTER_PADDING),
+        y: STATUS_BAR_HEIGHT + OUTER_PADDING * 2.0,
+        width,
+        height,
+    };
+    push_rounded_rect(vertices, rect, MINIMAP_RADIUS, MINIMAP_BORDER_COLOR, size);
+    let content_shell = inset_rect(rect, 1.0);
+    push_rounded_rect(
+        vertices,
+        content_shell,
+        (MINIMAP_RADIUS - 1.0).max(1.0),
+        MINIMAP_FILL_COLOR,
+        size,
+    );
+
+    let content = inset_rect(rect, MINIMAP_INSET);
+    let lane_count = (MINIMAP_LANE_RADIUS * 2 + 1) as usize;
+    let row_height = ((content.height - MINIMAP_ROW_GAP * (lane_count as f32 - 1.0))
+        / lane_count as f32)
+        .max(2.0);
+    let first_lane = active_workspace - MINIMAP_LANE_RADIUS;
+    let last_lane = active_workspace + MINIMAP_LANE_RADIUS;
+    let viewport_first_column = visible_layout.first_visible_column;
+    let viewport_last_column =
+        viewport_first_column + visible_layout.visible_columns.saturating_sub(1) as i32;
+    let (min_column, max_column) = workspace
+        .surfaces
+        .iter()
+        .filter(|surface| surface.lane >= first_lane && surface.lane <= last_lane)
+        .map(|surface| surface.column)
+        .fold(
+            (viewport_first_column, viewport_last_column),
+            |(min, max), column| (min.min(column), max.max(column)),
+        );
+    let column_count = (max_column - min_column + 1).max(1) as f32;
+    let column_width =
+        ((content.width - MINIMAP_COLUMN_GAP * (column_count - 1.0)) / column_count).max(1.0);
+    let column_pitch = column_width + MINIMAP_COLUMN_GAP;
+
+    for lane in first_lane..=last_lane {
+        let row_index = (lane - first_lane) as f32;
+        let row = Rect {
+            x: content.x,
+            y: content.y + row_index * (row_height + MINIMAP_ROW_GAP),
+            width: content.width,
+            height: row_height,
+        };
+        let active_row = lane == active_workspace;
+        let row_color = if active_row {
+            MINIMAP_ACTIVE_ROW_COLOR
+        } else {
+            MINIMAP_INACTIVE_ROW_COLOR
+        };
+        push_rounded_rect(vertices, row, 2.5, row_color, size);
+
+        for surface in workspace
+            .surfaces
+            .iter()
+            .filter(|surface| surface.lane == lane)
+        {
+            let x = content.x + (surface.column - min_column) as f32 * column_pitch;
+            let surface_rect = Rect {
+                x,
+                y: row.y + 2.0,
+                width: column_width.min(content.x + content.width - x).max(1.0),
+                height: (row.height - 4.0).max(1.0),
+            };
+            let color = if workspace.is_focused(surface.id) {
+                MINIMAP_FOCUSED_SURFACE_COLOR
+            } else if active_row {
+                MINIMAP_ACTIVE_SURFACE_COLOR
+            } else {
+                MINIMAP_SURFACE_COLOR
+            };
+            push_rounded_rect(vertices, surface_rect, 2.0, color, size);
+        }
+
+        if active_row {
+            let viewport_x = content.x + (viewport_first_column - min_column) as f32 * column_pitch;
+            let viewport_width = (visible_layout.visible_columns as f32 * column_width
+                + visible_layout.visible_columns.saturating_sub(1) as f32 * MINIMAP_COLUMN_GAP)
+                .min(content.x + content.width - viewport_x)
+                .max(1.0);
+            push_stroked_rect(
+                vertices,
+                Rect {
+                    x: viewport_x,
+                    y: row.y,
+                    width: viewport_width,
+                    height: row.height,
+                },
+                1.0,
+                MINIMAP_VIEWPORT_COLOR,
+                size,
+            );
+        }
+    }
 }
 
 fn push_surface(
@@ -542,17 +716,6 @@ fn push_surface(
         GLASS_PANEL_FILL,
         size,
     );
-    push_rect(
-        vertices,
-        Rect {
-            x: inner.x,
-            y: inner.y,
-            width: inner.width,
-            height: HEADER_HEIGHT.min(inner.height),
-        },
-        GLASS_PANEL_HEADER,
-        size,
-    );
 }
 
 fn inset_rect(rect: Rect, amount: f32) -> Rect {
@@ -566,6 +729,60 @@ fn inset_rect(rect: Rect, amount: f32) -> Rect {
 
 fn push_rect(vertices: &mut Vec<Vertex>, rect: Rect, color: [f32; 4], size: PhysicalSize<u32>) {
     push_gradient_rect(vertices, rect, color, color, color, color, size);
+}
+
+fn push_stroked_rect(
+    vertices: &mut Vec<Vertex>,
+    rect: Rect,
+    stroke_width: f32,
+    color: [f32; 4],
+    size: PhysicalSize<u32>,
+) {
+    let stroke_width = stroke_width.max(1.0).min(rect.width).min(rect.height);
+    push_rect(
+        vertices,
+        Rect {
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: stroke_width,
+        },
+        color,
+        size,
+    );
+    push_rect(
+        vertices,
+        Rect {
+            x: rect.x,
+            y: rect.y + rect.height - stroke_width,
+            width: rect.width,
+            height: stroke_width,
+        },
+        color,
+        size,
+    );
+    push_rect(
+        vertices,
+        Rect {
+            x: rect.x,
+            y: rect.y,
+            width: stroke_width,
+            height: rect.height,
+        },
+        color,
+        size,
+    );
+    push_rect(
+        vertices,
+        Rect {
+            x: rect.x + rect.width - stroke_width,
+            y: rect.y,
+            width: stroke_width,
+            height: rect.height,
+        },
+        color,
+        size,
+    );
 }
 
 fn push_rounded_rect(
