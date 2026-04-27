@@ -18,6 +18,8 @@ Commands:
   state                     Print full app state JSON
   tree                      Print semantic UI tree JSON
   scene [output]            Print or write Rust visual scene JSON
+  preview                   Open live wgpu visual scene preview window
+  preview-mesh [output]     Print or write wgpu triangle mesh JSON
   render [output]           Print or write deterministic text render
   screenshot [output]       Print or write screenshot snapshot JSON
   screenshot-svg [output]   Print or write deterministic SVG screenshot
@@ -78,6 +80,16 @@ case "$cmd" in
       sim scene --socket "$socket" --output "$1"
     else
       sim scene --socket "$socket"
+    fi
+    ;;
+  preview)
+    sim preview --socket "$socket"
+    ;;
+  preview-mesh)
+    if [[ $# -gt 0 ]]; then
+      sim preview-mesh --socket "$socket" --output "$1"
+    else
+      sim preview-mesh --socket "$socket"
     fi
     ;;
   render)

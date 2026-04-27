@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
+pub mod gpu_preview;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AutomationRequest {
     pub id: String,
@@ -194,6 +196,12 @@ async fn handle_request(
                 serde_json::to_value(store.visual_scene()).unwrap_or(Value::Null),
                 false,
             ))
+        }
+        "preview_mesh" => {
+            let store = store.lock().await;
+            let scene = store.visual_scene();
+            let mesh = gpu_preview::build_preview_mesh(&scene);
+            Ok((serde_json::to_value(mesh).unwrap_or(Value::Null), false))
         }
         "render" => {
             let store = store.lock().await;
@@ -954,6 +962,37 @@ mod tests {
         .await?;
         let tree_json = serde_json::to_string(&tree.result)?;
         assert!(tree_json.contains("chat.send"));
+
+        let scene = send_request(
+            &socket,
+            AutomationRequest {
+                id: "scene".to_string(),
+                method: "scene".to_string(),
+                params: Value::Null,
+            },
+        )
+        .await?;
+        assert!(scene.ok);
+        assert_eq!(scene.result["schema_version"], 1);
+        assert_eq!(scene.result["coordinate_space"], "logical_points_top_left");
+
+        let preview_mesh = send_request(
+            &socket,
+            AutomationRequest {
+                id: "preview-mesh".to_string(),
+                method: "preview_mesh".to_string(),
+                params: Value::Null,
+            },
+        )
+        .await?;
+        assert!(preview_mesh.ok);
+        assert_eq!(preview_mesh.result["backend"], "wgpu-triangle-list-v1");
+        assert!(
+            preview_mesh.result["vertex_count"]
+                .as_u64()
+                .unwrap_or_default()
+                > 500
+        );
 
         let render = send_request(
             &socket,

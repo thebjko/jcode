@@ -99,13 +99,25 @@ Rust app state
   -> Rust semantic UI tree
   -> Rust layout and VisualScene
   -> deterministic SVG/text backend for CI and agent tests
-  -> future wgpu preview backend on Linux
+  -> wgpu preview backend on Linux
   -> future iOS drawing backend through Metal/CoreGraphics/wgpu-on-iOS
 ```
 
 This keeps the future iOS app thin: it should host a surface, forward input to
 Rust, receive Rust scene updates, and draw the same Rust-owned scene model that
 the Linux simulator can render.
+
+`jcode-mobile-sim` now includes the first non-HTML graphics backend:
+
+- `preview-mesh` converts `VisualScene` into deterministic wgpu triangle-list
+  vertices for tests and backend contract validation
+- `preview` opens a native winit/wgpu window and draws the same scene model
+- text is currently drawn with a deterministic bitmap font so the GPU path does
+  not depend on browser or HTML text layout
+
+The wgpu preview is still a foundation layer. It is not yet the final production
+renderer, but it is the first native graphics path that proves the simulator can
+draw from the same Rust-owned visual contract intended for iOS.
 
 ## Rust-owned gateway protocol helpers
 
@@ -227,6 +239,32 @@ consume. This is the contract a future wgpu or iOS renderer should draw from.
 cargo run -p jcode-mobile-sim -- scene
 cargo run -p jcode-mobile-sim -- scene --output /tmp/mobile-scene.json
 scripts/mobile_simulator_tester.sh scene /tmp/mobile-scene.json
+```
+
+### Open the native wgpu preview
+
+The `preview` command opens a non-HTML Linux window using winit and wgpu. It
+renders the Rust `VisualScene` through the simulator GPU backend.
+
+```bash
+cargo run -p jcode-mobile-sim -- preview --scenario connected_chat
+
+scripts/mobile_simulator_tester.sh start connected_chat
+scripts/mobile_simulator_tester.sh preview
+```
+
+Close the preview window or press `Esc` to exit.
+
+### Dump the wgpu preview mesh
+
+The `preview-mesh` command exports the deterministic triangle list that the
+wgpu preview draws. This is CI-friendly because it validates the GPU backend
+contract without requiring a window or GPU surface.
+
+```bash
+cargo run -p jcode-mobile-sim -- preview-mesh --scenario connected_chat
+cargo run -p jcode-mobile-sim -- preview-mesh --output /tmp/mobile-preview-mesh.json
+scripts/mobile_simulator_tester.sh preview-mesh /tmp/mobile-preview-mesh.json
 ```
 
 ### Render a Linux text preview

@@ -1,6 +1,9 @@
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{Parser, Subcommand};
-use jcode_mobile_core::{ReplayTrace, ScenarioName, ScreenshotSnapshot, SimulatorAction};
+use jcode_mobile_core::{
+    ReplayTrace, ScenarioName, ScreenshotSnapshot, SimulatorAction, SimulatorState, SimulatorStore,
+    VisualScene,
+};
 use jcode_mobile_sim::{
     AutomationRequest, default_socket_path, request_status, run_server, send_request,
 };
@@ -44,6 +47,20 @@ enum Command {
     Scene {
         #[arg(long)]
         socket: Option<PathBuf>,
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
+    Preview {
+        #[arg(long)]
+        socket: Option<PathBuf>,
+        #[arg(long, default_value = "connected_chat")]
+        scenario: String,
+    },
+    PreviewMesh {
+        #[arg(long)]
+        socket: Option<PathBuf>,
+        #[arg(long, default_value = "connected_chat")]
+        scenario: String,
         #[arg(long)]
         output: Option<PathBuf>,
     },
@@ -255,6 +272,19 @@ async fn main() -> Result<()> {
         Command::Scene { socket, output } => {
             let scene = send_simple(&resolve_socket(socket), "scene", Value::Null).await?;
             write_or_print_json(scene, output)
+        }
+        Command::Preview { socket, scenario } => {
+            let scene = resolve_preview_scene(socket, &scenario).await?;
+            jcode_mobile_sim::gpu_preview::run_preview(scene)
+        }
+        Command::PreviewMesh {
+            socket,
+            scenario,
+            output,
+        } => {
+            let scene = resolve_preview_scene(socket, &scenario).await?;
+            let mesh = jcode_mobile_sim::gpu_preview::build_preview_mesh(&scene);
+            write_or_print_json(serde_json::to_value(mesh)?, output)
         }
         Command::Render { socket, output } => {
             let rendered = send_simple(&resolve_socket(socket), "render", Value::Null).await?;
@@ -529,6 +559,17 @@ fn resolve_socket(socket: Option<PathBuf>) -> PathBuf {
 
 fn parse_scenario(input: &str) -> Result<ScenarioName> {
     ScenarioName::parse(input).ok_or_else(|| anyhow!("unknown scenario: {input}"))
+}
+
+async fn resolve_preview_scene(socket: Option<PathBuf>, scenario: &str) -> Result<VisualScene> {
+    if let Some(socket) = socket {
+        let value = send_simple(&resolve_socket(Some(socket)), "scene", Value::Null).await?;
+        return serde_json::from_value(value).context("decode live mobile visual scene");
+    }
+
+    let scenario = parse_scenario(scenario)?;
+    let store = SimulatorStore::new(SimulatorState::for_scenario(scenario));
+    Ok(store.visual_scene())
 }
 
 fn map_set_field(field: &str, value: String) -> Result<SimulatorAction> {
