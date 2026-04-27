@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 const DEFAULT_SESSION_LIMIT: usize = 32;
+const SESSION_PREVIEW_LINE_LIMIT: usize = 5;
+const SESSION_PREVIEW_CHAR_LIMIT: usize = 72;
 
 pub fn load_recent_session_cards() -> Result<Vec<SessionCard>> {
     load_recent_session_cards_with_limit(DEFAULT_SESSION_LIMIT)
@@ -95,12 +97,14 @@ fn load_session_card(path: &Path) -> Result<Option<SessionCard>> {
         Some(updated) => format!("{message_count} msgs · {updated} · {cwd}"),
         None => format!("{message_count} msgs · {cwd}"),
     };
+    let preview_lines = recent_message_preview_lines(&value, SESSION_PREVIEW_LINE_LIMIT);
 
     Ok(Some(SessionCard {
         session_id: id,
         title,
         subtitle,
         detail,
+        preview_lines,
     }))
 }
 
@@ -152,6 +156,66 @@ fn message_text_preview(message: &Value) -> Option<String> {
     } else {
         Some(truncate_chars(&normalized, 64))
     }
+}
+
+fn recent_message_preview_lines(value: &Value, limit: usize) -> Vec<String> {
+    let Some(messages) = value.get("messages").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+
+    let mut previews = messages
+        .iter()
+        .rev()
+        .filter_map(message_preview_line)
+        .take(limit)
+        .collect::<Vec<_>>();
+    previews.reverse();
+    previews
+}
+
+fn message_preview_line(message: &Value) -> Option<String> {
+    let role = match message.get("role").and_then(Value::as_str)? {
+        "user" => "user",
+        "assistant" => "asst",
+        "system" => "sys",
+        _ => return None,
+    };
+    let text = message_preview_text(message)?;
+    Some(format!("{role} {text}"))
+}
+
+fn message_preview_text(message: &Value) -> Option<String> {
+    let mut fragments = Vec::new();
+    for block in message.get("content")?.as_array()? {
+        match block.get("type").and_then(Value::as_str) {
+            Some("text") | None => {
+                if let Some(text) = block.get("text").and_then(Value::as_str) {
+                    let normalized = normalize_preview_text(text);
+                    if !normalized.is_empty() {
+                        fragments.push(normalized);
+                    }
+                }
+            }
+            Some("tool_use") => {
+                if let Some(name) = block.get("name").and_then(Value::as_str) {
+                    fragments.push(format!("tool {name}"));
+                }
+            }
+            Some("tool_result") => {}
+            _ => {}
+        }
+    }
+
+    let joined = fragments.join(" ");
+    if joined.is_empty() {
+        None
+    } else {
+        Some(truncate_chars(&joined, SESSION_PREVIEW_CHAR_LIMIT))
+    }
+}
+
+fn normalize_preview_text(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn short_session_name(id: &str) -> String {
@@ -210,6 +274,23 @@ mod tests {
         assert_eq!(
             latest_user_preview(&session),
             Some("newer prompt".to_string())
+        );
+    }
+
+    #[test]
+    fn recent_message_preview_lines_include_text_and_skip_tool_results() {
+        let session = json!({
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": "hello\nthere"}]},
+                {"role": "assistant", "content": [{"type": "tool_use", "name": "bash"}]},
+                {"role": "user", "content": [{"type": "tool_result", "content": "noisy payload"}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "done now"}]}
+            ]
+        });
+
+        assert_eq!(
+            recent_message_preview_lines(&session, 4),
+            vec!["user hello there", "asst tool bash", "asst done now"]
         );
     }
 

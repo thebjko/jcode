@@ -88,6 +88,7 @@ pub struct SessionCard {
     pub title: String,
     pub subtitle: String,
     pub detail: String,
+    pub preview_lines: Vec<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -124,10 +125,16 @@ impl Surface {
     }
 
     fn session(id: u64, card: SessionCard, lane: i32, column: i32, color_index: usize) -> Self {
+        let mut body_lines = vec![card.subtitle, card.detail];
+        if !card.preview_lines.is_empty() {
+            body_lines.push("recent transcript".to_string());
+            body_lines.extend(card.preview_lines);
+        }
+
         Self {
             id,
             title: card.title,
-            body_lines: vec![card.subtitle, card.detail],
+            body_lines,
             session_id: Some(card.session_id),
             lane,
             column,
@@ -936,7 +943,12 @@ mod tests {
         assert_eq!(workspace.surfaces.len(), 1);
         assert_eq!(workspace.surfaces[0].title, "alpha");
         assert_eq!(workspace.surfaces[0].session_id.as_deref(), Some("a"));
-        assert_eq!(workspace.surfaces[0].body_lines.len(), 2);
+        assert_eq!(workspace.surfaces[0].body_lines.len(), 4);
+        assert!(
+            workspace.surfaces[0]
+                .body_lines
+                .contains(&"recent transcript".to_string())
+        );
     }
 
     #[test]
@@ -1006,6 +1018,7 @@ mod tests {
             title: title.to_string(),
             subtitle: "active · model".to_string(),
             detail: "1 msgs · workspace".to_string(),
+            preview_lines: vec!["user hello".to_string()],
         }
     }
 }
