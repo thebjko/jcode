@@ -895,12 +895,10 @@ fn parse_structure_items(content: &str) -> Vec<(&'static str, String, usize, usi
 }
 
 fn parse_structure_item_line(line: &str) -> Option<(&'static str, String, usize, usize)> {
-    static STRUCTURE_ITEM_RE: OnceLock<Regex> = OnceLock::new();
+    static STRUCTURE_ITEM_RE: OnceLock<Option<Regex>> = OnceLock::new();
     let captures = STRUCTURE_ITEM_RE
-        .get_or_init(|| {
-            Regex::new(r"^-\s+([A-Za-z0-9_-]+)\s+(.+?)\s+@\s*(\d+)-(\d+)")
-                .expect("valid structure item regex")
-        })
+        .get_or_init(|| Regex::new(r"^-\s+([A-Za-z0-9_-]+)\s+(.+?)\s+@\s*(\d+)-(\d+)").ok())
+        .as_ref()?
         .captures(line)?;
     let kind = captures.get(1)?.as_str();
     let label = captures.get(2)?.as_str().trim().to_string();
@@ -910,9 +908,10 @@ fn parse_structure_item_line(line: &str) -> Option<(&'static str, String, usize,
 }
 
 fn parse_ranked_file_header(line: &str) -> Option<String> {
-    static FILE_HEADER_RE: OnceLock<Regex> = OnceLock::new();
+    static FILE_HEADER_RE: OnceLock<Option<Regex>> = OnceLock::new();
     FILE_HEADER_RE
-        .get_or_init(|| Regex::new(r"^\d+\.\s+(.+)$").expect("valid ranked file regex"))
+        .get_or_init(|| Regex::new(r"^\d+\.\s+(.+)$").ok())
+        .as_ref()?
         .captures(line)
         .and_then(|captures| {
             captures
@@ -922,9 +921,10 @@ fn parse_ranked_file_header(line: &str) -> Option<String> {
 }
 
 fn parse_region_header_line(line: &str) -> Option<(String, usize, usize)> {
-    static REGION_HEADER_RE: OnceLock<Regex> = OnceLock::new();
+    static REGION_HEADER_RE: OnceLock<Option<Regex>> = OnceLock::new();
     let captures = REGION_HEADER_RE
-        .get_or_init(|| Regex::new(r"^-\s+(.+?)\s+@\s*(\d+)-(\d+)").expect("valid region regex"))
+        .get_or_init(|| Regex::new(r"^-\s+(.+?)\s+@\s*(\d+)-(\d+)").ok())
+        .as_ref()?
         .captures(line)?;
     let label = captures.get(1)?.as_str().trim().to_string();
     let start_line = captures.get(2)?.as_str().parse().ok()?;
@@ -933,12 +933,13 @@ fn parse_region_header_line(line: &str) -> Option<(String, usize, usize)> {
 }
 
 fn parse_sed_file_range(command: &str) -> Option<(String, usize, usize)> {
-    static SED_RE: OnceLock<Regex> = OnceLock::new();
+    static SED_RE: OnceLock<Option<Regex>> = OnceLock::new();
     let captures = SED_RE
         .get_or_init(|| {
             Regex::new(r#"sed\s+-n\s+['"]?(\d+),(\d+)p['"]?\s+(?:"([^"]+)"|'([^']+)'|([^\s|;]+))"#)
-                .expect("valid sed range regex")
+                .ok()
         })
+        .as_ref()?
         .captures(command)?;
     let start_line = captures.get(1)?.as_str().parse().ok()?;
     let end_line = captures.get(2)?.as_str().parse().ok()?;
@@ -952,70 +953,87 @@ fn parse_sed_file_range(command: &str) -> Option<(String, usize, usize)> {
 }
 
 fn parse_cat_files(command: &str) -> Vec<String> {
-    static CAT_RE: OnceLock<Regex> = OnceLock::new();
+    static CAT_RE: OnceLock<Option<Regex>> = OnceLock::new();
     CAT_RE
         .get_or_init(|| {
-            Regex::new(r#"(?:^|[;&|]\s*)cat\s+(?:"([^"]+)"|'([^']+)'|([^\s|;]+))"#)
-                .expect("valid cat regex")
+            Regex::new(r#"(?:^|[;&|]\s*)cat\s+(?:"([^"]+)"|'([^']+)'|([^\s|;]+))"#).ok()
         })
-        .captures_iter(command)
-        .filter_map(|captures| {
-            captures
-                .get(1)
-                .or_else(|| captures.get(2))
-                .or_else(|| captures.get(3))
-                .map(|value| value.as_str().to_string())
+        .as_ref()
+        .map(|regex| {
+            regex
+                .captures_iter(command)
+                .filter_map(|captures| {
+                    captures
+                        .get(1)
+                        .or_else(|| captures.get(2))
+                        .or_else(|| captures.get(3))
+                        .map(|value| value.as_str().to_string())
+                })
+                .collect()
         })
-        .collect()
+        .unwrap_or_default()
 }
 
 fn parse_git_show_files(command: &str) -> Vec<String> {
-    static GIT_SHOW_RE: OnceLock<Regex> = OnceLock::new();
+    static GIT_SHOW_RE: OnceLock<Option<Regex>> = OnceLock::new();
     GIT_SHOW_RE
         .get_or_init(|| {
-            Regex::new(r#"git\s+show\s+[^:\s]+:(?:"([^"]+)"|'([^']+)'|([^\s|;]+))"#)
-                .expect("valid git show regex")
+            Regex::new(r#"git\s+show\s+[^:\s]+:(?:"([^"]+)"|'([^']+)'|([^\s|;]+))"#).ok()
         })
-        .captures_iter(command)
-        .filter_map(|captures| {
-            captures
-                .get(1)
-                .or_else(|| captures.get(2))
-                .or_else(|| captures.get(3))
-                .map(|value| value.as_str().to_string())
+        .as_ref()
+        .map(|regex| {
+            regex
+                .captures_iter(command)
+                .filter_map(|captures| {
+                    captures
+                        .get(1)
+                        .or_else(|| captures.get(2))
+                        .or_else(|| captures.get(3))
+                        .map(|value| value.as_str().to_string())
+                })
+                .collect()
         })
-        .collect()
+        .unwrap_or_default()
 }
 
 fn parse_git_diff_files(command: &str) -> Vec<String> {
-    static GIT_DIFF_RE: OnceLock<Regex> = OnceLock::new();
+    static GIT_DIFF_RE: OnceLock<Option<Regex>> = OnceLock::new();
     GIT_DIFF_RE
         .get_or_init(|| {
-            Regex::new(r#"git\s+diff(?:\s+[^\n]*)?\s+--\s+(?:"([^"]+)"|'([^']+)'|([^\s|;]+))"#)
-                .expect("valid git diff regex")
+            Regex::new(r#"git\s+diff(?:\s+[^\n]*)?\s+--\s+(?:"([^"]+)"|'([^']+)'|([^\s|;]+))"#).ok()
         })
-        .captures_iter(command)
-        .filter_map(|captures| {
-            captures
-                .get(1)
-                .or_else(|| captures.get(2))
-                .or_else(|| captures.get(3))
-                .map(|value| value.as_str().to_string())
+        .as_ref()
+        .map(|regex| {
+            regex
+                .captures_iter(command)
+                .filter_map(|captures| {
+                    captures
+                        .get(1)
+                        .or_else(|| captures.get(2))
+                        .or_else(|| captures.get(3))
+                        .map(|value| value.as_str().to_string())
+                })
+                .collect()
         })
-        .collect()
+        .unwrap_or_default()
 }
 
 fn parse_path_line_hits(content: &str) -> Vec<(String, usize)> {
-    static PATH_LINE_RE: OnceLock<Regex> = OnceLock::new();
+    static PATH_LINE_RE: OnceLock<Option<Regex>> = OnceLock::new();
     PATH_LINE_RE
-        .get_or_init(|| Regex::new(r"(?m)^([^:\n]+):(\d+):").expect("valid path line regex"))
-        .captures_iter(content)
-        .filter_map(|captures| {
-            let path = captures.get(1)?.as_str().trim().to_string();
-            let line_number = captures.get(2)?.as_str().parse().ok()?;
-            Some((path, line_number))
+        .get_or_init(|| Regex::new(r"(?m)^([^:\n]+):(\d+):").ok())
+        .as_ref()
+        .map(|regex| {
+            regex
+                .captures_iter(content)
+                .filter_map(|captures| {
+                    let path = captures.get(1)?.as_str().trim().to_string();
+                    let line_number = captures.get(2)?.as_str().parse().ok()?;
+                    Some((path, line_number))
+                })
+                .collect()
         })
-        .collect()
+        .unwrap_or_default()
 }
 
 fn leak_str(value: String) -> &'static str {
