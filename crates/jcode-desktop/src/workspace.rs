@@ -66,6 +66,7 @@ pub enum KeyInput {
     Escape,
     Enter,
     Backspace,
+    DeletePreviousWord,
     SubmitDraft,
     SpawnPanel,
     HotkeyHelp,
@@ -480,6 +481,10 @@ impl Workspace {
                 self.draft.pop();
                 KeyOutcome::Redraw
             }
+            KeyInput::DeletePreviousWord => {
+                delete_previous_word(&mut self.draft);
+                KeyOutcome::Redraw
+            }
             KeyInput::Character(text) => {
                 self.draft.push_str(&text);
                 KeyOutcome::Redraw
@@ -809,6 +814,15 @@ impl Workspace {
 
     fn max_detail_scroll(&self) -> usize {
         self.focused_detail_line_count().saturating_sub(1)
+    }
+}
+
+fn delete_previous_word(text: &mut String) {
+    while text.ends_with(char::is_whitespace) {
+        text.pop();
+    }
+    while text.chars().last().is_some_and(|ch| !ch.is_whitespace()) {
+        text.pop();
     }
 }
 

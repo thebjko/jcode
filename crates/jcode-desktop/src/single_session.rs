@@ -8,10 +8,10 @@ pub(crate) const SINGLE_SESSION_FONT_FALLBACKS: &[&str] = &[
     "JetBrains Mono",
     "monospace",
 ];
-pub(crate) const SINGLE_SESSION_TITLE_FONT_SIZE: f32 = 18.0;
-pub(crate) const SINGLE_SESSION_BODY_FONT_SIZE: f32 = 15.0;
-pub(crate) const SINGLE_SESSION_META_FONT_SIZE: f32 = 12.0;
-pub(crate) const SINGLE_SESSION_CODE_FONT_SIZE: f32 = 14.0;
+pub(crate) const SINGLE_SESSION_TITLE_FONT_SIZE: f32 = 28.0;
+pub(crate) const SINGLE_SESSION_BODY_FONT_SIZE: f32 = 22.0;
+pub(crate) const SINGLE_SESSION_META_FONT_SIZE: f32 = 16.0;
+pub(crate) const SINGLE_SESSION_CODE_FONT_SIZE: f32 = 21.0;
 pub(crate) const SINGLE_SESSION_BODY_LINE_HEIGHT: f32 = 1.45;
 pub(crate) const SINGLE_SESSION_CODE_LINE_HEIGHT: f32 = 1.35;
 pub(crate) const SINGLE_SESSION_META_LINE_HEIGHT: f32 = 1.25;
@@ -98,6 +98,10 @@ impl SingleSessionApp {
                 self.draft.pop();
                 KeyOutcome::Redraw
             }
+            KeyInput::DeletePreviousWord => {
+                delete_previous_word(&mut self.draft);
+                KeyOutcome::Redraw
+            }
             KeyInput::Character(text) => {
                 self.draft.push_str(&text);
                 KeyOutcome::Redraw
@@ -123,6 +127,15 @@ impl SingleSessionApp {
             title,
             message,
         }
+    }
+}
+
+fn delete_previous_word(text: &mut String) {
+    while text.ends_with(char::is_whitespace) {
+        text.pop();
+    }
+    while text.chars().last().is_some_and(|ch| !ch.is_whitespace()) {
+        text.pop();
     }
 }
 

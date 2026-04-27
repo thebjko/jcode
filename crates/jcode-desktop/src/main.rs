@@ -61,6 +61,9 @@ const PANEL_TITLE_LEFT_PADDING: f32 = 12.0;
 const PANEL_TITLE_TOP_PADDING: f32 = 12.0;
 const PANEL_BODY_TOP_PADDING: f32 = 38.0;
 const PANEL_BODY_LINE_GAP: f32 = 8.0;
+const SINGLE_SESSION_DRAFT_TOP_OFFSET: f32 = 158.0;
+const SINGLE_SESSION_CARET_WIDTH: f32 = 2.0;
+const SINGLE_SESSION_CARET_COLOR: [f32; 4] = [0.130, 0.150, 0.190, 0.92];
 const SESSION_SPAWN_REFRESH_DELAY: Duration = Duration::from_millis(350);
 
 const CLEAR_COLOR: wgpu::Color = wgpu::Color {
@@ -491,6 +494,7 @@ fn to_key_input(key: &Key, modifiers: ModifiersState) -> KeyInput {
         Key::Named(NamedKey::Escape) => KeyInput::Escape,
         Key::Named(NamedKey::Enter) if modifiers.control_key() => KeyInput::SubmitDraft,
         Key::Named(NamedKey::Enter) => KeyInput::Enter,
+        Key::Named(NamedKey::Backspace) if modifiers.control_key() => KeyInput::DeletePreviousWord,
         Key::Named(NamedKey::Backspace) => KeyInput::Backspace,
         Key::Character(text) if modifiers.control_key() && text == ";" => KeyInput::SpawnPanel,
         Key::Character(text) if modifiers.control_key() && (text == "?" || text == "/") => {
@@ -845,8 +849,41 @@ fn build_single_session_vertices(
         focus_pulse,
         size,
     );
+    push_single_session_caret(&mut vertices, app, size);
 
     vertices
+}
+
+fn push_single_session_caret(
+    vertices: &mut Vec<Vertex>,
+    app: &SingleSessionApp,
+    size: PhysicalSize<u32>,
+) {
+    let typography = single_session_typography();
+    let line_height = typography.code_size * typography.code_line_height;
+    let draft_top = single_session_draft_top(size);
+    let last_line = app.draft.rsplit('\n').next().unwrap_or_default();
+    let char_width = typography.code_size * 0.58;
+    let x = PANEL_TITLE_LEFT_PADDING
+        + (last_line.chars().count() as f32 * char_width)
+            .min((size.width as f32 - PANEL_TITLE_LEFT_PADDING * 2.0).max(0.0));
+    let y = draft_top + line_height;
+
+    push_rect(
+        vertices,
+        Rect {
+            x,
+            y,
+            width: SINGLE_SESSION_CARET_WIDTH,
+            height: typography.code_size * 1.12,
+        },
+        SINGLE_SESSION_CARET_COLOR,
+        size,
+    );
+}
+
+fn single_session_draft_top(size: PhysicalSize<u32>) -> f32 {
+    (size.height as f32 - SINGLE_SESSION_DRAFT_TOP_OFFSET).max(112.0)
 }
 
 fn single_session_text_buffers(
@@ -924,7 +961,7 @@ fn single_session_text_areas(buffers: &[Buffer], size: PhysicalSize<u32>) -> Vec
     let left = PANEL_TITLE_LEFT_PADDING;
     let right = size.width.saturating_sub(PANEL_TITLE_LEFT_PADDING as u32) as i32;
     let bottom = size.height.saturating_sub(PANEL_TITLE_TOP_PADDING as u32) as i32;
-    let draft_top = (size.height as f32 - 118.0).max(88.0);
+    let draft_top = single_session_draft_top(size);
 
     vec![
         TextArea {

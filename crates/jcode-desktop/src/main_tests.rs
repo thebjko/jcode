@@ -145,11 +145,41 @@ fn single_session_typography_targets_jetbrains_mono_light_nerd() {
     assert_eq!(SINGLE_SESSION_FONT_FAMILY, "JetBrainsMono Nerd Font");
     assert_eq!(SINGLE_SESSION_FONT_WEIGHT, "Light");
     assert!(SINGLE_SESSION_FONT_FALLBACKS.contains(&"monospace"));
+    assert!(SINGLE_SESSION_TITLE_FONT_SIZE >= 28.0);
+    assert!(SINGLE_SESSION_BODY_FONT_SIZE >= 22.0);
+    assert!(SINGLE_SESSION_CODE_FONT_SIZE >= 21.0);
     assert!(SINGLE_SESSION_TITLE_FONT_SIZE > SINGLE_SESSION_BODY_FONT_SIZE);
     assert!(SINGLE_SESSION_BODY_FONT_SIZE > SINGLE_SESSION_META_FONT_SIZE);
     assert!(SINGLE_SESSION_CODE_FONT_SIZE <= SINGLE_SESSION_BODY_FONT_SIZE);
     assert!(SINGLE_SESSION_BODY_LINE_HEIGHT > SINGLE_SESSION_CODE_LINE_HEIGHT);
     assert!(SINGLE_SESSION_CODE_LINE_HEIGHT > SINGLE_SESSION_META_LINE_HEIGHT);
+}
+
+#[test]
+fn single_session_vertices_include_a_draft_caret() {
+    let mut app = SingleSessionApp::new(None);
+    let empty_vertices = build_single_session_vertices(&app, PhysicalSize::new(640, 480), 0.0);
+    app.handle_key(KeyInput::Character("abc".to_string()));
+    let typed_vertices = build_single_session_vertices(&app, PhysicalSize::new(640, 480), 0.0);
+
+    assert!(typed_vertices.len() >= empty_vertices.len());
+    assert!(
+        typed_vertices
+            .iter()
+            .any(|vertex| vertex.color == SINGLE_SESSION_CARET_COLOR)
+    );
+}
+
+#[test]
+fn single_session_ctrl_backspace_deletes_previous_word() {
+    let mut app = SingleSessionApp::new(None);
+    app.handle_key(KeyInput::Character("hello desktop world".to_string()));
+
+    assert_eq!(
+        app.handle_key(KeyInput::DeletePreviousWord),
+        KeyOutcome::Redraw
+    );
+    assert_eq!(app.draft, "hello desktop ");
 }
 
 #[test]
