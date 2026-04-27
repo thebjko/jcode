@@ -25,6 +25,7 @@ use tokio::time::timeout;
 struct EnvGuard {
     prev_home: Option<OsString>,
     prev_runtime_dir: Option<OsString>,
+    prev_socket: Option<OsString>,
 }
 
 struct ScopedEnvVar {
@@ -84,6 +85,11 @@ impl Drop for EnvGuard {
         } else {
             crate::env::remove_var("JCODE_RUNTIME_DIR");
         }
+        if let Some(value) = &self.prev_socket {
+            crate::env::set_var("JCODE_SOCKET", value);
+        } else {
+            crate::env::remove_var("JCODE_SOCKET");
+        }
     }
 }
 
@@ -108,15 +114,18 @@ impl Drop for ScopedEnvVar {
 fn configure_test_env(root: &tempfile::TempDir) -> EnvGuard {
     let prev_home = std::env::var_os("JCODE_HOME");
     let prev_runtime_dir = std::env::var_os("JCODE_RUNTIME_DIR");
+    let prev_socket = std::env::var_os("JCODE_SOCKET");
     let home_dir = root.path().join("home");
     let runtime_dir = root.path().join("runtime");
     std::fs::create_dir_all(&home_dir).expect("create home dir");
     std::fs::create_dir_all(&runtime_dir).expect("create runtime dir");
     crate::env::set_var("JCODE_HOME", &home_dir);
     crate::env::set_var("JCODE_RUNTIME_DIR", &runtime_dir);
+    crate::env::remove_var("JCODE_SOCKET");
     EnvGuard {
         prev_home,
         prev_runtime_dir,
+        prev_socket,
     }
 }
 
