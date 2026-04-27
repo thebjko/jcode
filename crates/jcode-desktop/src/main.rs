@@ -18,7 +18,8 @@ const OUTER_PADDING: f32 = 28.0;
 const GAP: f32 = 16.0;
 const STATUS_BAR_HEIGHT: f32 = 42.0;
 const HEADER_HEIGHT: f32 = 28.0;
-const BORDER_WIDTH: f32 = 4.0;
+const FOCUSED_BORDER_WIDTH: f32 = 2.0;
+const UNFOCUSED_BORDER_WIDTH: f32 = 1.0;
 
 const CLEAR_COLOR: wgpu::Color = wgpu::Color {
     r: 0.955,
@@ -37,6 +38,15 @@ const SURFACE_COLORS: [[f32; 4]; 8] = [
     [0.985, 0.930, 0.930, 1.0],
     [0.930, 0.970, 0.900, 1.0],
 ];
+
+const BACKGROUND_TOP_LEFT: [f32; 4] = [0.933, 0.957, 1.000, 1.0];
+const BACKGROUND_TOP_RIGHT: [f32; 4] = [0.969, 0.949, 1.000, 1.0];
+const BACKGROUND_BOTTOM_RIGHT: [f32; 4] = [0.953, 0.980, 0.969, 1.0];
+const BACKGROUND_BOTTOM_LEFT: [f32; 4] = [0.961, 0.973, 0.984, 1.0];
+const FOCUS_RING_COLOR: [f32; 4] = [0.420, 0.447, 0.502, 1.0];
+const UNFOCUSED_BORDER_COLOR: [f32; 4] = [0.730, 0.760, 0.815, 0.72];
+const NAV_STATUS_COLOR: [f32; 4] = [0.184, 0.204, 0.251, 1.0];
+const INSERT_STATUS_COLOR: [f32; 4] = [0.310, 0.435, 0.376, 1.0];
 
 const SHADER: &str = r#"
 struct VertexOutput {
@@ -368,9 +378,24 @@ fn build_vertices(workspace: &Workspace, size: PhysicalSize<u32>) -> Vec<Vertex>
     let height = size.height as f32;
     let mut vertices = Vec::new();
 
+    push_gradient_rect(
+        &mut vertices,
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width,
+            height,
+        },
+        BACKGROUND_TOP_LEFT,
+        BACKGROUND_BOTTOM_LEFT,
+        BACKGROUND_BOTTOM_RIGHT,
+        BACKGROUND_TOP_RIGHT,
+        size,
+    );
+
     let status_color = match workspace.mode {
-        InputMode::Navigation => [0.075, 0.105, 0.180, 1.0],
-        InputMode::Insert => [0.040, 0.300, 0.180, 1.0],
+        InputMode::Navigation => NAV_STATUS_COLOR,
+        InputMode::Insert => INSERT_STATUS_COLOR,
     };
     push_rect(
         &mut vertices,
@@ -448,13 +473,17 @@ fn push_surface(
     let fill = SURFACE_COLORS[color_index % SURFACE_COLORS.len()];
     let header = darken(fill, 0.86);
     let border = if focused {
-        [0.125, 0.315, 1.000, 1.0]
+        FOCUS_RING_COLOR
     } else {
-        [0.730, 0.760, 0.815, 1.0]
+        UNFOCUSED_BORDER_COLOR
     };
 
     push_rect(vertices, rect, border, size);
-    let inset = if focused { BORDER_WIDTH } else { 2.0 };
+    let inset = if focused {
+        FOCUSED_BORDER_WIDTH
+    } else {
+        UNFOCUSED_BORDER_WIDTH
+    };
     let inner = inset_rect(rect, inset);
     push_rect(vertices, inner, fill, size);
     push_rect(
@@ -489,6 +518,18 @@ fn darken(color: [f32; 4], factor: f32) -> [f32; 4] {
 }
 
 fn push_rect(vertices: &mut Vec<Vertex>, rect: Rect, color: [f32; 4], size: PhysicalSize<u32>) {
+    push_gradient_rect(vertices, rect, color, color, color, color, size);
+}
+
+fn push_gradient_rect(
+    vertices: &mut Vec<Vertex>,
+    rect: Rect,
+    top_left_color: [f32; 4],
+    bottom_left_color: [f32; 4],
+    bottom_right_color: [f32; 4],
+    top_right_color: [f32; 4],
+    size: PhysicalSize<u32>,
+) {
     let width = size.width.max(1) as f32;
     let height = size.height.max(1) as f32;
     let left = rect.x / width * 2.0 - 1.0;
@@ -499,27 +540,27 @@ fn push_rect(vertices: &mut Vec<Vertex>, rect: Rect, color: [f32; 4], size: Phys
     vertices.extend_from_slice(&[
         Vertex {
             position: [left, top],
-            color,
+            color: top_left_color,
         },
         Vertex {
             position: [left, bottom],
-            color,
+            color: bottom_left_color,
         },
         Vertex {
             position: [right, bottom],
-            color,
+            color: bottom_right_color,
         },
         Vertex {
             position: [left, top],
-            color,
+            color: top_left_color,
         },
         Vertex {
             position: [right, bottom],
-            color,
+            color: bottom_right_color,
         },
         Vertex {
             position: [right, top],
-            color,
+            color: top_right_color,
         },
     ]);
 }

@@ -93,7 +93,7 @@ Insert mode:
   Esc          return to navigation mode
 ```
 
-The initial renderer may use only primitive colored rectangles and the native window title for mode/status text. Full text rendering can follow after the workspace behavior feels right.
+The initial renderer may use only primitive colored rectangles and the native window title for mode/status text. Full text rendering can follow after the workspace behavior feels right. The visual direction should use a soft static blue/lavender/mint gradient background, muted status colors, and a very thin gray focus ring rather than a bright web-style selection color.
 
 The target shape is:
 
