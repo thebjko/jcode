@@ -112,7 +112,8 @@ impl SingleSessionApp {
             return KeyOutcome::None;
         }
         let Some(session) = &self.session else {
-            return KeyOutcome::None;
+            self.draft.clear();
+            return KeyOutcome::StartFreshSession { message };
         };
         let session_id = session.session_id.clone();
         let title = session.title.clone();

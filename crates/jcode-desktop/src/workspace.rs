@@ -89,6 +89,9 @@ pub enum KeyOutcome {
         title: String,
         message: String,
     },
+    StartFreshSession {
+        message: String,
+    },
     Exit,
 }
 

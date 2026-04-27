@@ -169,6 +169,20 @@ fn single_session_without_session_is_native_fresh_draft() {
 }
 
 #[test]
+fn fresh_single_session_submit_requests_backend_session() {
+    let mut app = SingleSessionApp::new(None);
+    app.handle_key(KeyInput::Character("hello desktop".to_string()));
+
+    assert_eq!(
+        app.handle_key(KeyInput::SubmitDraft),
+        KeyOutcome::StartFreshSession {
+            message: "hello desktop".to_string()
+        }
+    );
+    assert!(app.draft.is_empty());
+}
+
+#[test]
 fn default_single_session_app_starts_without_attaching_recent_session() {
     let DesktopApp::SingleSession(mut app) = fresh_single_session_app() else {
         panic!("default desktop app should be single-session mode");

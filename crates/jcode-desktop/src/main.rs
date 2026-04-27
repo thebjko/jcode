@@ -252,6 +252,22 @@ async fn run() -> Result<()> {
                                 window.request_redraw();
                             }
                         }
+                        KeyOutcome::StartFreshSession { message } => {
+                            match session_launch::start_fresh_server_session(&message) {
+                                Ok(session_id) => {
+                                    std::thread::sleep(SESSION_SPAWN_REFRESH_DELAY);
+                                    app.refresh_sessions();
+                                    attach_single_session_by_id(&mut app, &session_id);
+                                    window.set_title(&app.status_title());
+                                    window.request_redraw();
+                                }
+                                Err(error) => {
+                                    eprintln!(
+                                        "jcode-desktop: failed to start fresh server session: {error:#}"
+                                    );
+                                }
+                            }
+                        }
                         KeyOutcome::None => {}
                     }
                 }
@@ -328,6 +344,19 @@ fn load_primary_session_card() -> Option<workspace::SessionCard> {
 
 fn fresh_single_session_app() -> DesktopApp {
     DesktopApp::SingleSession(SingleSessionApp::new(None))
+}
+
+fn attach_single_session_by_id(app: &mut DesktopApp, session_id: &str) {
+    let Some(card) = load_session_cards_for_desktop()
+        .into_iter()
+        .find(|card| card.session_id == session_id)
+    else {
+        return;
+    };
+
+    if let DesktopApp::SingleSession(single_session) = app {
+        single_session.replace_session(Some(card));
+    }
 }
 
 struct DesktopHotReloader {

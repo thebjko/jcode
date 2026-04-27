@@ -1,6 +1,14 @@
 use anyhow::{Context, Result};
-use std::io;
+use serde_json::{Value, json};
+use std::io::{self, BufRead, BufReader, Write};
+#[cfg(unix)]
+use std::os::unix::net::UnixStream;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
+
+const SERVER_START_TIMEOUT: Duration = Duration::from_secs(10);
+const SERVER_CONNECT_RETRY_DELAY: Duration = Duration::from_millis(50);
 
 pub fn launch_resume_session(session_id: &str, title: &str) -> Result<()> {
     let title = format!("jcode · {}", compact_title(title));
@@ -31,6 +39,188 @@ pub fn send_message_to_session(session_id: &str, _title: &str, message: &str) ->
         .with_context(|| format!("failed to spawn jcode run for {session_id}"))?;
 
     Ok(())
+}
+
+#[cfg(unix)]
+pub fn start_fresh_server_session(message: &str) -> Result<String> {
+    if message.trim().is_empty() {
+        anyhow::bail!("empty draft message");
+    }
+
+    ensure_server_running()?;
+    let stream = connect_server_with_retry(SERVER_START_TIMEOUT)?;
+    let mut writer = stream
+        .try_clone()
+        .context("failed to clone server socket writer")?;
+    let mut reader = BufReader::new(stream);
+
+    write_json_line(
+        &mut writer,
+        json!({
+            "type": "subscribe",
+            "id": 1,
+            "client_has_local_history": false,
+            "allow_session_takeover": false,
+        }),
+    )?;
+
+    let session_id = read_session_id(&mut reader, SERVER_START_TIMEOUT)?;
+
+    write_json_line(
+        &mut writer,
+        json!({
+            "type": "message",
+            "id": 2,
+            "content": message,
+            "images": [],
+        }),
+    )?;
+
+    std::thread::spawn(move || drain_session_events(reader));
+    Ok(session_id)
+}
+
+#[cfg(not(unix))]
+pub fn start_fresh_server_session(_message: &str) -> Result<String> {
+    anyhow::bail!("desktop fresh server sessions are not implemented on this platform yet")
+}
+
+#[cfg(unix)]
+fn ensure_server_running() -> Result<()> {
+    if UnixStream::connect(socket_path()).is_ok() {
+        return Ok(());
+    }
+
+    Command::new(jcode_bin())
+        .arg("serve")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .context("failed to spawn jcode serve")?;
+
+    connect_server_with_retry(SERVER_START_TIMEOUT).map(|_| ())
+}
+
+#[cfg(unix)]
+fn connect_server_with_retry(timeout: Duration) -> Result<UnixStream> {
+    let socket_path = socket_path();
+    let started = Instant::now();
+    let mut last_error = None;
+    while started.elapsed() < timeout {
+        match UnixStream::connect(&socket_path) {
+            Ok(stream) => return Ok(stream),
+            Err(error) => last_error = Some(error),
+        }
+        std::thread::sleep(SERVER_CONNECT_RETRY_DELAY);
+    }
+
+    match last_error {
+        Some(error) => Err(error).with_context(|| {
+            format!(
+                "timed out connecting to jcode server at {}",
+                socket_path.display()
+            )
+        }),
+        None => anyhow::bail!("timed out connecting to jcode server"),
+    }
+}
+
+#[cfg(unix)]
+fn read_session_id(reader: &mut BufReader<UnixStream>, timeout: Duration) -> Result<String> {
+    reader
+        .get_ref()
+        .set_read_timeout(Some(SERVER_CONNECT_RETRY_DELAY))
+        .context("failed to configure server socket timeout")?;
+    let started = Instant::now();
+    let mut line = String::new();
+    while started.elapsed() < timeout {
+        line.clear();
+        match reader.read_line(&mut line) {
+            Ok(0) => anyhow::bail!("jcode server disconnected before assigning a session"),
+            Ok(_) => {
+                let value: Value = serde_json::from_str(line.trim())
+                    .context("failed to parse jcode server event")?;
+                if value.get("type").and_then(Value::as_str) == Some("session") {
+                    let Some(session_id) = value.get("session_id").and_then(Value::as_str) else {
+                        anyhow::bail!("jcode server sent malformed session event");
+                    };
+                    return Ok(session_id.to_string());
+                }
+                if value.get("type").and_then(Value::as_str) == Some("error") {
+                    let message = value
+                        .get("message")
+                        .and_then(Value::as_str)
+                        .unwrap_or("unknown server error");
+                    anyhow::bail!("jcode server rejected fresh session: {message}");
+                }
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ) => {}
+            Err(error) => return Err(error).context("failed to read jcode server event"),
+        }
+    }
+
+    anyhow::bail!("timed out waiting for jcode server session id")
+}
+
+#[cfg(unix)]
+fn write_json_line(writer: &mut UnixStream, value: Value) -> Result<()> {
+    serde_json::to_writer(&mut *writer, &value).context("failed to encode server request")?;
+    writer
+        .write_all(b"\n")
+        .context("failed to send server request")?;
+    writer.flush().context("failed to flush server request")
+}
+
+#[cfg(unix)]
+fn drain_session_events(mut reader: BufReader<UnixStream>) {
+    let _ = reader.get_ref().set_read_timeout(None);
+    let mut line = String::new();
+    loop {
+        line.clear();
+        match reader.read_line(&mut line) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {
+                if let Ok(value) = serde_json::from_str::<Value>(line.trim()) {
+                    match value.get("type").and_then(Value::as_str) {
+                        Some("done" | "error") => break,
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn socket_path() -> PathBuf {
+    if let Ok(custom) = std::env::var("JCODE_SOCKET") {
+        return PathBuf::from(custom);
+    }
+    if let Ok(dir) = std::env::var("JCODE_RUNTIME_DIR") {
+        return PathBuf::from(dir).join("jcode.sock");
+    }
+    if let Ok(dir) = std::env::var("XDG_RUNTIME_DIR") {
+        return PathBuf::from(dir).join("jcode.sock");
+    }
+    std::env::temp_dir()
+        .join(format!("jcode-{}", runtime_user_discriminator()))
+        .join("jcode.sock")
+}
+
+#[cfg(unix)]
+fn runtime_user_discriminator() -> String {
+    unsafe { libc::geteuid() }.to_string()
+}
+
+#[cfg(not(unix))]
+fn runtime_user_discriminator() -> String {
+    std::env::var("USERNAME")
+        .or_else(|_| std::env::var("USER"))
+        .unwrap_or_else(|_| "user".to_string())
 }
 
 fn launch_first_available_terminal(candidates: Vec<Command>, description: &str) -> Result<()> {
