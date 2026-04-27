@@ -23,6 +23,107 @@ fn test_exposure(message_index: usize, total_messages: usize) -> ExposureDescrip
     }
 }
 
+fn grep_input(query: &str, max_regions: Option<usize>) -> AgentGrepInput {
+    AgentGrepInput {
+        mode: "grep".to_string(),
+        query: Some(query.to_string()),
+        file: None,
+        terms: None,
+        regex: Some(false),
+        path: None,
+        glob: None,
+        file_type: None,
+        hidden: None,
+        no_ignore: None,
+        max_files: None,
+        max_regions,
+        full_region: None,
+        debug_plan: None,
+        debug_score: None,
+        paths_only: None,
+    }
+}
+
+#[test]
+fn render_compacts_huge_grep_match_lines() {
+    let args = GrepArgs {
+        query: "set_status_notice".to_string(),
+        regex: false,
+        file_type: None,
+        json: false,
+        paths_only: false,
+        hidden: false,
+        no_ignore: false,
+        path: None,
+        glob: None,
+    };
+    let line = format!(
+        "{{\"output\":\"{}set_status_notice{}\"}}",
+        "a".repeat(800),
+        "b".repeat(800)
+    );
+
+    let compact = render::compact_rendered_match_line(&line, &args);
+
+    assert!(compact.contains("set_status_notice"));
+    assert!(compact.contains("[truncated:"), "{compact}");
+    assert!(
+        compact.chars().count() < 340,
+        "compact output should be bounded, got {} chars: {compact}",
+        compact.chars().count()
+    );
+}
+
+#[test]
+fn grep_max_regions_limits_rendered_match_excerpts() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        temp.path().join("a.rs"),
+        "fn one() { status_notice(); }\nfn two() { status_notice(); }\nfn three() { status_notice(); }\n",
+    )
+    .expect("write file");
+
+    let output = execute_linked_agentgrep(
+        &grep_input("status_notice", Some(2)),
+        &test_ctx(temp.path()),
+        None,
+    )
+    .expect("agentgrep execute")
+    .output;
+
+    assert_eq!(output.matches("      - @ ").count(), 2, "{output}");
+    assert!(
+        output.contains("1 more matches omitted (max_regions=2)"),
+        "{output}"
+    );
+}
+
+#[test]
+fn grep_caps_non_code_file_match_excerpts_by_default() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        temp.path().join("timeline.json"),
+        (0..5)
+            .map(|idx| format!("{{\"event\":\"status_notice {idx}\"}}\n"))
+            .collect::<String>(),
+    )
+    .expect("write file");
+
+    let output = execute_linked_agentgrep(
+        &grep_input("status_notice", None),
+        &test_ctx(temp.path()),
+        None,
+    )
+    .expect("agentgrep execute")
+    .output;
+
+    assert_eq!(output.matches("      - @ ").count(), 3, "{output}");
+    assert!(
+        output.contains("2 more non-code matches omitted"),
+        "{output}"
+    );
+}
+
 #[test]
 fn build_grep_args_includes_scope_flags() {
     let ctx = test_ctx(Path::new("/tmp/root"));

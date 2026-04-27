@@ -287,7 +287,10 @@ fn execute_linked_agentgrep(
                 run_grep(&root, &args).map_err(anyhow::Error::msg)?,
                 exact_file.as_deref(),
             );
-            Ok(ToolOutput::new(render_grep_output(&result, &args)).with_title("agentgrep grep"))
+            Ok(
+                ToolOutput::new(render_grep_output(&result, &args, params.max_regions))
+                    .with_title("agentgrep grep"),
+            )
         }
         "find" => {
             let args = build_find_args(params, ctx)?;

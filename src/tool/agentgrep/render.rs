@@ -1,6 +1,14 @@
 use super::*;
 
-pub(super) fn render_grep_output(result: &GrepResult, args: &GrepArgs) -> String {
+const MAX_RENDERED_MATCH_LINE_CHARS: usize = 240;
+const RENDERED_MATCH_PREFIX_CONTEXT_CHARS: usize = 80;
+const MAX_NON_CODE_MATCH_LINES_PER_FILE: usize = 3;
+
+pub(super) fn render_grep_output(
+    result: &GrepResult,
+    args: &GrepArgs,
+    max_matches: Option<usize>,
+) -> String {
     if args.paths_only {
         return result
             .files
@@ -17,15 +25,64 @@ pub(super) fn render_grep_output(result: &GrepResult, args: &GrepArgs) -> String
             result.total_matches, result.total_files
         ),
     ];
+    let mut state = GrepRenderState::new(max_matches);
 
     for file in &result.files {
-        render_grep_file(file, &mut lines);
+        if state.limit_reached() {
+            break;
+        }
+        render_grep_file(file, args, &mut lines, &mut state);
+    }
+
+    if let Some(max) = max_matches
+        && result.total_matches > state.displayed_matches
+    {
+        lines.push(String::new());
+        lines.push(format!(
+            "... {} more matches omitted (max_regions={})",
+            result.total_matches.saturating_sub(state.displayed_matches),
+            max
+        ));
     }
 
     lines.join("\n")
 }
 
-fn render_grep_file(file: &FileMatches, lines: &mut Vec<String>) {
+struct GrepRenderState {
+    displayed_matches: usize,
+    max_matches: Option<usize>,
+}
+
+impl GrepRenderState {
+    fn new(max_matches: Option<usize>) -> Self {
+        Self {
+            displayed_matches: 0,
+            max_matches,
+        }
+    }
+
+    fn limit_reached(&self) -> bool {
+        self.max_matches
+            .is_some_and(|max| self.displayed_matches >= max)
+    }
+
+    fn remaining_matches(&self) -> usize {
+        self.max_matches
+            .map(|max| max.saturating_sub(self.displayed_matches))
+            .unwrap_or(usize::MAX)
+    }
+
+    fn record_match(&mut self) {
+        self.displayed_matches += 1;
+    }
+}
+
+fn render_grep_file(
+    file: &FileMatches,
+    args: &GrepArgs,
+    lines: &mut Vec<String>,
+    state: &mut GrepRenderState,
+) {
     lines.push(String::new());
     lines.push(file.path.clone());
     if file.total_symbols > 0 {
@@ -38,7 +95,28 @@ fn render_grep_file(file: &FileMatches, lines: &mut Vec<String>) {
     } else {
         lines.push("  symbols: no structural items detected".to_string());
     }
+    let non_code_cap = non_code_match_cap(file);
+    let mut file_displayed_matches = 0usize;
+
     for group in &file.groups {
+        if state.limit_reached() {
+            break;
+        }
+        let remaining_file_matches = non_code_cap
+            .map(|cap| cap.saturating_sub(file_displayed_matches))
+            .unwrap_or(usize::MAX);
+        let remaining_matches = state.remaining_matches().min(remaining_file_matches);
+        if remaining_matches == 0 {
+            break;
+        }
+        let visible_matches = group
+            .resolved_matches(&file.matches)
+            .take(remaining_matches)
+            .collect::<Vec<_>>();
+        if visible_matches.is_empty() {
+            continue;
+        }
+
         match (group.start_line, group.end_line) {
             (Some(start_line), Some(end_line)) => lines.push(format!(
                 "    - {} {} @ {}-{}",
@@ -46,12 +124,24 @@ fn render_grep_file(file: &FileMatches, lines: &mut Vec<String>) {
             )),
             _ => lines.push(format!("    - {}", group.label)),
         }
-        for line_match in group.resolved_matches(&file.matches) {
+        for line_match in visible_matches {
+            let line_text = compact_rendered_match_line(&line_match.line_text, args);
             lines.push(format!(
                 "      - @ {} {}",
-                line_match.line_number, line_match.line_text
+                line_match.line_number, line_text
             ));
+            file_displayed_matches += 1;
+            state.record_match();
         }
+    }
+    if non_code_cap.is_some()
+        && !state.limit_reached()
+        && file.matches.len() > file_displayed_matches
+    {
+        lines.push(format!(
+            "    - ... {} more non-code matches omitted; narrow path/glob/type or use paths_only for full file list",
+            file.matches.len().saturating_sub(file_displayed_matches)
+        ));
     }
     if !file.other_symbols.is_empty() {
         let mut summary = file
@@ -72,6 +162,58 @@ fn render_grep_file(file: &FileMatches, lines: &mut Vec<String>) {
             summary.push_str(&format!("... {} more", file.other_symbols_omitted_count));
         }
         lines.push(format!("    - other: {summary}"));
+    }
+}
+
+fn non_code_match_cap(file: &FileMatches) -> Option<usize> {
+    match file.language.as_str() {
+        "json" | "yaml" | "markdown" | "text" | "" => Some(MAX_NON_CODE_MATCH_LINES_PER_FILE),
+        _ => None,
+    }
+}
+
+pub(super) fn compact_rendered_match_line(line: &str, args: &GrepArgs) -> String {
+    let char_count = line.chars().count();
+    if char_count <= MAX_RENDERED_MATCH_LINE_CHARS {
+        return line.to_string();
+    }
+
+    let match_start_char = if args.regex {
+        0
+    } else {
+        args.query
+            .is_empty()
+            .then_some(0)
+            .or_else(|| {
+                line.find(&args.query)
+                    .map(|byte| line[..byte].chars().count())
+            })
+            .unwrap_or(0)
+    };
+    let start_char = match_start_char.saturating_sub(RENDERED_MATCH_PREFIX_CONTEXT_CHARS);
+    let end_char = start_char
+        .saturating_add(MAX_RENDERED_MATCH_LINE_CHARS)
+        .min(char_count);
+    let start_char = end_char
+        .saturating_sub(MAX_RENDERED_MATCH_LINE_CHARS)
+        .min(start_char);
+
+    let omitted_prefix = start_char;
+    let omitted_suffix = char_count.saturating_sub(end_char);
+    let snippet: String = line
+        .chars()
+        .skip(start_char)
+        .take(end_char.saturating_sub(start_char))
+        .collect();
+
+    match (omitted_prefix > 0, omitted_suffix > 0) {
+        (true, true) => format!(
+            "…{} … [truncated: {} chars before, {} chars after]",
+            snippet, omitted_prefix, omitted_suffix
+        ),
+        (true, false) => format!("…{} [truncated: {} chars before]", snippet, omitted_prefix),
+        (false, true) => format!("{} … [truncated: {} chars after]", snippet, omitted_suffix),
+        (false, false) => snippet,
     }
 }
 
