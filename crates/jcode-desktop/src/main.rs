@@ -321,9 +321,25 @@ async fn run() -> Result<()> {
                                 window.set_title(&app.status_title());
                                 window.request_redraw();
                             } else if !images.is_empty() {
-                                eprintln!(
-                                    "jcode-desktop: image drafts are only supported in single-session mode"
-                                );
+                                match session_launch::spawn_message_to_session(
+                                    session_id.clone(),
+                                    message,
+                                    images,
+                                    session_event_tx.clone(),
+                                ) {
+                                    Ok(_handle) => {
+                                        std::thread::sleep(SESSION_SPAWN_REFRESH_DELAY);
+                                        app.refresh_sessions();
+                                        if let DesktopApp::Workspace(workspace) = &app {
+                                            save_desktop_preferences(workspace);
+                                        }
+                                        window.set_title(&app.status_title());
+                                        window.request_redraw();
+                                    }
+                                    Err(error) => eprintln!(
+                                        "jcode-desktop: failed to send image draft to {session_id}: {error:#}"
+                                    ),
+                                }
                             } else if let Err(error) = session_launch::send_message_to_session(
                                 &session_id,
                                 &title,
@@ -419,7 +435,7 @@ async fn run() -> Result<()> {
                         KeyOutcome::AttachClipboardImage => {
                             match clipboard_image_png_base64() {
                                 Ok((media_type, base64_data)) => {
-                                    app.attach_single_session_image(media_type, base64_data);
+                                    app.attach_clipboard_image(media_type, base64_data);
                                 }
                                 Err(error) => apply_single_session_error(&mut app, error),
                             }
@@ -944,9 +960,12 @@ impl DesktopApp {
         }
     }
 
-    fn attach_single_session_image(&mut self, media_type: String, base64_data: String) {
-        if let Self::SingleSession(app) = self {
-            app.attach_image(media_type, base64_data);
+    fn attach_clipboard_image(&mut self, media_type: String, base64_data: String) {
+        match self {
+            Self::SingleSession(app) => app.attach_image(media_type, base64_data),
+            Self::Workspace(workspace) => {
+                workspace.attach_image(media_type, base64_data);
+            }
         }
     }
 

@@ -91,13 +91,22 @@ pub(crate) fn push_panel_contents(
 }
 
 pub(crate) fn focused_panel_draft(workspace: &Workspace, surface_id: u64) -> Option<String> {
-    if workspace.mode == InputMode::Insert
-        && workspace.is_focused(surface_id)
-        && !workspace.draft.trim().is_empty()
-    {
-        Some(workspace.draft.trim().to_string())
-    } else {
+    if workspace.mode != InputMode::Insert || !workspace.is_focused(surface_id) {
+        return None;
+    }
+
+    let draft = workspace.draft.trim();
+    let images = match workspace.pending_images.len() {
+        0 => String::new(),
+        1 => " · 1 image".to_string(),
+        count => format!(" · {count} images"),
+    };
+    if draft.is_empty() && images.is_empty() {
         None
+    } else if draft.is_empty() {
+        Some(images.trim_start_matches(" · ").to_string())
+    } else {
+        Some(format!("{draft}{images}"))
     }
 }
 

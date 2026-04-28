@@ -966,10 +966,11 @@ fn focused_panel_draft_only_shows_for_focused_insert_panel() {
     }]);
     workspace.handle_key(KeyInput::Character("i".to_string()));
     workspace.handle_key(KeyInput::Character("draft text".to_string()));
+    workspace.attach_image("image/png".to_string(), "abc123".to_string());
 
     assert_eq!(
         focused_panel_draft(&workspace, workspace.focused_id),
-        Some("draft text".to_string())
+        Some("draft text · 1 image".to_string())
     );
     assert_eq!(
         focused_panel_draft(&workspace, workspace.focused_id + 1),

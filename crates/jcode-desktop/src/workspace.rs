@@ -214,6 +214,7 @@ pub struct Workspace {
     pub zoomed: bool,
     pub detail_scroll: usize,
     pub draft: String,
+    pub pending_images: Vec<(String, String)>,
     panel_size: PanelSizePreset,
     next_id: u64,
 }
@@ -238,6 +239,7 @@ impl Workspace {
             zoomed: false,
             detail_scroll: 0,
             draft: String::new(),
+            pending_images: Vec::new(),
             panel_size: PanelSizePreset::Quarter,
             next_id: 8,
         }
@@ -266,6 +268,7 @@ impl Workspace {
             zoomed: false,
             detail_scroll: 0,
             draft: String::new(),
+            pending_images: Vec::new(),
             panel_size: PanelSizePreset::Quarter,
             next_id,
         }
@@ -291,6 +294,7 @@ impl Workspace {
             zoomed: false,
             detail_scroll: 0,
             draft: String::new(),
+            pending_images: Vec::new(),
             panel_size: PanelSizePreset::Quarter,
             next_id: 2,
         }
@@ -327,8 +331,13 @@ impl Workspace {
                 "Jcode Desktop · {mode}{zoom} · workspace {workspace} · panel {panel_size} · {focused} · h/l columns · j/k workspaces · Ctrl+1-4 panel size · Ctrl+R refresh · Ctrl+; new · Ctrl+? help · z zoom · i insert · Esc quit"
             ),
             InputMode::Insert => {
+                let images = match self.pending_images.len() {
+                    0 => String::new(),
+                    1 => " · 1 image".to_string(),
+                    count => format!(" · {count} images"),
+                };
                 format!(
-                    "Jcode Desktop · {mode}{zoom} · workspace {workspace} · {focused} · Ctrl+Enter send · Enter newline · Esc NAV"
+                    "Jcode Desktop · {mode}{zoom} · workspace {workspace} · {focused}{images} · Enter send · Shift+Enter newline · Ctrl+I image · Esc NAV"
                 )
             }
         }
@@ -352,6 +361,8 @@ impl Workspace {
         replacement.mode = previous_mode;
         replacement.panel_size = previous_panel_size;
         replacement.detail_scroll = self.detail_scroll;
+        replacement.draft = self.draft.clone();
+        replacement.pending_images = self.pending_images.clone();
         if let Some(previous_session_id) = previous_session_id
             && let Some(surface) = replacement
                 .surfaces
@@ -421,6 +432,14 @@ impl Workspace {
             return false;
         }
         self.draft.push_str(text);
+        true
+    }
+
+    pub fn attach_image(&mut self, media_type: String, base64_data: String) -> bool {
+        if self.mode != InputMode::Insert {
+            return false;
+        }
+        self.pending_images.push((media_type, base64_data));
         true
     }
 
@@ -547,6 +566,7 @@ impl Workspace {
                 self.draft.clear();
                 KeyOutcome::Redraw
             }
+            KeyInput::AttachClipboardImage => KeyOutcome::AttachClipboardImage,
             KeyInput::DeleteNextChar
             | KeyInput::DeleteNextWord
             | KeyInput::MoveCursorLeft
@@ -563,8 +583,7 @@ impl Workspace {
             | KeyInput::CopyLatestResponse
             | KeyInput::OpenModelPicker
             | KeyInput::ModelPickerMove(_)
-            | KeyInput::CycleModel(_)
-            | KeyInput::AttachClipboardImage => KeyOutcome::None,
+            | KeyInput::CycleModel(_) => KeyOutcome::None,
             KeyInput::PasteText => KeyOutcome::PasteText,
             KeyInput::Character(text) => {
                 self.draft.push_str(&text);
@@ -576,20 +595,21 @@ impl Workspace {
 
     fn submit_draft(&mut self) -> KeyOutcome {
         let message = self.draft.trim().to_string();
-        if message.is_empty() {
+        if message.is_empty() && self.pending_images.is_empty() {
             return KeyOutcome::None;
         }
         let Some((session_id, title)) = self.focused_session_target() else {
             return KeyOutcome::None;
         };
 
+        let images = std::mem::take(&mut self.pending_images);
         self.draft.clear();
         self.mode = InputMode::Navigation;
         KeyOutcome::SendDraft {
             session_id,
             title,
             message,
-            images: Vec::new(),
+            images,
         }
     }
 
