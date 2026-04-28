@@ -73,6 +73,7 @@ pub(crate) struct SingleSessionMessage {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[allow(dead_code)]
 pub(crate) enum SingleSessionRole {
     User,
     Assistant,
@@ -109,6 +110,7 @@ impl SingleSessionMessage {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn system(content: impl Into<String>) -> Self {
         Self {
             role: SingleSessionRole::System,
@@ -116,6 +118,7 @@ impl SingleSessionMessage {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn meta(content: impl Into<String>) -> Self {
         Self {
             role: SingleSessionRole::Meta,
@@ -331,6 +334,26 @@ impl SingleSessionApp {
             DesktopSessionEvent::TextReplace(text) => {
                 self.streaming_response = text;
                 self.status = Some("receiving".to_string());
+            }
+            DesktopSessionEvent::ToolStarted { name } => {
+                self.status = Some(format!("using tool {name}"));
+                self.messages
+                    .push(SingleSessionMessage::tool(format!("{name} running")));
+            }
+            DesktopSessionEvent::ToolFinished {
+                name,
+                summary,
+                is_error,
+            } => {
+                self.status = Some(if is_error {
+                    format!("tool {name} failed")
+                } else {
+                    format!("tool {name} done")
+                });
+                let marker = if is_error { "failed" } else { "done" };
+                self.messages.push(SingleSessionMessage::tool(format!(
+                    "{name} {marker}: {summary}"
+                )));
             }
             DesktopSessionEvent::Done => {
                 self.finish_streaming_response();

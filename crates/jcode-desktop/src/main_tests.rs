@@ -259,6 +259,24 @@ fn single_session_assistant_markdown_is_prepared_for_desktop_rendering() {
 }
 
 #[test]
+fn single_session_tool_events_create_transcript_cards() {
+    let mut app = SingleSessionApp::new(None);
+    app.apply_session_event(session_launch::DesktopSessionEvent::ToolStarted {
+        name: "bash".to_string(),
+    });
+    app.apply_session_event(session_launch::DesktopSessionEvent::ToolFinished {
+        name: "bash".to_string(),
+        summary: "tests passed".to_string(),
+        is_error: false,
+    });
+
+    let body = app.body_lines().join("\n");
+    assert!(body.contains("• bash running"));
+    assert!(body.contains("• bash done: tests passed"));
+    assert_eq!(app.status.as_deref(), Some("tool bash done"));
+}
+
+#[test]
 fn single_session_applies_live_server_events_to_visible_body() {
     let mut app = SingleSessionApp::new(None);
     app.handle_key(KeyInput::Character("hello".to_string()));

@@ -432,6 +432,33 @@ fn run_headless_chat_smoke(message: String) -> Result<()> {
                     serde_json::json!({"event": "text_replace", "chars": response.chars().count()})
                 );
             }
+            session_launch::DesktopSessionEvent::ToolStarted { name } => {
+                last_status = Some(format!("using tool {name}"));
+                println!(
+                    "{}",
+                    serde_json::json!({"event": "tool_started", "name": name})
+                );
+            }
+            session_launch::DesktopSessionEvent::ToolFinished {
+                name,
+                summary,
+                is_error,
+            } => {
+                last_status = Some(if is_error {
+                    format!("tool {name} failed")
+                } else {
+                    format!("tool {name} done")
+                });
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "event": "tool_finished",
+                        "name": name,
+                        "summary": summary,
+                        "is_error": is_error,
+                    })
+                );
+            }
             session_launch::DesktopSessionEvent::Reloading { new_socket } => {
                 last_status = Some("server reloading, reconnecting".to_string());
                 println!(

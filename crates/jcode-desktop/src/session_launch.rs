@@ -14,10 +14,22 @@ const SERVER_CONNECT_RETRY_DELAY: Duration = Duration::from_millis(50);
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DesktopSessionEvent {
     Status(String),
-    SessionStarted { session_id: String },
+    SessionStarted {
+        session_id: String,
+    },
     TextDelta(String),
     TextReplace(String),
-    Reloading { new_socket: Option<String> },
+    ToolStarted {
+        name: String,
+    },
+    ToolFinished {
+        name: String,
+        summary: String,
+        is_error: bool,
+    },
+    Reloading {
+        new_socket: Option<String>,
+    },
     Done,
     Error(String),
 }
@@ -560,10 +572,25 @@ fn desktop_event_from_server_value(value: &Value) -> Option<DesktopSessionEvent>
             .get("detail")
             .and_then(Value::as_str)
             .map(|detail| DesktopSessionEvent::Status(detail.to_string())),
-        "tool_start" | "tool_exec" => value
-            .get("name")
-            .and_then(Value::as_str)
-            .map(|name| DesktopSessionEvent::Status(format!("using tool {name}"))),
+        "tool_start" | "tool_exec" => {
+            value
+                .get("name")
+                .and_then(Value::as_str)
+                .map(|name| DesktopSessionEvent::ToolStarted {
+                    name: name.to_string(),
+                })
+        }
+        "tool_done" => value.get("name").and_then(Value::as_str).map(|name| {
+            DesktopSessionEvent::ToolFinished {
+                name: name.to_string(),
+                summary: value
+                    .get("output")
+                    .and_then(Value::as_str)
+                    .map(compact_tool_output)
+                    .unwrap_or_else(|| "done".to_string()),
+                is_error: value.get("error").is_some_and(|error| !error.is_null()),
+            }
+        }),
         "interrupted" => Some(DesktopSessionEvent::Status("interrupted".to_string())),
         "reloading" => Some(DesktopSessionEvent::Reloading {
             new_socket: value
@@ -580,6 +607,19 @@ fn desktop_event_from_server_value(value: &Value) -> Option<DesktopSessionEvent>
                 .to_string(),
         )),
         _ => None,
+    }
+}
+
+fn compact_tool_output(output: &str) -> String {
+    let trimmed = output.trim();
+    if trimmed.is_empty() {
+        return "done".to_string();
+    }
+    let single_line = trimmed.lines().next().unwrap_or(trimmed).trim();
+    if single_line.chars().count() > 120 {
+        format!("{}…", single_line.chars().take(120).collect::<String>())
+    } else {
+        single_line.to_string()
     }
 }
 
@@ -772,7 +812,21 @@ mod tests {
         );
         assert_eq!(
             desktop_event_from_server_value(&json!({"type": "tool_exec", "name": "bash"})),
-            Some(DesktopSessionEvent::Status("using tool bash".to_string()))
+            Some(DesktopSessionEvent::ToolStarted {
+                name: "bash".to_string()
+            })
+        );
+        assert_eq!(
+            desktop_event_from_server_value(&json!({
+                "type": "tool_done",
+                "name": "bash",
+                "output": "hello\nworld"
+            })),
+            Some(DesktopSessionEvent::ToolFinished {
+                name: "bash".to_string(),
+                summary: "hello".to_string(),
+                is_error: false
+            })
         );
         assert_eq!(
             desktop_event_from_server_value(&json!({
