@@ -67,13 +67,17 @@ pub enum KeyInput {
     Enter,
     Backspace,
     DeletePreviousWord,
+    DeleteNextWord,
     DeleteNextChar,
+    MoveCursorWordLeft,
+    MoveCursorWordRight,
     MoveCursorLeft,
     MoveCursorRight,
     MoveToLineStart,
     MoveToLineEnd,
     DeleteToLineStart,
     DeleteToLineEnd,
+    UndoInput,
     CancelGeneration,
     ScrollBodyPages(i32),
     SubmitDraft,
@@ -501,11 +505,15 @@ impl Workspace {
                 KeyOutcome::Redraw
             }
             KeyInput::DeleteNextChar
+            | KeyInput::DeleteNextWord
             | KeyInput::MoveCursorLeft
             | KeyInput::MoveCursorRight
+            | KeyInput::MoveCursorWordLeft
+            | KeyInput::MoveCursorWordRight
             | KeyInput::MoveToLineStart
             | KeyInput::MoveToLineEnd
             | KeyInput::DeleteToLineEnd
+            | KeyInput::UndoInput
             | KeyInput::CancelGeneration
             | KeyInput::ScrollBodyPages(_) => KeyOutcome::None,
             KeyInput::Character(text) => {

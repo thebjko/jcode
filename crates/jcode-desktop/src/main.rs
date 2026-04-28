@@ -781,8 +781,20 @@ fn to_key_input(key: &Key, modifiers: ModifiersState) -> KeyInput {
         Key::Character(text) if modifiers.control_key() && text.eq_ignore_ascii_case("k") => {
             KeyInput::DeleteToLineEnd
         }
+        Key::Character(text) if modifiers.control_key() && text.eq_ignore_ascii_case("z") => {
+            KeyInput::UndoInput
+        }
         Key::Character(text) if modifiers.control_key() && text.eq_ignore_ascii_case("c") => {
             KeyInput::CancelGeneration
+        }
+        Key::Character(text) if modifiers.alt_key() && text.eq_ignore_ascii_case("b") => {
+            KeyInput::MoveCursorWordLeft
+        }
+        Key::Character(text) if modifiers.alt_key() && text.eq_ignore_ascii_case("f") => {
+            KeyInput::MoveCursorWordRight
+        }
+        Key::Character(text) if modifiers.alt_key() && text.eq_ignore_ascii_case("d") => {
+            KeyInput::DeleteNextWord
         }
         Key::Character(text) if modifiers.control_key() && text == ";" => KeyInput::SpawnPanel,
         Key::Character(text) if modifiers.control_key() && (text == "?" || text == "/") => {

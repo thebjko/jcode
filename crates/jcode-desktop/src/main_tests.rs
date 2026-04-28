@@ -184,6 +184,31 @@ fn single_session_ctrl_backspace_deletes_previous_word() {
 }
 
 #[test]
+fn single_session_supports_tui_like_word_movement_delete_and_undo() {
+    let mut app = SingleSessionApp::new(None);
+    app.handle_key(KeyInput::Character("hello desktop world".to_string()));
+
+    assert_eq!(
+        app.handle_key(KeyInput::MoveCursorWordLeft),
+        KeyOutcome::Redraw
+    );
+    assert_eq!(app.draft_cursor, "hello desktop ".len());
+
+    assert_eq!(
+        app.handle_key(KeyInput::MoveCursorWordRight),
+        KeyOutcome::Redraw
+    );
+    assert_eq!(app.draft_cursor, app.draft.len());
+
+    app.handle_key(KeyInput::MoveCursorWordLeft);
+    assert_eq!(app.handle_key(KeyInput::DeleteNextWord), KeyOutcome::Redraw);
+    assert_eq!(app.draft, "hello desktop ");
+
+    assert_eq!(app.handle_key(KeyInput::UndoInput), KeyOutcome::Redraw);
+    assert_eq!(app.draft, "hello desktop world");
+}
+
+#[test]
 fn single_session_cursor_editing_inserts_and_deletes_in_middle() {
     let mut app = SingleSessionApp::new(None);
     app.handle_key(KeyInput::Character("helo".to_string()));

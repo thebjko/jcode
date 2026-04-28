@@ -63,6 +63,7 @@ pub(crate) struct SingleSessionApp {
     pub(crate) error: Option<String>,
     pub(crate) is_processing: bool,
     pub(crate) body_scroll_lines: usize,
+    input_undo_stack: Vec<(String, usize)>,
     session_handle: Option<DesktopSessionHandle>,
 }
 
@@ -141,6 +142,7 @@ impl SingleSessionApp {
             error: None,
             is_processing: false,
             body_scroll_lines: 0,
+            input_undo_stack: Vec::new(),
             session_handle: None,
         }
     }
@@ -165,6 +167,7 @@ impl SingleSessionApp {
         self.error = None;
         self.is_processing = false;
         self.body_scroll_lines = 0;
+        self.input_undo_stack.clear();
         self.session_handle = None;
     }
 
@@ -247,8 +250,20 @@ impl SingleSessionApp {
                 self.delete_previous_word();
                 KeyOutcome::Redraw
             }
+            KeyInput::DeleteNextWord => {
+                self.delete_next_word();
+                KeyOutcome::Redraw
+            }
             KeyInput::DeleteNextChar => {
                 self.delete_next_char();
+                KeyOutcome::Redraw
+            }
+            KeyInput::MoveCursorWordLeft => {
+                self.move_cursor_word_left();
+                KeyOutcome::Redraw
+            }
+            KeyInput::MoveCursorWordRight => {
+                self.move_cursor_word_right();
                 KeyOutcome::Redraw
             }
             KeyInput::MoveCursorLeft => {
@@ -273,6 +288,10 @@ impl SingleSessionApp {
             }
             KeyInput::DeleteToLineEnd => {
                 self.delete_to_line_end();
+                KeyOutcome::Redraw
+            }
+            KeyInput::UndoInput => {
+                self.undo_input_change();
                 KeyOutcome::Redraw
             }
             KeyInput::Character(text) => {
@@ -460,6 +479,7 @@ impl SingleSessionApp {
         self.messages.push(SingleSessionMessage::user(message));
         self.draft.clear();
         self.draft_cursor = 0;
+        self.input_undo_stack.clear();
         self.streaming_response.clear();
         self.scroll_body_to_bottom();
         self.status = Some("sending".to_string());
@@ -477,6 +497,9 @@ impl SingleSessionApp {
     }
 
     fn insert_draft_text(&mut self, text: &str) {
+        if !text.is_empty() {
+            self.remember_input_undo_state();
+        }
         self.clamp_draft_cursor();
         self.draft.insert_str(self.draft_cursor, text);
         self.draft_cursor += text.len();
@@ -487,6 +510,7 @@ impl SingleSessionApp {
         if self.draft_cursor == 0 {
             return;
         }
+        self.remember_input_undo_state();
         let previous = previous_char_boundary(&self.draft, self.draft_cursor);
         self.draft.replace_range(previous..self.draft_cursor, "");
         self.draft_cursor = previous;
@@ -497,6 +521,7 @@ impl SingleSessionApp {
         if self.draft_cursor >= self.draft.len() {
             return;
         }
+        self.remember_input_undo_state();
         let next = next_char_boundary(&self.draft, self.draft_cursor);
         self.draft.replace_range(self.draft_cursor..next, "");
     }
@@ -504,8 +529,20 @@ impl SingleSessionApp {
     fn delete_previous_word(&mut self) {
         self.clamp_draft_cursor();
         let start = previous_word_start(&self.draft, self.draft_cursor);
+        if start < self.draft_cursor {
+            self.remember_input_undo_state();
+        }
         self.draft.replace_range(start..self.draft_cursor, "");
         self.draft_cursor = start;
+    }
+
+    fn delete_next_word(&mut self) {
+        self.clamp_draft_cursor();
+        let end = next_word_end(&self.draft, self.draft_cursor);
+        if end > self.draft_cursor {
+            self.remember_input_undo_state();
+        }
+        self.draft.replace_range(self.draft_cursor..end, "");
     }
 
     fn move_cursor_left(&mut self) {
@@ -516,6 +553,16 @@ impl SingleSessionApp {
     fn move_cursor_right(&mut self) {
         self.clamp_draft_cursor();
         self.draft_cursor = next_char_boundary(&self.draft, self.draft_cursor);
+    }
+
+    fn move_cursor_word_left(&mut self) {
+        self.clamp_draft_cursor();
+        self.draft_cursor = previous_word_start(&self.draft, self.draft_cursor);
+    }
+
+    fn move_cursor_word_right(&mut self) {
+        self.clamp_draft_cursor();
+        self.draft_cursor = next_word_end(&self.draft, self.draft_cursor);
     }
 
     fn move_to_line_start(&mut self) {
@@ -531,6 +578,9 @@ impl SingleSessionApp {
     fn delete_to_line_start(&mut self) {
         self.clamp_draft_cursor();
         let start = line_start(&self.draft, self.draft_cursor);
+        if start < self.draft_cursor {
+            self.remember_input_undo_state();
+        }
         self.draft.replace_range(start..self.draft_cursor, "");
         self.draft_cursor = start;
     }
@@ -538,7 +588,34 @@ impl SingleSessionApp {
     fn delete_to_line_end(&mut self) {
         self.clamp_draft_cursor();
         let end = line_end(&self.draft, self.draft_cursor);
+        if end > self.draft_cursor {
+            self.remember_input_undo_state();
+        }
         self.draft.replace_range(self.draft_cursor..end, "");
+    }
+
+    fn remember_input_undo_state(&mut self) {
+        if self
+            .input_undo_stack
+            .last()
+            .is_some_and(|(draft, cursor)| draft == &self.draft && *cursor == self.draft_cursor)
+        {
+            return;
+        }
+        self.input_undo_stack
+            .push((self.draft.clone(), self.draft_cursor));
+        const MAX_UNDO: usize = 64;
+        if self.input_undo_stack.len() > MAX_UNDO {
+            self.input_undo_stack.remove(0);
+        }
+    }
+
+    fn undo_input_change(&mut self) {
+        if let Some((draft, cursor)) = self.input_undo_stack.pop() {
+            self.draft = draft;
+            self.draft_cursor = cursor.min(self.draft.len());
+            self.clamp_draft_cursor();
+        }
     }
 
     fn clamp_draft_cursor(&mut self) {
@@ -725,6 +802,27 @@ fn previous_word_start(text: &str, cursor: usize) -> usize {
         start = previous;
     }
     start
+}
+
+fn next_word_end(text: &str, cursor: usize) -> usize {
+    let mut end = cursor.min(text.len());
+    while end < text.len() {
+        let next = next_char_boundary(text, end);
+        let ch = text[end..next].chars().next().unwrap_or_default();
+        if !ch.is_whitespace() {
+            break;
+        }
+        end = next;
+    }
+    while end < text.len() {
+        let next = next_char_boundary(text, end);
+        let ch = text[end..next].chars().next().unwrap_or_default();
+        if ch.is_whitespace() {
+            break;
+        }
+        end = next;
+    }
+    end
 }
 
 fn line_start(text: &str, cursor: usize) -> usize {
