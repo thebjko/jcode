@@ -89,8 +89,8 @@ impl App {
         self.log_cache_miss_if_unexpected();
 
         self.last_api_completed = Some(Instant::now());
-        self.last_api_completed_provider = Some(self.provider.name().to_string());
-        self.last_api_completed_model = Some(self.provider.model());
+        self.last_api_completed_provider = Some(<Self as TuiState>::provider_name(self));
+        self.last_api_completed_model = Some(<Self as TuiState>::provider_model(self));
         self.last_turn_input_tokens = {
             let input = self.streaming_input_tokens;
             if input > 0 { Some(input) } else { None }
@@ -116,7 +116,7 @@ impl App {
             .filter(|m| m.role == "user")
             .count();
 
-        let provider = self.provider.name().to_string();
+        let provider = <Self as TuiState>::provider_name(self);
         let upstream_provider = self.upstream_provider();
         let cache_ttl = self.cache_ttl_status();
         let cache_problem = detect_kv_cache_problem(
@@ -132,7 +132,7 @@ impl App {
         if let Some(problem) = cache_problem {
             // Collect context for debugging
             let session_id = self.session_id().to_string();
-            let model = self.provider.model();
+            let model = <Self as TuiState>::provider_model(self);
             let input_tokens = self.streaming_input_tokens;
             let output_tokens = self.streaming_output_tokens;
 
