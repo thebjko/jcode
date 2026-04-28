@@ -387,6 +387,60 @@ fn glyphon_body_buffer_uses_line_style_colors() {
     );
 }
 
+#[test]
+fn single_session_transcript_card_runs_group_card_styles() {
+    let mut app = SingleSessionApp::new(None);
+    app.messages.push(SingleSessionMessage::assistant(
+        "answer\n\n```rust\nfn main() {}\n```",
+    ));
+    app.messages.push(SingleSessionMessage::tool("bash done"));
+    app.error = Some("boom".to_string());
+
+    let lines = app.body_styled_lines();
+    let runs = single_session_transcript_card_runs(&lines);
+
+    let code = runs
+        .iter()
+        .find(|run| run.style == SingleSessionLineStyle::Code)
+        .expect("code block should have a card run");
+    assert_eq!(code.line_count, 3);
+    assert_eq!(lines[code.line].text, "``` rust");
+
+    let tool = runs
+        .iter()
+        .find(|run| run.style == SingleSessionLineStyle::Tool)
+        .expect("tool line should have a card run");
+    assert_eq!(tool.line_count, 1);
+    assert_eq!(lines[tool.line].text, "• bash done");
+
+    let error = runs
+        .iter()
+        .find(|run| run.style == SingleSessionLineStyle::Error)
+        .expect("error line should have a card run");
+    assert_eq!(error.line_count, 1);
+    assert_eq!(lines[error.line].text, "error: boom");
+}
+
+#[test]
+fn single_session_vertices_include_transcript_card_backgrounds() {
+    let mut app = SingleSessionApp::new(None);
+    app.messages.push(SingleSessionMessage::assistant(
+        "answer\n\n```rust\nfn main() {}\n```",
+    ));
+    app.messages.push(SingleSessionMessage::tool("bash done"));
+    app.error = Some("boom".to_string());
+
+    let vertices = build_single_session_vertices(&app, PhysicalSize::new(1000, 720), 0.0);
+
+    assert!(vertices_have_color(&vertices, CODE_BLOCK_BACKGROUND_COLOR));
+    assert!(vertices_have_color(&vertices, TOOL_CARD_BACKGROUND_COLOR));
+    assert!(vertices_have_color(&vertices, ERROR_CARD_BACKGROUND_COLOR));
+}
+
+fn vertices_have_color(vertices: &[Vertex], color: [f32; 4]) -> bool {
+    vertices.iter().any(|vertex| vertex.color == color)
+}
+
 fn style_for_text(lines: &[SingleSessionStyledLine], text: &str) -> Option<SingleSessionLineStyle> {
     lines
         .iter()

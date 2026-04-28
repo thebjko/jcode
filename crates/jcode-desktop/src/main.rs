@@ -105,6 +105,10 @@ const OVERLAY_TEXT_COLOR: [f32; 4] = [0.185, 0.215, 0.285, 0.84];
 const OVERLAY_SELECTION_TEXT_COLOR: [f32; 4] = [0.080, 0.120, 0.210, 0.96];
 const PANEL_SECTION_COLOR: [f32; 4] = [0.085, 0.100, 0.130, 0.78];
 const SELECTION_HIGHLIGHT_COLOR: [f32; 4] = [0.220, 0.420, 0.700, 0.22];
+const CODE_BLOCK_BACKGROUND_COLOR: [f32; 4] = [0.075, 0.095, 0.135, 0.075];
+const TOOL_CARD_BACKGROUND_COLOR: [f32; 4] = [0.900, 0.640, 0.220, 0.100];
+const ERROR_CARD_BACKGROUND_COLOR: [f32; 4] = [0.850, 0.170, 0.170, 0.105];
+const OVERLAY_SELECTION_BACKGROUND_COLOR: [f32; 4] = [0.280, 0.470, 0.780, 0.115];
 const STATUS_PREVIEW_ACCENTS: [[f32; 3]; 8] = [
     [0.560, 0.690, 0.980],
     [0.780, 0.610, 0.910],
@@ -1645,9 +1649,98 @@ fn build_single_session_vertices(
         size,
     );
 
+    push_single_session_transcript_cards(&mut vertices, app, size);
     push_single_session_selection(&mut vertices, app, size);
 
     vertices
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SingleSessionTranscriptCardRun {
+    line: usize,
+    line_count: usize,
+    style: SingleSessionLineStyle,
+}
+
+fn push_single_session_transcript_cards(
+    vertices: &mut Vec<Vertex>,
+    app: &SingleSessionApp,
+    size: PhysicalSize<u32>,
+) {
+    let typography = single_session_typography();
+    let line_height = typography.body_size * typography.body_line_height;
+    let visible_lines = single_session_visible_styled_body(app, size);
+    let width = (size.width as f32 - PANEL_TITLE_LEFT_PADDING * 2.0 + 12.0).max(1.0);
+
+    for run in single_session_transcript_card_runs(&visible_lines) {
+        let Some(color) = single_session_line_card_color(run.style) else {
+            continue;
+        };
+        push_rounded_rect(
+            vertices,
+            Rect {
+                x: PANEL_TITLE_LEFT_PADDING - 6.0,
+                y: PANEL_BODY_TOP_PADDING + run.line as f32 * line_height + 3.0,
+                width,
+                height: (run.line_count as f32 * line_height - 6.0).max(1.0),
+            },
+            7.0,
+            color,
+            size,
+        );
+    }
+}
+
+fn single_session_transcript_card_runs(
+    lines: &[SingleSessionStyledLine],
+) -> Vec<SingleSessionTranscriptCardRun> {
+    let mut runs = Vec::new();
+    let mut current: Option<SingleSessionTranscriptCardRun> = None;
+
+    for (line, styled_line) in lines.iter().enumerate() {
+        if single_session_line_card_color(styled_line.style).is_none() {
+            if let Some(run) = current.take() {
+                runs.push(run);
+            }
+            continue;
+        }
+
+        match &mut current {
+            Some(run) if run.style == styled_line.style && run.line + run.line_count == line => {
+                run.line_count += 1;
+            }
+            Some(run) => {
+                runs.push(*run);
+                current = Some(SingleSessionTranscriptCardRun {
+                    line,
+                    line_count: 1,
+                    style: styled_line.style,
+                });
+            }
+            None => {
+                current = Some(SingleSessionTranscriptCardRun {
+                    line,
+                    line_count: 1,
+                    style: styled_line.style,
+                });
+            }
+        }
+    }
+
+    if let Some(run) = current {
+        runs.push(run);
+    }
+    runs
+}
+
+fn single_session_line_card_color(style: SingleSessionLineStyle) -> Option<[f32; 4]> {
+    match style {
+        SingleSessionLineStyle::Code => Some(CODE_BLOCK_BACKGROUND_COLOR),
+        SingleSessionLineStyle::Tool => Some(TOOL_CARD_BACKGROUND_COLOR),
+        SingleSessionLineStyle::Error => Some(ERROR_CARD_BACKGROUND_COLOR),
+        SingleSessionLineStyle::OverlaySelection => Some(OVERLAY_SELECTION_BACKGROUND_COLOR),
+        _ => None,
+    }
 }
 
 fn push_single_session_selection(
