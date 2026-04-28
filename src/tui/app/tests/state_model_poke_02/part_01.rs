@@ -444,6 +444,15 @@ fn test_top_level_command_suggestions_include_config_and_subscription() {
 }
 
 #[test]
+fn test_top_level_command_suggestions_include_project_local_skills() {
+    let app = create_test_app();
+
+    let suggestions = app.get_suggestions_for("/optim");
+
+    assert!(suggestions.iter().any(|(cmd, _)| cmd == "/optimization"));
+}
+
+#[test]
 fn test_top_level_command_suggestions_include_catchup_and_back() {
     let app = create_test_app();
 

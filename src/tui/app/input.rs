@@ -1692,8 +1692,29 @@ impl App {
 
         // Check for skill invocation
         if let Some(skill_name) = SkillRegistry::parse_invocation(&input) {
-            let skills = self.current_skills_snapshot();
-            if let Some(skill) = skills.get(skill_name) {
+            let mut skill = self.current_skills_snapshot().get(skill_name).cloned();
+
+            // Remote/minimal TUI clients may start with an empty skill snapshot, and
+            // daemon-side `skill_manage reload_all` can update a different process.
+            // On a slash miss, synchronously refresh from the active session working
+            // directory before reporting Unknown skill so project-local skills such
+            // as .jcode/skills/optimization work immediately after reload/build.
+            if skill.is_none() {
+                let working_dir = self
+                    .session
+                    .working_dir
+                    .as_deref()
+                    .map(std::path::Path::new);
+                if let Ok(reloaded) = SkillRegistry::load_for_working_dir(working_dir) {
+                    skill = reloaded.get(skill_name).cloned();
+                    self.skills = std::sync::Arc::new(reloaded.clone());
+                    if let Ok(mut shared) = self.registry.skills().try_write() {
+                        *shared = reloaded;
+                    }
+                }
+            }
+
+            if let Some(skill) = skill {
                 self.active_skill = Some(skill_name.to_string());
                 self.push_display_message(DisplayMessage {
                     role: "system".to_string(),
