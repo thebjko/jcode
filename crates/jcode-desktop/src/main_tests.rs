@@ -407,6 +407,33 @@ fn single_session_paste_text_preserves_spaces() {
 }
 
 #[test]
+fn single_session_line_selection_extracts_visible_text() {
+    let mut app = SingleSessionApp::new(None);
+    app.messages.push(SingleSessionMessage::user("first"));
+    app.messages
+        .push(SingleSessionMessage::assistant("second\nthird"));
+    let lines = app.body_lines();
+
+    app.begin_selection(1);
+    app.update_selection(2);
+
+    assert_eq!(
+        app.selected_text_from_lines(&lines),
+        Some(lines[1..=2].join("\n"))
+    );
+}
+
+#[test]
+fn single_session_body_line_at_y_maps_transcript_region() {
+    let size = PhysicalSize::new(800, 600);
+    assert_eq!(
+        single_session_body_line_at_y(size, PANEL_BODY_TOP_PADDING + 1.0),
+        Some(0)
+    );
+    assert_eq!(single_session_body_line_at_y(size, 1.0), None);
+}
+
+#[test]
 fn single_session_prompt_jump_moves_between_user_turns() {
     let mut app = SingleSessionApp::new(None);
     for index in 0..4 {

@@ -21,7 +21,7 @@ use single_session::{
 use wgpu::util::DeviceExt;
 use wgpu::{CompositeAlphaMode, PresentMode, SurfaceError, TextureUsages};
 use winit::dpi::{LogicalSize, PhysicalSize};
-use winit::event::{ElementState, Event, MouseScrollDelta, WindowEvent};
+use winit::event::{ElementState, Event, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{Fullscreen, Window, WindowBuilder};
@@ -94,6 +94,7 @@ const PANEL_TITLE_COLOR: [f32; 4] = [0.090, 0.105, 0.135, 0.86];
 const PANEL_BODY_COLOR: [f32; 4] = [0.070, 0.082, 0.110, 0.88];
 const ASSISTANT_TEXT_COLOR: [f32; 4] = [0.030, 0.165, 0.190, 0.92];
 const PANEL_SECTION_COLOR: [f32; 4] = [0.085, 0.100, 0.130, 0.78];
+const SELECTION_HIGHLIGHT_COLOR: [f32; 4] = [0.220, 0.420, 0.700, 0.22];
 const STATUS_PREVIEW_ACCENTS: [[f32; 3]; 8] = [
     [0.560, 0.690, 0.980],
     [0.780, 0.610, 0.910],
@@ -167,6 +168,8 @@ async fn run() -> Result<()> {
     window.set_title(&app.status_title());
     let mut canvas = Canvas::new(window).await?;
     let mut modifiers = ModifiersState::empty();
+    let mut cursor_position = winit::dpi::PhysicalPosition::new(0.0, 0.0);
+    let mut selecting_body = false;
     let mut hot_reloader = DesktopHotReloader::new();
     let (session_event_tx, session_event_rx) = mpsc::channel();
 
@@ -199,6 +202,43 @@ async fn run() -> Result<()> {
                         window.request_redraw();
                     }
                 }
+                WindowEvent::CursorMoved { position, .. } => {
+                    cursor_position = position;
+                    if selecting_body
+                        && app.update_single_session_selection_at(
+                            cursor_position.y as f32,
+                            window.inner_size(),
+                        )
+                    {
+                        window.request_redraw();
+                    }
+                }
+                WindowEvent::MouseInput {
+                    state,
+                    button: MouseButton::Left,
+                    ..
+                } => match state {
+                    ElementState::Pressed => {
+                        selecting_body = app.begin_single_session_selection_at(
+                            cursor_position.y as f32,
+                            window.inner_size(),
+                        );
+                        if selecting_body {
+                            window.request_redraw();
+                        }
+                    }
+                    ElementState::Released => {
+                        if selecting_body {
+                            selecting_body = false;
+                            let selected = app.selected_single_session_text(window.inner_size());
+                            if let Some(text) = selected {
+                                copy_text_to_clipboard(&text, &mut app);
+                            }
+                            window.set_title(&app.status_title());
+                            window.request_redraw();
+                        }
+                    }
+                },
                 WindowEvent::KeyboardInput { event, .. }
                     if event.state == ElementState::Pressed =>
                 {
@@ -842,6 +882,44 @@ impl DesktopApp {
         }
     }
 
+    fn begin_single_session_selection_at(&mut self, y: f32, size: PhysicalSize<u32>) -> bool {
+        let Some(line) = single_session_body_line_at_y(size, y) else {
+            return false;
+        };
+        if let Self::SingleSession(app) = self {
+            let lines = single_session_visible_body(app, size);
+            if line < lines.len() {
+                app.begin_selection(line);
+                return true;
+            }
+        }
+        false
+    }
+
+    fn update_single_session_selection_at(&mut self, y: f32, size: PhysicalSize<u32>) -> bool {
+        let Some(line) = single_session_body_line_at_y(size, y) else {
+            return false;
+        };
+        if let Self::SingleSession(app) = self {
+            let lines = single_session_visible_body(app, size);
+            if line < lines.len() {
+                app.update_selection(line);
+                return true;
+            }
+        }
+        false
+    }
+
+    fn selected_single_session_text(&mut self, size: PhysicalSize<u32>) -> Option<String> {
+        if let Self::SingleSession(app) = self {
+            let lines = single_session_visible_body(app, size);
+            let selected = app.selected_text_from_lines(&lines);
+            app.clear_selection();
+            return selected;
+        }
+        None
+    }
+
     fn scroll_single_session_body(&mut self, lines: i32) {
         if let Self::SingleSession(app) = self {
             app.scroll_body_lines(lines);
@@ -1372,7 +1450,39 @@ fn build_single_session_vertices(
         size,
     );
 
+    push_single_session_selection(&mut vertices, app, size);
+
     vertices
+}
+
+fn push_single_session_selection(
+    vertices: &mut Vec<Vertex>,
+    app: &SingleSessionApp,
+    size: PhysicalSize<u32>,
+) {
+    let Some(range) = app.selection_range() else {
+        return;
+    };
+    let typography = single_session_typography();
+    let line_height = typography.body_size * typography.body_line_height;
+    let content_width = (size.width as f32 - PANEL_TITLE_LEFT_PADDING * 2.0).max(1.0);
+    let visible_lines = single_session_visible_body(app, size).len();
+    for line in range {
+        if line >= visible_lines {
+            continue;
+        }
+        push_rect(
+            vertices,
+            Rect {
+                x: PANEL_TITLE_LEFT_PADDING - 4.0,
+                y: PANEL_BODY_TOP_PADDING + line as f32 * line_height,
+                width: content_width + 8.0,
+                height: line_height,
+            },
+            SELECTION_HIGHLIGHT_COLOR,
+            size,
+        );
+    }
 }
 
 fn push_single_session_caret(
@@ -1552,6 +1662,16 @@ fn single_session_visible_body(app: &SingleSessionApp, size: PhysicalSize<u32>) 
     let end = lines.len().saturating_sub(scroll);
     let start = end.saturating_sub(visible_lines);
     lines[start..end].to_vec()
+}
+
+fn single_session_body_line_at_y(size: PhysicalSize<u32>, y: f32) -> Option<usize> {
+    let typography = single_session_typography();
+    let line_height = typography.body_size * typography.body_line_height;
+    let draft_top = single_session_draft_top(size);
+    if y < PANEL_BODY_TOP_PADDING || y >= draft_top - 12.0 {
+        return None;
+    }
+    Some(((y - PANEL_BODY_TOP_PADDING) / line_height).floor() as usize)
 }
 
 fn single_session_text_buffer(

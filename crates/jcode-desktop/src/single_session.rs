@@ -66,6 +66,8 @@ pub(crate) struct SingleSessionApp {
     pub(crate) show_help: bool,
     pub(crate) pending_images: Vec<(String, String)>,
     queued_drafts: Vec<(String, Vec<(String, String)>)>,
+    selection_anchor_line: Option<usize>,
+    selection_focus_line: Option<usize>,
     input_undo_stack: Vec<(String, usize)>,
     session_handle: Option<DesktopSessionHandle>,
 }
@@ -148,6 +150,8 @@ impl SingleSessionApp {
             show_help: false,
             pending_images: Vec::new(),
             queued_drafts: Vec::new(),
+            selection_anchor_line: None,
+            selection_focus_line: None,
             input_undo_stack: Vec::new(),
             session_handle: None,
         }
@@ -176,6 +180,7 @@ impl SingleSessionApp {
         self.show_help = false;
         self.pending_images.clear();
         self.queued_drafts.clear();
+        self.clear_selection();
         self.input_undo_stack.clear();
         self.session_handle = None;
     }
@@ -637,6 +642,37 @@ impl SingleSessionApp {
         let (message, images) = self.queued_drafts.remove(0);
         self.record_user_submit(&message);
         Some((message, images))
+    }
+
+    pub(crate) fn begin_selection(&mut self, line: usize) {
+        self.selection_anchor_line = Some(line);
+        self.selection_focus_line = Some(line);
+    }
+
+    pub(crate) fn update_selection(&mut self, line: usize) {
+        if self.selection_anchor_line.is_some() {
+            self.selection_focus_line = Some(line);
+        }
+    }
+
+    pub(crate) fn clear_selection(&mut self) {
+        self.selection_anchor_line = None;
+        self.selection_focus_line = None;
+    }
+
+    pub(crate) fn selection_range(&self) -> Option<std::ops::RangeInclusive<usize>> {
+        let anchor = self.selection_anchor_line?;
+        let focus = self.selection_focus_line?;
+        Some(anchor.min(focus)..=anchor.max(focus))
+    }
+
+    pub(crate) fn selected_text_from_lines(&self, lines: &[String]) -> Option<String> {
+        let selected = self
+            .selection_range()?
+            .filter_map(|index| lines.get(index))
+            .cloned()
+            .collect::<Vec<_>>();
+        (!selected.is_empty()).then(|| selected.join("\n"))
     }
 
     fn record_user_submit(&mut self, message: &str) {
