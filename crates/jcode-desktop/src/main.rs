@@ -113,6 +113,8 @@ const PANEL_SECTION_COLOR: [f32; 4] = [0.045, 0.055, 0.080, 0.95];
 const SELECTION_HIGHLIGHT_COLOR: [f32; 4] = [0.220, 0.420, 0.700, 0.22];
 const COMPOSER_CARD_BACKGROUND_COLOR: [f32; 4] = [0.990, 0.995, 1.000, 0.52];
 const COMPOSER_CARD_BORDER_COLOR: [f32; 4] = [0.085, 0.110, 0.160, 0.24];
+const NATIVE_SPINNER_TRACK_COLOR: [f32; 4] = [0.105, 0.135, 0.190, 0.16];
+const NATIVE_SPINNER_HEAD_COLOR: [f32; 4] = [0.045, 0.185, 0.470, 0.96];
 const CODE_BLOCK_BACKGROUND_COLOR: [f32; 4] = [0.075, 0.095, 0.135, 0.075];
 const QUOTE_CARD_BACKGROUND_COLOR: [f32; 4] = [0.520, 0.330, 0.760, 0.070];
 const TABLE_CARD_BACKGROUND_COLOR: [f32; 4] = [0.080, 0.460, 0.520, 0.060];
@@ -1510,13 +1512,19 @@ impl<'window> Canvas<'window> {
                 label: Some("jcode-desktop-render-workspace"),
             });
         let now = Instant::now();
+        let spinner_tick = desktop_spinner_tick(now);
         let (mut vertices, animation_active) = match app {
             DesktopApp::SingleSession(single_session) => {
                 let focus_pulse = self.focus_pulse.frame(1, now);
                 let animation_active =
                     self.focus_pulse.is_animating() || single_session.has_background_work();
                 (
-                    build_single_session_vertices(single_session, self.size, focus_pulse),
+                    build_single_session_vertices(
+                        single_session,
+                        self.size,
+                        focus_pulse,
+                        spinner_tick,
+                    ),
                     animation_active,
                 )
             }

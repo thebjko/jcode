@@ -174,9 +174,10 @@ fn single_session_typography_targets_jetbrains_mono_light_nerd() {
 #[test]
 fn single_session_vertices_include_a_draft_caret() {
     let mut app = SingleSessionApp::new(None);
-    let empty_vertices = build_single_session_vertices(&app, PhysicalSize::new(640, 480), 0.0);
+    let empty_vertices = build_single_session_vertices(&app, PhysicalSize::new(640, 480), 0.0, 0);
     app.handle_key(KeyInput::Character("abc".to_string()));
-    let mut typed_vertices = build_single_session_vertices(&app, PhysicalSize::new(640, 480), 0.0);
+    let mut typed_vertices =
+        build_single_session_vertices(&app, PhysicalSize::new(640, 480), 0.0, 0);
     push_single_session_caret(&mut typed_vertices, &app, PhysicalSize::new(640, 480), None);
 
     assert!(typed_vertices.len() >= empty_vertices.len());
@@ -190,13 +191,33 @@ fn single_session_vertices_include_a_draft_caret() {
 #[test]
 fn single_session_vertices_include_composer_card() {
     let app = SingleSessionApp::new(None);
-    let vertices = build_single_session_vertices(&app, PhysicalSize::new(900, 700), 0.0);
+    let vertices = build_single_session_vertices(&app, PhysicalSize::new(900, 700), 0.0, 0);
 
     assert!(vertices_have_color(
         &vertices,
         COMPOSER_CARD_BACKGROUND_COLOR
     ));
     assert!(vertices_have_color(&vertices, COMPOSER_CARD_BORDER_COLOR));
+}
+
+#[test]
+fn single_session_active_work_uses_native_spinner_geometry() {
+    let mut app = SingleSessionApp::new(None);
+    let idle = build_single_session_vertices(&app, PhysicalSize::new(900, 700), 0.0, 0);
+    assert!(!vertices_have_color(&idle, NATIVE_SPINNER_HEAD_COLOR));
+
+    app.apply_session_event(session_launch::DesktopSessionEvent::TextDelta(
+        "streaming".to_string(),
+    ));
+    let tick_zero = build_single_session_vertices(&app, PhysicalSize::new(900, 700), 0.0, 0);
+    let tick_one = build_single_session_vertices(&app, PhysicalSize::new(900, 700), 0.0, 1);
+
+    assert!(vertices_have_color(&tick_zero, NATIVE_SPINNER_HEAD_COLOR));
+    assert!(vertices_have_color(&tick_one, NATIVE_SPINNER_HEAD_COLOR));
+    assert_ne!(
+        positions_for_color(&tick_zero, NATIVE_SPINNER_HEAD_COLOR),
+        positions_for_color(&tick_one, NATIVE_SPINNER_HEAD_COLOR)
+    );
 }
 
 #[test]
@@ -391,7 +412,7 @@ fn single_session_markdown_structure_uses_distinct_colors_and_cards() {
         ))
     );
 
-    let vertices = build_single_session_vertices(&app, PhysicalSize::new(1200, 760), 0.0);
+    let vertices = build_single_session_vertices(&app, PhysicalSize::new(1200, 760), 0.0, 0);
     assert!(vertices_have_color(&vertices, QUOTE_CARD_BACKGROUND_COLOR));
     assert!(vertices_have_color(&vertices, TABLE_CARD_BACKGROUND_COLOR));
 }
@@ -417,27 +438,26 @@ fn single_session_header_only_uses_previous_message_title_for_static_preview() {
 }
 
 #[test]
-fn single_session_spinner_appears_only_for_active_work() {
+fn single_session_activity_indicator_appears_only_for_active_work() {
     let mut app = SingleSessionApp::new(None);
-    assert_eq!(app.activity_spinner(), None);
-    assert!(!app.composer_status_line().starts_with("◐ "));
+    assert!(!app.activity_indicator_active());
+    assert!(!app.composer_status_line().starts_with("◴ "));
 
     app.apply_session_event(session_launch::DesktopSessionEvent::TextDelta(
         "streaming".to_string(),
     ));
-    assert_eq!(app.activity_spinner(), Some("◴"));
-    assert!(app.composer_status_line().starts_with("◴ receiving"));
-    assert_eq!(app.activity_spinner_for_tick(1), Some("◷"));
+    assert!(app.activity_indicator_active());
+    assert!(app.composer_status_line().starts_with("receiving"));
 
     app.apply_session_event(session_launch::DesktopSessionEvent::Done);
-    assert_eq!(app.activity_spinner(), None);
-    assert!(!app.composer_status_line().starts_with("◐ "));
+    assert!(!app.activity_indicator_active());
+    assert!(!app.composer_status_line().starts_with("◴ "));
 
     assert_eq!(
         app.handle_key(KeyInput::OpenModelPicker),
         KeyOutcome::LoadModelCatalog
     );
-    assert_eq!(app.activity_spinner(), Some("◴"));
+    assert!(app.activity_indicator_active());
 }
 
 #[test]
@@ -494,7 +514,7 @@ fn single_session_text_buffers_include_header_version_area() {
 }
 
 #[test]
-fn single_session_status_spinner_animates_by_tick() {
+fn single_session_status_text_stays_clean_while_native_spinner_animates() {
     let mut app = SingleSessionApp::new(None);
     app.apply_session_event(session_launch::DesktopSessionEvent::TextDelta(
         "streaming".to_string(),
@@ -502,9 +522,10 @@ fn single_session_status_spinner_animates_by_tick() {
 
     let first = single_session_text_key_for_tick(&app, PhysicalSize::new(900, 700), 0).status;
     let second = single_session_text_key_for_tick(&app, PhysicalSize::new(900, 700), 1).status;
-    assert!(first.starts_with("◴ receiving"));
-    assert!(second.starts_with("◷ receiving"));
-    assert_ne!(first, second);
+    assert!(first.starts_with("receiving"));
+    assert_eq!(first, second);
+    assert!(!first.contains('◴'));
+    assert!(!first.contains('◷'));
 }
 
 #[test]
@@ -527,14 +548,14 @@ fn single_session_visual_state_smoke_covers_markdown_spinner_and_switcher() {
 
     let markdown_key = single_session_text_key(&markdown_app, size);
     assert_eq!(markdown_key.title, "active conversation");
-    assert!(markdown_key.status.starts_with("◴ receiving"));
+    assert!(markdown_key.status.starts_with("receiving"));
     assert_visual_text_contains(&markdown_key, "# Heading");
     assert_visual_text_contains(&markdown_key, "▌ quoted");
     assert_visual_text_contains(&markdown_key, "docs ↗ https://example.com");
     assert_visual_text_contains(&markdown_key, "┆ color │ yes");
     assert_visual_text_contains(&markdown_key, "streaming tail");
 
-    let markdown_vertices = build_single_session_vertices(&markdown_app, size, 0.0);
+    let markdown_vertices = build_single_session_vertices(&markdown_app, size, 0.0, 0);
     assert!(vertices_have_color(
         &markdown_vertices,
         QUOTE_CARD_BACKGROUND_COLOR
@@ -551,7 +572,7 @@ fn single_session_visual_state_smoke_covers_markdown_spinner_and_switcher() {
     );
     let switcher_key = single_session_text_key(&switcher_app, size);
     assert_eq!(switcher_key.title, "fresh session");
-    assert!(switcher_key.status.starts_with("◴ loading recent sessions"));
+    assert!(switcher_key.status.starts_with("loading recent sessions"));
     assert_visual_text_contains(&switcher_key, "desktop session switcher");
     assert_visual_text_contains(
         &switcher_key,
@@ -696,7 +717,7 @@ fn single_session_vertices_include_transcript_card_backgrounds() {
     app.messages.push(SingleSessionMessage::tool("bash done"));
     app.error = Some("boom".to_string());
 
-    let vertices = build_single_session_vertices(&app, PhysicalSize::new(1000, 720), 0.0);
+    let vertices = build_single_session_vertices(&app, PhysicalSize::new(1000, 720), 0.0, 0);
 
     assert!(vertices_have_color(&vertices, CODE_BLOCK_BACKGROUND_COLOR));
     assert!(vertices_have_color(&vertices, TOOL_CARD_BACKGROUND_COLOR));
@@ -705,6 +726,14 @@ fn single_session_vertices_include_transcript_card_backgrounds() {
 
 fn vertices_have_color(vertices: &[Vertex], color: [f32; 4]) -> bool {
     vertices.iter().any(|vertex| vertex.color == color)
+}
+
+fn positions_for_color(vertices: &[Vertex], color: [f32; 4]) -> Vec<[u32; 2]> {
+    vertices
+        .iter()
+        .filter(|vertex| vertex.color == color)
+        .map(|vertex| vertex.position.map(f32::to_bits))
+        .collect()
 }
 
 fn assert_visual_text_contains(key: &SingleSessionTextKey, expected: &str) {

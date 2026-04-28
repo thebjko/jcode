@@ -5,6 +5,7 @@ pub(crate) struct SingleSessionTextKey {
     pub(crate) size: (u32, u32),
     pub(crate) title: String,
     pub(crate) version: String,
+    pub(crate) activity_active: bool,
     pub(crate) body: Vec<SingleSessionStyledLine>,
     pub(crate) draft: String,
     pub(crate) status: String,
@@ -14,6 +15,7 @@ pub(crate) fn build_single_session_vertices(
     app: &SingleSessionApp,
     size: PhysicalSize<u32>,
     focus_pulse: f32,
+    spinner_tick: u64,
 ) -> Vec<Vertex> {
     let width = size.width as f32;
     let height = size.height as f32;
@@ -51,6 +53,9 @@ pub(crate) fn build_single_session_vertices(
     );
 
     push_single_session_composer_card(&mut vertices, size);
+    if app.has_activity_indicator() {
+        push_native_activity_spinner(&mut vertices, size, spinner_tick);
+    }
     push_single_session_transcript_cards(&mut vertices, app, size);
     push_single_session_selection(&mut vertices, app, size);
 
@@ -77,6 +82,72 @@ fn push_single_session_composer_card(vertices: &mut Vec<Vertex>, size: PhysicalS
         size,
     );
     push_panel_outline(vertices, rect, 1.0, COMPOSER_CARD_BORDER_COLOR, size);
+}
+
+pub(crate) fn push_native_activity_spinner(
+    vertices: &mut Vec<Vertex>,
+    size: PhysicalSize<u32>,
+    tick: u64,
+) {
+    let typography = single_session_typography();
+    let draft_top = single_session_draft_top(size);
+    let center = [
+        size.width as f32 - PANEL_TITLE_LEFT_PADDING - 12.0,
+        draft_top - SINGLE_SESSION_STATUS_GAP + 7.0,
+    ];
+    let radius = (typography.meta_size * 0.54).clamp(5.0, 9.0);
+    let thickness = 2.4;
+    let segments = 12;
+    let phase = (tick as usize) % segments;
+    for segment in 0..segments {
+        let age = (segment + segments - phase) % segments;
+        let alpha_scale = if age == 0 {
+            1.0
+        } else {
+            0.18 + (segments - age) as f32 / segments as f32 * 0.52
+        };
+        let mut color = if age == 0 {
+            NATIVE_SPINNER_HEAD_COLOR
+        } else {
+            NATIVE_SPINNER_TRACK_COLOR
+        };
+        color[3] = (color[3] * alpha_scale).clamp(0.08, 1.0);
+        let start =
+            -std::f32::consts::FRAC_PI_2 + segment as f32 / segments as f32 * std::f32::consts::TAU;
+        let end = start + std::f32::consts::TAU / segments as f32 * 0.64;
+        push_spinner_segment(vertices, center, radius, thickness, start, end, color, size);
+    }
+}
+
+fn push_spinner_segment(
+    vertices: &mut Vec<Vertex>,
+    center: [f32; 2],
+    radius: f32,
+    thickness: f32,
+    start: f32,
+    end: f32,
+    color: [f32; 4],
+    size: PhysicalSize<u32>,
+) {
+    let inner_radius = (radius - thickness).max(1.0);
+    let outer_start = [
+        center[0] + radius * start.cos(),
+        center[1] + radius * start.sin(),
+    ];
+    let outer_end = [
+        center[0] + radius * end.cos(),
+        center[1] + radius * end.sin(),
+    ];
+    let inner_start = [
+        center[0] + inner_radius * start.cos(),
+        center[1] + inner_radius * start.sin(),
+    ];
+    let inner_end = [
+        center[0] + inner_radius * end.cos(),
+        center[1] + inner_radius * end.sin(),
+    ];
+    push_pixel_triangle(vertices, outer_start, outer_end, inner_end, color, size);
+    push_pixel_triangle(vertices, outer_start, inner_end, inner_start, color, size);
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -337,6 +408,7 @@ pub(crate) fn single_session_text_key_for_tick(
         size: (size.width, size.height),
         title: app.header_title(),
         version: desktop_header_version_label(),
+        activity_active: app.has_activity_indicator(),
         body: single_session_visible_styled_body(app, size),
         draft: visualize_composer_whitespace(&app.composer_text()),
         status: app.composer_status_line_for_tick(tick),
