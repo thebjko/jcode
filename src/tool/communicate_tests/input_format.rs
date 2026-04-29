@@ -66,6 +66,81 @@ fn communicate_input_accepts_prefer_spawn() {
 }
 
 #[test]
+fn communicate_input_accepts_cleanup_lifecycle_flags() {
+    let parsed: CommunicateInput = serde_json::from_value(serde_json::json!({
+        "action": "run_plan",
+        "force": true,
+        "retain_agents": true
+    }))
+    .expect("lifecycle flags should deserialize");
+    assert_eq!(parsed.force, Some(true));
+    assert_eq!(parsed.retain_agents, Some(true));
+}
+
+#[test]
+fn cleanup_candidates_default_to_owned_terminal_workers() {
+    let members = vec![
+        AgentInfo {
+            session_id: "coord".to_string(),
+            friendly_name: Some("coord".to_string()),
+            files_touched: vec![],
+            status: Some("ready".to_string()),
+            detail: None,
+            role: Some("coordinator".to_string()),
+            is_headless: None,
+            report_back_to_session_id: None,
+            live_attachments: None,
+            status_age_secs: None,
+        },
+        AgentInfo {
+            session_id: "owned-done".to_string(),
+            friendly_name: Some("owned".to_string()),
+            files_touched: vec![],
+            status: Some("completed".to_string()),
+            detail: None,
+            role: Some("agent".to_string()),
+            is_headless: Some(true),
+            report_back_to_session_id: Some("coord".to_string()),
+            live_attachments: None,
+            status_age_secs: None,
+        },
+        AgentInfo {
+            session_id: "user-created".to_string(),
+            friendly_name: Some("user".to_string()),
+            files_touched: vec![],
+            status: Some("completed".to_string()),
+            detail: None,
+            role: Some("agent".to_string()),
+            is_headless: None,
+            report_back_to_session_id: None,
+            live_attachments: None,
+            status_age_secs: None,
+        },
+        AgentInfo {
+            session_id: "owned-running".to_string(),
+            friendly_name: Some("running".to_string()),
+            files_touched: vec![],
+            status: Some("running".to_string()),
+            detail: None,
+            role: Some("agent".to_string()),
+            is_headless: Some(true),
+            report_back_to_session_id: Some("coord".to_string()),
+            live_attachments: None,
+            status_age_secs: None,
+        },
+    ];
+    let statuses = default_cleanup_target_statuses();
+    assert_eq!(
+        cleanup_candidate_session_ids("coord", &members, &statuses, &[], false),
+        vec!["owned-done".to_string()]
+    );
+    assert_eq!(
+        cleanup_candidate_session_ids("coord", &members, &statuses, &[], true),
+        vec!["owned-done".to_string(), "user-created".to_string()]
+    );
+}
+
+#[test]
 fn format_tool_summary_includes_call_count() {
     let output = super::format_tool_summary(
         "session-123",
@@ -114,6 +189,7 @@ fn format_members_includes_status_and_detail() {
             detail: Some("working on tests".to_string()),
             role: Some("agent".to_string()),
             is_headless: Some(true),
+            report_back_to_session_id: Some("sess-self".to_string()),
             live_attachments: Some(0),
             status_age_secs: Some(12),
         }],
@@ -124,7 +200,7 @@ fn format_members_includes_status_and_detail() {
     assert!(
         output
             .output
-            .contains("Meta: headless · attachments=0 · status_age=12s")
+            .contains("Meta: headless · owned_by_you · attachments=0 · status_age=12s")
     );
 }
 
@@ -145,6 +221,7 @@ fn format_members_disambiguates_duplicate_friendly_names() {
                 detail: None,
                 role: Some("agent".to_string()),
                 is_headless: None,
+                report_back_to_session_id: None,
                 live_attachments: None,
                 status_age_secs: None,
             },
@@ -156,6 +233,7 @@ fn format_members_disambiguates_duplicate_friendly_names() {
                 detail: None,
                 role: Some("agent".to_string()),
                 is_headless: None,
+                report_back_to_session_id: None,
                 live_attachments: None,
                 status_age_secs: None,
             },

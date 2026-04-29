@@ -535,6 +535,7 @@ pub(super) async fn handle_comm_stop(
     id: u64,
     req_session_id: String,
     target_session: String,
+    force: bool,
     client_event_tx: &mpsc::UnboundedSender<ServerEvent>,
     sessions: &SessionAgents,
     swarm_members: &Arc<RwLock<HashMap<String, SwarmMember>>>,
@@ -563,6 +564,24 @@ pub(super) async fn handle_comm_stop(
     } else {
         return;
     };
+
+    let stop_allowed = {
+        let members = swarm_members.read().await;
+        members
+            .get(&target_session)
+            .map(|member| swarm_stop_allowed_by_owner(&req_session_id, member, force))
+            .unwrap_or(force)
+    };
+    if !stop_allowed {
+        let _ = client_event_tx.send(ServerEvent::Error {
+            id,
+            message: format!(
+                "Refusing to stop session '{target_session}' because it was not spawned by this coordinator. Pass force=true to stop a non-owned/user-created swarm session explicitly."
+            ),
+            retry_after_secs: None,
+        });
+        return;
+    }
 
     let mutation_key = request_key(&req_session_id, "stop", &[swarm_id, target_session.clone()]);
     let Some(mutation_state) = begin_or_replay(
@@ -656,6 +675,14 @@ pub(super) async fn handle_comm_stop(
         )
         .await;
     }
+}
+
+fn swarm_stop_allowed_by_owner(
+    req_session_id: &str,
+    target_member: &SwarmMember,
+    force: bool,
+) -> bool {
+    force || target_member.report_back_to_session_id.as_deref() == Some(req_session_id)
 }
 
 #[expect(

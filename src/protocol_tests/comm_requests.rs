@@ -334,6 +334,34 @@ fn test_comm_assign_next_roundtrip() -> Result<()> {
 }
 
 #[test]
+fn test_comm_stop_roundtrip_with_force() -> Result<()> {
+    let req = Request::CommStop {
+        id: 61,
+        session_id: "sess_coord".to_string(),
+        target_session: "sess_worker".to_string(),
+        force: Some(true),
+    };
+    let json = serde_json::to_string(&req)?;
+    assert!(json.contains("\"type\":\"comm_stop\""));
+    assert!(json.contains("\"force\":true"));
+    let decoded = parse_request_json(&json)?;
+    assert_eq!(decoded.id(), 61);
+    let Request::CommStop {
+        session_id,
+        target_session,
+        force,
+        ..
+    } = decoded
+    else {
+        return Err(anyhow!("expected CommStop"));
+    };
+    assert_eq!(session_id, "sess_coord");
+    assert_eq!(target_session, "sess_worker");
+    assert_eq!(force, Some(true));
+    Ok(())
+}
+
+#[test]
 fn test_comm_spawn_roundtrip_with_optional_nonce() -> Result<()> {
     let req = Request::CommSpawn {
         id: 59,

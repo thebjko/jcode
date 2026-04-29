@@ -395,11 +395,13 @@ async fn handle_lightweight_control_request(
             id,
             session_id: req_session_id,
             target_session,
+            force,
         } => {
             handle_comm_stop(
                 id,
                 req_session_id,
                 target_session,
+                force.unwrap_or(false),
                 &client_event_tx,
                 sessions,
                 swarm_members,
@@ -2069,11 +2071,13 @@ pub(super) async fn handle_client(
                 id,
                 session_id: req_session_id,
                 target_session,
+                force,
             } => {
                 handle_comm_stop(
                     id,
                     req_session_id,
                     target_session,
+                    force.unwrap_or(false),
                     &client_event_tx,
                     &sessions,
                     &swarm_members,

@@ -78,6 +78,256 @@ fn auto_assignment_needs_spawn(response: &ServerEvent) -> bool {
     })
 }
 
+fn default_cleanup_target_statuses() -> Vec<String> {
+    vec![
+        "ready".to_string(),
+        "completed".to_string(),
+        "failed".to_string(),
+        "stopped".to_string(),
+    ]
+}
+
+fn default_run_await_statuses() -> Vec<String> {
+    vec![
+        "ready".to_string(),
+        "completed".to_string(),
+        "failed".to_string(),
+        "stopped".to_string(),
+    ]
+}
+
+fn cleanup_candidate_session_ids(
+    owner_session_id: &str,
+    members: &[AgentInfo],
+    target_status: &[String],
+    requested_session_ids: &[String],
+    force: bool,
+) -> Vec<String> {
+    let status_filter: std::collections::HashSet<&str> =
+        target_status.iter().map(String::as_str).collect();
+    let requested: std::collections::HashSet<&str> =
+        requested_session_ids.iter().map(String::as_str).collect();
+    let restrict_to_requested = !requested.is_empty();
+    let mut ids = members
+        .iter()
+        .filter(|member| member.session_id != owner_session_id)
+        .filter(|member| !restrict_to_requested || requested.contains(member.session_id.as_str()))
+        .filter(|member| {
+            member
+                .status
+                .as_deref()
+                .is_some_and(|status| status_filter.contains(status))
+        })
+        .filter(|member| {
+            force || member.report_back_to_session_id.as_deref() == Some(owner_session_id)
+        })
+        .map(|member| member.session_id.clone())
+        .collect::<Vec<_>>();
+    ids.sort();
+    ids
+}
+
+async fn fetch_swarm_members(session_id: &str) -> Result<Vec<AgentInfo>> {
+    let request = Request::CommList {
+        id: REQUEST_ID,
+        session_id: session_id.to_string(),
+    };
+    match send_request(request).await {
+        Ok(ServerEvent::CommMembers { members, .. }) => Ok(members),
+        Ok(response) => {
+            ensure_success(&response)?;
+            Ok(Vec::new())
+        }
+        Err(e) => Err(anyhow::anyhow!("Failed to list swarm members: {}", e)),
+    }
+}
+
+async fn cleanup_swarm_workers(ctx: &ToolContext, params: &CommunicateInput) -> Result<String> {
+    let members = fetch_swarm_members(&ctx.session_id).await?;
+    let target_status = params
+        .target_status
+        .clone()
+        .unwrap_or_else(default_cleanup_target_statuses);
+    let session_ids = params.session_ids.clone().unwrap_or_default();
+    let force = params.force.unwrap_or(false);
+    let candidates = cleanup_candidate_session_ids(
+        &ctx.session_id,
+        &members,
+        &target_status,
+        &session_ids,
+        force,
+    );
+
+    if candidates.is_empty() {
+        return Ok(format!(
+            "No cleanup candidates found. Default cleanup only stops sessions spawned by this coordinator with status in [{}].",
+            target_status.join(", ")
+        ));
+    }
+
+    let mut stopped = Vec::new();
+    let mut failed = Vec::new();
+    for target in candidates {
+        let request = Request::CommStop {
+            id: REQUEST_ID,
+            session_id: ctx.session_id.clone(),
+            target_session: target.clone(),
+            force: Some(force),
+        };
+        match send_request(request).await {
+            Ok(response) => match ensure_success(&response) {
+                Ok(()) => stopped.push(target),
+                Err(error) => failed.push(format!("{} ({})", target, error)),
+            },
+            Err(error) => failed.push(format!("{} ({})", target, error)),
+        }
+    }
+
+    let mut output = String::new();
+    if stopped.is_empty() {
+        output.push_str("Stopped no swarm workers.");
+    } else {
+        output.push_str(&format!(
+            "Stopped {} swarm worker(s): {}",
+            stopped.len(),
+            stopped.join(", ")
+        ));
+    }
+    if !failed.is_empty() {
+        output.push_str(&format!(
+            "\nFailed to stop {} worker(s): {}",
+            failed.len(),
+            failed.join(", ")
+        ));
+    }
+    Ok(output)
+}
+
+async fn await_swarm_progress(
+    ctx: &ToolContext,
+    session_ids: Vec<String>,
+    timeout_minutes: u64,
+) -> Result<()> {
+    let request = Request::CommAwaitMembers {
+        id: REQUEST_ID,
+        session_id: ctx.session_id.clone(),
+        target_status: default_run_await_statuses(),
+        session_ids,
+        mode: Some("any".to_string()),
+        timeout_secs: Some(timeout_minutes.max(1) * 60),
+    };
+    let socket_timeout = std::time::Duration::from_secs(timeout_minutes.max(1) * 60 + 30);
+    match send_request_with_timeout(request, Some(socket_timeout)).await {
+        Ok(response) => ensure_success(&response),
+        Err(e) => Err(anyhow::anyhow!(
+            "Failed while awaiting swarm progress: {}",
+            e
+        )),
+    }
+}
+
+async fn run_swarm_plan_to_terminal(
+    ctx: &ToolContext,
+    params: &CommunicateInput,
+) -> Result<ToolOutput> {
+    let concurrency_limit = params.concurrency_limit.unwrap_or(3).max(1);
+    let timeout_minutes = params.timeout_minutes.unwrap_or(60).max(1);
+    let retain_agents = params.retain_agents.unwrap_or(false);
+    let spawn_if_needed = params.spawn_if_needed.or(Some(true));
+    let mut assignment_count = 0usize;
+    let mut loop_count = 0usize;
+    let max_loops = 200usize;
+
+    loop {
+        loop_count += 1;
+        if loop_count > max_loops {
+            return Err(anyhow::anyhow!(
+                "run_plan exceeded {} coordination loops; leaving workers untouched for inspection",
+                max_loops
+            ));
+        }
+
+        let summary = fetch_plan_status(&ctx.session_id).await?;
+        if summary.item_count == 0 {
+            return Ok(ToolOutput::new("No swarm plan items to run."));
+        }
+
+        let terminal_count =
+            summary.completed_ids.len() + summary.blocked_ids.len() + summary.cycle_ids.len();
+        let no_more_runnable = summary.active_ids.is_empty() && summary.next_ready_ids.is_empty();
+        if no_more_runnable || terminal_count >= summary.item_count {
+            let mut output = format!(
+                "Swarm plan reached terminal/blocked state after {} loop(s). completed={} blocked={} cycles={} active={} assignments={}",
+                loop_count,
+                summary.completed_ids.len(),
+                summary.blocked_ids.len(),
+                summary.cycle_ids.len(),
+                summary.active_ids.len(),
+                assignment_count
+            );
+            if retain_agents {
+                output.push_str("\nRetained spawned workers because retain_agents=true.");
+            } else {
+                let cleanup = cleanup_swarm_workers(ctx, params).await?;
+                output.push_str(&format!("\n{}", cleanup));
+            }
+            return Ok(ToolOutput::new(output));
+        }
+
+        let active_count = summary.active_ids.len();
+        let available_slots = concurrency_limit.saturating_sub(active_count);
+        let mut assigned_sessions = Vec::new();
+        for _ in 0..available_slots {
+            let request = Request::CommAssignNext {
+                id: REQUEST_ID,
+                session_id: ctx.session_id.clone(),
+                target_session: params.target_session.clone(),
+                working_dir: params.working_dir.clone(),
+                prefer_spawn: params.prefer_spawn,
+                spawn_if_needed,
+                message: params.message.clone(),
+            };
+            match send_request(request).await {
+                Ok(ServerEvent::CommAssignTaskResponse { target_session, .. }) => {
+                    assignment_count += 1;
+                    assigned_sessions.push(target_session);
+                }
+                Ok(ServerEvent::Error { message, .. })
+                    if message.contains("No runnable unassigned tasks")
+                        || message.contains("No ready or completed swarm agents") =>
+                {
+                    break;
+                }
+                Ok(response) => ensure_success(&response)?,
+                Err(e) => return Err(anyhow::anyhow!("Failed to assign next swarm task: {}", e)),
+            }
+        }
+
+        let await_sessions = if assigned_sessions.is_empty() {
+            let members = fetch_swarm_members(&ctx.session_id).await?;
+            members
+                .into_iter()
+                .filter(|member| member.session_id != ctx.session_id)
+                .filter(|member| member.status.as_deref() == Some("running"))
+                .map(|member| member.session_id)
+                .collect::<Vec<_>>()
+        } else {
+            assigned_sessions
+        };
+
+        if await_sessions.is_empty() {
+            if active_count > 0 {
+                return Err(anyhow::anyhow!(
+                    "run_plan found {} active task(s) but no running swarm members to await; inspect plan_status and member list before retrying",
+                    active_count
+                ));
+            }
+            continue;
+        }
+        await_swarm_progress(ctx, await_sessions, timeout_minutes).await?;
+    }
+}
+
 async fn spawn_assignment_session(ctx: &ToolContext, params: &CommunicateInput) -> Result<String> {
     let spawn_request = Request::CommSpawn {
         id: REQUEST_ID,
@@ -216,6 +466,13 @@ fn format_members(ctx: &ToolContext, members: &[AgentInfo]) -> ToolOutput {
             let mut extra_meta = Vec::new();
             if member.is_headless == Some(true) {
                 extra_meta.push("headless".to_string());
+            }
+            if let Some(owner) = member.report_back_to_session_id.as_deref() {
+                if owner == ctx.session_id {
+                    extra_meta.push("owned_by_you".to_string());
+                } else {
+                    extra_meta.push(format!("owned_by={owner}"));
+                }
             }
             if let Some(attachments) = member.live_attachments {
                 extra_meta.push(format!("attachments={attachments}"));
@@ -524,6 +781,10 @@ struct CommunicateInput {
     delivery: Option<CommDeliveryMode>,
     #[serde(default)]
     concurrency_limit: Option<usize>,
+    #[serde(default)]
+    force: Option<bool>,
+    #[serde(default)]
+    retain_agents: Option<bool>,
 }
 
 impl CommunicateInput {
@@ -552,7 +813,7 @@ impl Tool for CommunicateTool {
                     "type": "string",
                     "enum": ["share", "share_append", "read", "message", "broadcast", "dm", "channel", "list", "list_channels", "channel_members",
                              "propose_plan", "approve_plan", "reject_plan", "spawn", "stop", "assign_role",
-                             "status", "plan_status", "summary", "read_context", "resync_plan", "assign_task", "assign_next", "fill_slots",
+                             "status", "plan_status", "summary", "read_context", "resync_plan", "assign_task", "assign_next", "fill_slots", "run_plan", "cleanup",
                              "start", "start_task", "wake", "resume", "retry", "reassign", "replace", "salvage",
                              "subscribe_channel", "unsubscribe_channel", "await_members"],
                     "description": "Action. For spawn, prefer including prompt with the initial task so the new agent starts useful work immediately."
@@ -630,6 +891,14 @@ impl Tool for CommunicateTool {
                     "type": "integer",
                     "minimum": 1,
                     "description": "For fill_slots: desired maximum number of active swarm tasks."
+                },
+                "force": {
+                    "type": "boolean",
+                    "description": "For stop/cleanup: allow stopping non-owned/user-created swarm sessions. Defaults to false."
+                },
+                "retain_agents": {
+                    "type": "boolean",
+                    "description": "For run_plan: keep spawned workers after the plan reaches a terminal state. Defaults to false, so owned workers are cleaned up."
                 },
                 "wake": {
                     "type": "boolean",
@@ -977,6 +1246,7 @@ impl Tool for CommunicateTool {
                     id: REQUEST_ID,
                     session_id: ctx.session_id.clone(),
                     target_session: target.clone(),
+                    force: params.force,
                 };
 
                 match send_request(request).await {
@@ -987,6 +1257,10 @@ impl Tool for CommunicateTool {
                     Err(e) => Err(anyhow::anyhow!("Failed to stop agent: {}", e)),
                 }
             }
+
+            "cleanup" => cleanup_swarm_workers(&ctx, &params)
+                .await
+                .map(ToolOutput::new),
 
             "assign_role" => {
                 let target_raw = params.target_session.ok_or_else(|| {
@@ -1285,6 +1559,8 @@ impl Tool for CommunicateTool {
                 }
             }
 
+            "run_plan" => run_swarm_plan_to_terminal(&ctx, &params).await,
+
             "start" | "start_task" | "wake" | "resume" | "retry" | "reassign" | "replace"
             | "salvage" => {
                 let task_id = params.task_id.ok_or_else(|| {
@@ -1435,7 +1711,7 @@ impl Tool for CommunicateTool {
             _ => Err(anyhow::anyhow!(
                 "Unknown action '{}'. Valid actions: share, share_append, read, message, broadcast, dm, channel, list, list_channels, channel_members, \
                  propose_plan, approve_plan, reject_plan, spawn, stop, assign_role, status, plan_status, summary, read_context, \
-                 resync_plan, assign_task, assign_next, fill_slots, start, start_task, wake, resume, retry, reassign, replace, salvage, subscribe_channel, unsubscribe_channel, await_members",
+                 resync_plan, assign_task, assign_next, fill_slots, run_plan, cleanup, start, start_task, wake, resume, retry, reassign, replace, salvage, subscribe_channel, unsubscribe_channel, await_members",
                 params.action
             )),
         }

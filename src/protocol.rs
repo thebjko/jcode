@@ -433,6 +433,8 @@ pub enum Request {
         id: u64,
         session_id: String,
         target_session: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        force: Option<bool>,
     },
 
     /// Assign a role to an agent (coordinator only)
@@ -1177,6 +1179,9 @@ pub struct AgentInfo {
     /// Whether this member is a headless spawned session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub is_headless: Option<bool>,
+    /// Session that owns report-back/cleanup responsibility for this member.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report_back_to_session_id: Option<String>,
     /// Number of currently attached live client connections.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub live_attachments: Option<usize>,

@@ -1,5 +1,6 @@
 use super::{
-    CommunicateInput, CommunicateTool, default_await_target_statuses, format_awaited_members,
+    CommunicateInput, CommunicateTool, cleanup_candidate_session_ids,
+    default_await_target_statuses, default_cleanup_target_statuses, format_awaited_members,
     format_members, format_plan_status,
 };
 use crate::message::{Message, StreamEvent, ToolDefinition};
@@ -91,6 +92,8 @@ fn schema_advertises_supported_swarm_fields() {
     assert!(props.contains_key("delivery"));
     assert!(props.contains_key("plan_items"));
     assert!(props.contains_key("initial_message"));
+    assert!(props.contains_key("force"));
+    assert!(props.contains_key("retain_agents"));
     assert_eq!(
         props["delivery"]["enum"],
         json!(["notify", "interrupt", "wake"])
@@ -134,6 +137,18 @@ fn schema_advertises_supported_swarm_fields() {
             .as_array()
             .expect("action enum")
             .contains(&json!("fill_slots"))
+    );
+    assert!(
+        schema["properties"]["action"]["enum"]
+            .as_array()
+            .expect("action enum")
+            .contains(&json!("run_plan"))
+    );
+    assert!(
+        schema["properties"]["action"]["enum"]
+            .as_array()
+            .expect("action enum")
+            .contains(&json!("cleanup"))
     );
     assert!(
         schema["properties"]["action"]["enum"]

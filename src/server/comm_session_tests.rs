@@ -1,6 +1,6 @@
 use super::{
     ensure_spawn_coordinator_swarm, prepare_visible_spawn_session, register_visible_spawned_member,
-    resolve_spawn_working_dir,
+    resolve_spawn_working_dir, swarm_stop_allowed_by_owner,
 };
 use crate::agent::Agent;
 use crate::message::{Message, ToolDefinition};
@@ -122,6 +122,21 @@ async fn resolve_spawn_working_dir_falls_back_to_member_dir() {
             .as_deref(),
         Some("/tmp/member-dir")
     );
+}
+
+#[test]
+fn stop_permission_defaults_to_sessions_spawned_by_requesting_coordinator() {
+    let (mut owned, _owned_rx) = member("worker-owned", Some("swarm-1"), "agent");
+    owned.report_back_to_session_id = Some("coord".to_string());
+    let (mut user_created, _user_rx) = member("worker-user", Some("swarm-1"), "agent");
+    user_created.report_back_to_session_id = None;
+    let (mut other_owned, _other_rx) = member("worker-other", Some("swarm-1"), "agent");
+    other_owned.report_back_to_session_id = Some("other-coord".to_string());
+
+    assert!(swarm_stop_allowed_by_owner("coord", &owned, false));
+    assert!(!swarm_stop_allowed_by_owner("coord", &user_created, false));
+    assert!(!swarm_stop_allowed_by_owner("coord", &other_owned, false));
+    assert!(swarm_stop_allowed_by_owner("coord", &user_created, true));
 }
 
 #[tokio::test]
