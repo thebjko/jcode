@@ -1,4 +1,4 @@
-use crate::config::{DiagramDisplayMode, MarkdownSpacingMode, config};
+use crate::{DiagramDisplayMode, MarkdownSpacingMode};
 use std::cell::Cell;
 use std::sync::{LazyLock, Mutex};
 
@@ -53,12 +53,14 @@ pub(super) fn effective_diagram_mode() -> DiagramDisplayMode {
     {
         return override_mode;
     }
-    config().display.diagram_mode
+    crate::config_snapshot().diagram_mode
 }
 
 pub(super) fn effective_markdown_spacing_mode() -> MarkdownSpacingMode {
-    MARKDOWN_SPACING_MODE_OVERRIDE
-        .with(|mode| mode.get().unwrap_or(config().display.markdown_spacing))
+    MARKDOWN_SPACING_MODE_OVERRIDE.with(|mode| {
+        mode.get()
+            .unwrap_or(crate::config_snapshot().markdown_spacing)
+    })
 }
 
 #[cfg(test)]

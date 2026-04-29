@@ -361,49 +361,7 @@ struct ImageRegion {
     height: u16,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum CopyTargetKind {
-    CodeBlock { language: Option<String> },
-    Error,
-    ToolOutput,
-}
-
-impl CopyTargetKind {
-    fn label(&self) -> String {
-        match self {
-            Self::CodeBlock { language } => language
-                .as_deref()
-                .filter(|lang| !lang.is_empty())
-                .unwrap_or("code")
-                .to_string(),
-            Self::Error => "error".to_string(),
-            Self::ToolOutput => "output".to_string(),
-        }
-    }
-
-    fn copied_notice(&self) -> String {
-        match self {
-            Self::CodeBlock { language } => {
-                let label = language
-                    .as_deref()
-                    .filter(|lang| !lang.is_empty())
-                    .unwrap_or("code block");
-                format!("Copied {}", label)
-            }
-            Self::Error => "Copied error".to_string(),
-            Self::ToolOutput => "Copied output".to_string(),
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct RawCopyTarget {
-    pub(crate) kind: CopyTargetKind,
-    pub(crate) content: String,
-    pub(crate) start_raw_line: usize,
-    pub(crate) end_raw_line: usize,
-    pub(crate) badge_raw_line: usize,
-}
+pub(crate) use jcode_tui_markdown::{CopyTargetKind, RawCopyTarget};
 
 #[derive(Clone, Debug)]
 struct CopyTarget {

@@ -7,9 +7,7 @@ pub(super) fn line_plain_text(line: &Line<'_>) -> String {
         .collect()
 }
 
-pub(crate) fn extract_copy_targets_from_rendered_lines(
-    lines: &[Line<'static>],
-) -> Vec<RawCopyTarget> {
+pub fn extract_copy_targets_from_rendered_lines(lines: &[Line<'static>]) -> Vec<RawCopyTarget> {
     let mut targets = Vec::new();
 
     let mut idx = 0usize;
