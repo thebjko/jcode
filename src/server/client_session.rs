@@ -540,19 +540,31 @@ pub(super) async fn handle_subscribe(
         subscribe_start.elapsed().as_millis(),
     ));
 
-    update_member_status(
-        client_session_id,
-        "ready",
-        None,
-        swarm_members,
-        swarms_by_id,
-        Some(event_history),
-        Some(event_counter),
-        Some(swarm_event_tx),
-    )
-    .await;
+    if subscribe_should_mark_ready(client_session_id, swarm_members).await {
+        update_member_status(
+            client_session_id,
+            "ready",
+            None,
+            swarm_members,
+            swarms_by_id,
+            Some(event_history),
+            Some(event_counter),
+            Some(swarm_event_tx),
+        )
+        .await;
+    }
 
     let _ = client_event_tx.send(ServerEvent::Done { id });
+}
+
+async fn subscribe_should_mark_ready(
+    client_session_id: &str,
+    swarm_members: &Arc<RwLock<HashMap<String, SwarmMember>>>,
+) -> bool {
+    let members = swarm_members.read().await;
+    !members
+        .get(client_session_id)
+        .is_some_and(|member| member.status == "running")
 }
 
 pub(super) async fn handle_reload(

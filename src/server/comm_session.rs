@@ -570,7 +570,7 @@ pub(super) async fn handle_comm_stop(
         members
             .get(&target_session)
             .map(|member| swarm_stop_allowed_by_owner(&req_session_id, member, force))
-            .unwrap_or(force)
+            .unwrap_or(false)
     };
     if !stop_allowed {
         let _ = client_event_tx.send(ServerEvent::Error {

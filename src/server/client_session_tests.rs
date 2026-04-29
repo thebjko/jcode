@@ -1,6 +1,7 @@
 use super::{
     handle_clear_session, handle_reload, handle_resume_session, mark_remote_reload_started,
     rename_shutdown_signal, restored_session_was_interrupted, session_was_interrupted_by_reload,
+    subscribe_should_mark_ready,
 };
 use crate::agent::Agent;
 use crate::message::ContentBlock;
@@ -22,6 +23,44 @@ use std::time::Instant;
 use tokio::sync::{Mutex, RwLock, broadcast, mpsc};
 
 struct MockProvider;
+
+fn test_swarm_member(session_id: &str, status: &str) -> SwarmMember {
+    let (event_tx, _event_rx) = mpsc::unbounded_channel();
+    SwarmMember {
+        session_id: session_id.to_string(),
+        event_tx,
+        event_txs: HashMap::new(),
+        working_dir: None,
+        swarm_id: Some("swarm-test".to_string()),
+        swarm_enabled: true,
+        status: status.to_string(),
+        detail: None,
+        friendly_name: Some(session_id.to_string()),
+        report_back_to_session_id: Some("coord".to_string()),
+        role: "agent".to_string(),
+        joined_at: Instant::now(),
+        last_status_change: Instant::now(),
+        is_headless: false,
+    }
+}
+
+#[tokio::test]
+async fn subscribe_does_not_mark_running_startup_worker_ready() {
+    let swarm_members = Arc::new(RwLock::new(HashMap::from([(
+        "worker".to_string(),
+        test_swarm_member("worker", "running"),
+    )])));
+    assert!(!subscribe_should_mark_ready("worker", &swarm_members).await);
+}
+
+#[tokio::test]
+async fn subscribe_marks_non_running_member_ready() {
+    let swarm_members = Arc::new(RwLock::new(HashMap::from([(
+        "worker".to_string(),
+        test_swarm_member("worker", "spawned"),
+    )])));
+    assert!(subscribe_should_mark_ready("worker", &swarm_members).await);
+}
 
 #[async_trait]
 impl Provider for MockProvider {
