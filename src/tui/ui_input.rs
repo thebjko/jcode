@@ -728,14 +728,12 @@ pub(super) fn draw_status(frame: &mut Frame, app: &dyn TuiState, area: Rect, pen
 fn streaming_status_spans(
     spinner: &'static str,
     status_text: String,
-    stream_message_ended: bool,
+    _stream_message_ended: bool,
     has_warning: bool,
     queued_suffix: &str,
 ) -> Vec<Span<'static>> {
     let mut spans = Vec::new();
-    if !stream_message_ended {
-        spans.push(Span::styled(spinner, Style::default().fg(ai_color())));
-    }
+    spans.push(Span::styled(spinner, Style::default().fg(ai_color())));
     spans.push(Span::styled(
         format!(" {}", status_text),
         Style::default().fg(if has_warning {
@@ -933,11 +931,12 @@ mod tests {
     }
 
     #[test]
-    fn streaming_status_spans_hide_spinner_after_message_end() {
+    fn streaming_status_spans_keep_spinner_after_message_end_while_finalizing() {
         let spans = streaming_status_spans("⠋", "finalizing".to_string(), true, false, "");
 
-        assert_eq!(spans.len(), 1);
-        assert_eq!(spans[0].content.as_ref(), " finalizing");
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[0].content.as_ref(), "⠋");
+        assert_eq!(spans[1].content.as_ref(), " finalizing");
     }
 
     #[test]
