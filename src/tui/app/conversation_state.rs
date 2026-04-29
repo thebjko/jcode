@@ -428,7 +428,7 @@ impl App {
         &mut self,
         key: &'static str,
     ) -> Option<&'static str> {
-        const NOTICE: &str = "experimental: may have more bugs";
+        const NOTICE: &str = "experimental feature";
         if self
             .experimental_feature_warnings_seen
             .insert(key.to_string())
