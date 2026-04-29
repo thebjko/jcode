@@ -33,19 +33,20 @@ fn kv_cache_widget_shows_session_hit_ratio() {
             reported_input_tokens: 20_000,
             read_tokens: 15_000,
             creation_tokens: 3_000,
+            optimal_input_tokens: 16_667,
         }),
         ..Default::default()
     };
 
     assert!(data.has_data_for(WidgetKind::KvCache));
-    let lines = render_kv_cache_widget(&data, Rect::new(0, 0, 40, 3));
+    let lines = render_kv_cache_widget(&data, Rect::new(0, 0, 40, 1));
     let text = lines_text(&lines);
 
-    assert!(text.contains("KV cache"));
+    assert_eq!(lines.len(), 1);
+    assert!(text.contains("KV cache:"));
+    assert!(text.contains("actual "));
     assert!(text.contains("75%"));
-    assert!(text.contains("good"));
-    assert!(text.contains("read 15.0k / seen 20.0k"));
-    assert!(text.contains("write 3.0k"));
+    assert!(text.contains("optimal 90%"));
 }
 
 fn node(kind: &str, label: &str, degree: usize) -> GraphNode {

@@ -430,6 +430,8 @@ pub struct App {
     total_cache_reported_input_tokens: u64,
     total_cache_read_tokens: u64,
     total_cache_creation_tokens: u64,
+    total_cache_optimal_input_tokens: u64,
+    cache_next_optimal_input_tokens: Option<u64>,
     // Total cost in USD (for API-key providers)
     total_cost: f32,
     // Cached pricing (input $/1M tokens, output $/1M tokens)
@@ -870,13 +872,25 @@ impl App {
     pub(super) fn record_completed_stream_cache_usage(&mut self) {
         let has_cache_telemetry = self.streaming_cache_read_tokens.is_some()
             || self.streaming_cache_creation_tokens.is_some();
-        if !has_cache_telemetry || self.streaming_input_tokens == 0 {
+        if self.streaming_input_tokens == 0 {
+            return;
+        }
+
+        let optimal_input_tokens = self.cache_next_optimal_input_tokens;
+        self.cache_next_optimal_input_tokens = Some(self.streaming_input_tokens);
+
+        if !has_cache_telemetry {
             return;
         }
 
         self.total_cache_reported_input_tokens = self
             .total_cache_reported_input_tokens
             .saturating_add(self.streaming_input_tokens);
+        if let Some(optimal) = optimal_input_tokens {
+            self.total_cache_optimal_input_tokens = self
+                .total_cache_optimal_input_tokens
+                .saturating_add(optimal);
+        }
         self.total_cache_read_tokens = self
             .total_cache_read_tokens
             .saturating_add(self.streaming_cache_read_tokens.unwrap_or(0));

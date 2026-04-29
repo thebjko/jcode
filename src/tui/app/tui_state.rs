@@ -966,6 +966,7 @@ impl crate::tui::TuiState for App {
                 reported_input_tokens: self.total_cache_reported_input_tokens,
                 read_tokens: self.total_cache_read_tokens,
                 creation_tokens: self.total_cache_creation_tokens,
+                optimal_input_tokens: self.total_cache_optimal_input_tokens,
             }
         });
 

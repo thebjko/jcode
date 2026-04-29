@@ -153,7 +153,7 @@ impl WidgetKind {
             WidgetKind::BackgroundTasks => 2,
             WidgetKind::AmbientMode => 3,
             WidgetKind::UsageLimits => 3,
-            WidgetKind::KvCache => 3,
+            WidgetKind::KvCache => 1,
             WidgetKind::ModelInfo => 3, // Model + usage bars
             WidgetKind::Tips => 3,
             WidgetKind::GitStatus => 3,
@@ -362,6 +362,8 @@ pub struct CacheHitInfo {
     pub read_tokens: u64,
     /// Tokens written/created in provider cache across this session, when reported.
     pub creation_tokens: u64,
+    /// Approximate reusable prefix tokens expected to be cache-readable.
+    pub optimal_input_tokens: u64,
 }
 
 impl CacheHitInfo {
@@ -370,6 +372,14 @@ impl CacheHitInfo {
             None
         } else {
             Some((self.read_tokens as f32 / self.reported_input_tokens as f32).clamp(0.0, 1.0))
+        }
+    }
+
+    pub fn optimal_ratio(&self) -> Option<f32> {
+        if self.optimal_input_tokens == 0 {
+            None
+        } else {
+            Some((self.read_tokens as f32 / self.optimal_input_tokens as f32).clamp(0.0, 1.0))
         }
     }
 }
@@ -924,7 +934,7 @@ pub(crate) fn calculate_widget_height(
         }
         WidgetKind::KvCache => {
             if data.cache_hit_info.is_some() {
-                3
+                1
             } else {
                 0
             }
@@ -1345,89 +1355,50 @@ fn render_widget_content(
     }
 }
 
-fn render_kv_cache_widget(data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static>> {
+fn render_kv_cache_widget(data: &InfoWidgetData, _inner: Rect) -> Vec<Line<'static>> {
     let Some(cache) = data.cache_hit_info.as_ref() else {
         return Vec::new();
     };
-    let Some(ratio) = cache.hit_ratio() else {
+    let Some(actual_ratio) = cache.hit_ratio() else {
         return Vec::new();
     };
 
-    let pct = (ratio * 100.0).round().clamp(0.0, 100.0) as u8;
-    let (label, color) = kv_cache_status(pct, cache.reported_input_tokens);
-    let bar_width = inner.width.saturating_sub(14).clamp(4, 18) as usize;
-    let filled = ((bar_width as f32 * ratio).round() as usize).min(bar_width);
-    let empty = bar_width.saturating_sub(filled);
-
-    vec![
-        Line::from(vec![
-            Span::styled("⚿ ", Style::default().fg(color)),
-            Span::styled("KV cache", Style::default().fg(rgb(180, 180, 190)).bold()),
-            Span::styled(" · ", Style::default().fg(rgb(80, 80, 90))),
-            Span::styled(label.to_string(), Style::default().fg(color)),
-        ]),
-        Line::from(vec![
-            Span::styled("  ", Style::default()),
-            Span::styled("█".repeat(filled), Style::default().fg(color)),
-            Span::styled("░".repeat(empty), Style::default().fg(rgb(50, 50, 60))),
-            Span::styled(format!(" {}%", pct), Style::default().fg(color).bold()),
-        ]),
-        Line::from(vec![Span::styled(
-            format!(
-                "  read {} / seen {}{}",
-                compact_token_count(cache.read_tokens),
-                compact_token_count(cache.reported_input_tokens),
-                if cache.creation_tokens > 0 {
-                    format!(" · write {}", compact_token_count(cache.creation_tokens))
-                } else {
-                    String::new()
-                }
-            ),
-            Style::default().fg(rgb(140, 140, 150)),
-        )]),
-    ]
-}
-
-fn render_kv_cache_compact(data: &InfoWidgetData, _inner: Rect) -> Vec<Line<'static>> {
-    let Some(cache) = data.cache_hit_info.as_ref() else {
-        return Vec::new();
+    let actual_pct = ratio_pct(actual_ratio);
+    let optimal = cache.optimal_ratio().map(ratio_pct);
+    let color = optimal
+        .map(kv_cache_optimal_color)
+        .unwrap_or_else(|| rgb(140, 140, 150));
+    let tail = if let Some(optimal_pct) = optimal {
+        format!("optimal {}%", optimal_pct)
+    } else {
+        "warming".to_string()
     };
-    let Some(ratio) = cache.hit_ratio() else {
-        return Vec::new();
-    };
-    let pct = (ratio * 100.0).round().clamp(0.0, 100.0) as u8;
-    let (label, color) = kv_cache_status(pct, cache.reported_input_tokens);
+
     vec![Line::from(vec![
-        Span::styled("⚿ ", Style::default().fg(color)),
-        Span::styled(format!("KV {}%", pct), Style::default().fg(color).bold()),
-        Span::styled(" · ", Style::default().fg(rgb(80, 80, 90))),
-        Span::styled(label.to_string(), Style::default().fg(color)),
+        Span::styled("KV cache: ", Style::default().fg(rgb(180, 180, 190)).bold()),
+        Span::styled("actual ", Style::default().fg(rgb(140, 140, 150))),
         Span::styled(
-            format!(" · {} read", compact_token_count(cache.read_tokens)),
-            Style::default().fg(rgb(140, 140, 150)),
+            format!("{}%", actual_pct),
+            Style::default().fg(color).bold(),
+        ),
+        Span::styled(" · ", Style::default().fg(rgb(80, 80, 90))),
+        Span::styled(
+            tail,
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
         ),
     ])]
 }
 
-fn kv_cache_status(pct: u8, reported_input_tokens: u64) -> (&'static str, Color) {
-    if reported_input_tokens < 8_000 {
-        return ("warming", rgb(140, 140, 150));
-    }
-    match pct {
-        0..=9 => ("low", rgb(255, 110, 110)),
-        10..=39 => ("weak", rgb(255, 200, 100)),
-        40..=69 => ("ok", rgb(140, 180, 255)),
-        _ => ("good", rgb(110, 210, 140)),
-    }
+fn ratio_pct(ratio: f32) -> u8 {
+    (ratio * 100.0).round().clamp(0.0, 100.0) as u8
 }
 
-fn compact_token_count(tokens: u64) -> String {
-    if tokens >= 1_000_000 {
-        format!("{:.1}M", tokens as f32 / 1_000_000.0)
-    } else if tokens >= 1_000 {
-        format!("{:.1}k", tokens as f32 / 1_000.0)
-    } else {
-        tokens.to_string()
+fn kv_cache_optimal_color(pct: u8) -> Color {
+    match pct {
+        0..=24 => rgb(255, 110, 110),
+        25..=59 => rgb(255, 200, 100),
+        60..=84 => rgb(140, 180, 255),
+        _ => rgb(110, 210, 140),
     }
 }
 
@@ -1688,7 +1659,7 @@ fn render_sections(
     }
 
     if data.cache_hit_info.is_some() {
-        lines.extend(render_kv_cache_compact(data, inner));
+        lines.extend(render_kv_cache_widget(data, inner));
     }
 
     // Git info

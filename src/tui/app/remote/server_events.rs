@@ -484,6 +484,8 @@ pub(in crate::tui::app) fn handle_server_event(
                 app.total_cache_reported_input_tokens = 0;
                 app.total_cache_read_tokens = 0;
                 app.total_cache_creation_tokens = 0;
+                app.total_cache_optimal_input_tokens = 0;
+                app.cache_next_optimal_input_tokens = None;
                 app.processing_started = None;
                 app.clear_visible_turn_started();
                 app.replay_processing_started_ms = None;
