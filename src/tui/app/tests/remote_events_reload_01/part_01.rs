@@ -82,6 +82,32 @@ fn test_handle_server_event_transcript_send_prefixes_user_message() {
 }
 
 #[test]
+fn test_handle_server_event_session_close_requested_quits_client() {
+    let mut app = create_test_app();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let mut remote = crate::tui::backend::RemoteConnection::dummy();
+
+    let redraw = app.handle_server_event(
+        crate::protocol::ServerEvent::SessionCloseRequested {
+            reason: "Stopped by coordinator coord".to_string(),
+        },
+        &mut remote,
+    );
+
+    assert!(redraw);
+    assert!(app.should_quit);
+    let last = app
+        .display_messages()
+        .last()
+        .expect("close message displayed");
+    assert!(
+        last.content
+            .contains("Session close requested by coordinator")
+    );
+}
+
+#[test]
 fn test_handle_server_event_history_clears_connection_type_on_session_change_when_missing() {
     let mut app = create_test_app();
     let rt = tokio::runtime::Runtime::new().unwrap();

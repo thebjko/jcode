@@ -184,6 +184,21 @@ fn test_comm_members_roundtrip_includes_status() -> Result<()> {
 }
 
 #[test]
+fn test_session_close_requested_roundtrip() -> Result<()> {
+    let event = ServerEvent::SessionCloseRequested {
+        reason: "Stopped by coordinator coord".to_string(),
+    };
+    let json = encode_event(&event);
+    assert!(json.contains("\"type\":\"session_close_requested\""));
+    let decoded = parse_event_json(json.trim())?;
+    let ServerEvent::SessionCloseRequested { reason } = decoded else {
+        return Err(anyhow!("expected SessionCloseRequested"));
+    };
+    assert_eq!(reason, "Stopped by coordinator coord");
+    Ok(())
+}
+
+#[test]
 fn test_comm_status_response_roundtrip() -> Result<()> {
     let event = ServerEvent::CommStatusResponse {
         id: 57,

@@ -5,10 +5,10 @@ use super::swarm_mutation_state::{
 };
 use super::{
     SessionInterruptQueues, SwarmEvent, SwarmEventType, SwarmMember, SwarmState, VersionedPlan,
-    broadcast_swarm_plan, broadcast_swarm_status, create_headless_session, persist_swarm_state_for,
-    record_swarm_event, record_swarm_event_for_session, remove_session_channel_subscriptions,
-    remove_session_from_swarm, remove_session_interrupt_queue, truncate_detail,
-    update_member_status,
+    broadcast_swarm_plan, broadcast_swarm_status, create_headless_session, fanout_session_event,
+    persist_swarm_state_for, record_swarm_event, record_swarm_event_for_session,
+    remove_session_channel_subscriptions, remove_session_from_swarm,
+    remove_session_interrupt_queue, truncate_detail, update_member_status,
 };
 use crate::agent::Agent;
 use crate::protocol::{NotificationType, ServerEvent};
@@ -582,6 +582,15 @@ pub(super) async fn handle_comm_stop(
         });
         return;
     }
+
+    let _ = fanout_session_event(
+        swarm_members,
+        &target_session,
+        ServerEvent::SessionCloseRequested {
+            reason: format!("Stopped by coordinator {req_session_id}"),
+        },
+    )
+    .await;
 
     let mutation_key = request_key(&req_session_id, "stop", &[swarm_id, target_session.clone()]);
     let Some(mutation_state) = begin_or_replay(

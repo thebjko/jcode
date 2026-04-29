@@ -802,6 +802,10 @@ pub enum ServerEvent {
     #[serde(rename = "session")]
     SessionId { session_id: String },
 
+    /// Server requests that this client/session close itself.
+    #[serde(rename = "session_close_requested")]
+    SessionCloseRequested { reason: String },
+
     /// Full conversation history (response to GetHistory)
     #[serde(rename = "history")]
     History {

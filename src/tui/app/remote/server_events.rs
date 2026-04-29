@@ -393,6 +393,14 @@ pub(in crate::tui::app) fn handle_server_event(
             app.update_terminal_title();
             false
         }
+        ServerEvent::SessionCloseRequested { reason } => {
+            app.push_display_message(DisplayMessage::system(format!(
+                "Session close requested by coordinator: {reason}"
+            )));
+            app.set_status_notice("Session close requested by coordinator".to_string());
+            app.should_quit = true;
+            true
+        }
         ServerEvent::Reloading { .. } => {
             app.append_reload_message("🔄 Server reload initiated...");
             false
