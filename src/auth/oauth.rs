@@ -1,5 +1,5 @@
 use crate::auth::claude as claude_auth;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -949,64 +949,106 @@ pub fn load_claude_tokens_for_account(label: &str) -> Result<OAuthTokens> {
     })
 }
 
+#[derive(Serialize)]
+struct ClaudeRefreshTokenRequest<'a> {
+    grant_type: &'static str,
+    refresh_token: &'a str,
+    client_id: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scope: Option<&'static str>,
+}
+
+#[derive(Deserialize)]
+struct ClaudeRefreshTokenResponse {
+    access_token: String,
+    refresh_token: Option<String>,
+    expires_in: i64,
+}
+
+fn claude_refresh_error_is_invalid_scope(err: &anyhow::Error) -> bool {
+    let text = format!("{err:#}").to_ascii_lowercase();
+    text.contains("invalid_scope")
+        || text.contains("requested scope is invalid")
+        || text.contains("scope is invalid")
+}
+
+async fn send_claude_refresh_request(
+    refresh_token: &str,
+    scope: Option<&'static str>,
+) -> Result<ClaudeRefreshTokenResponse> {
+    let payload = ClaudeRefreshTokenRequest {
+        grant_type: "refresh_token",
+        refresh_token,
+        client_id: claude::CLIENT_ID,
+        scope,
+    };
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(claude::TOKEN_URL)
+        .header("Content-Type", "application/json")
+        .timeout(Duration::from_secs(CLAUDE_TOKEN_TIMEOUT_SECS))
+        .json(&payload)
+        .send()
+        .await?;
+
+    if !resp.status().is_success() {
+        let text = resp.text().await?;
+        let scope_label = scope.unwrap_or("<omitted>");
+        anyhow::bail!(
+            "Token refresh failed with scope '{}': {}",
+            scope_label,
+            text
+        );
+    }
+
+    Ok(resp.json().await?)
+}
+
+async fn refresh_claude_tokens_inner(
+    refresh_token: &str,
+    label: Option<&str>,
+) -> Result<OAuthTokens> {
+    let scoped_result =
+        send_claude_refresh_request(refresh_token, Some(claude::REFRESH_SCOPES)).await;
+    let tokens = match scoped_result {
+        Ok(tokens) => tokens,
+        Err(err) if claude_refresh_error_is_invalid_scope(&err) => {
+            crate::logging::warn(
+                "Claude token refresh rejected Claude Code scopes; retrying without an explicit scope for legacy token compatibility",
+            );
+            send_claude_refresh_request(refresh_token, None)
+                .await
+                .with_context(|| {
+                    format!(
+                        "Claude token refresh fallback without scope failed after scoped refresh error: {err:#}"
+                    )
+                })?
+        }
+        Err(err) => return Err(err),
+    };
+
+    let expires_at = chrono::Utc::now().timestamp_millis() + (tokens.expires_in * 1000);
+    let oauth_tokens = OAuthTokens {
+        access_token: tokens.access_token,
+        refresh_token: tokens
+            .refresh_token
+            .unwrap_or_else(|| refresh_token.to_string()),
+        expires_at,
+        id_token: None,
+    };
+
+    let save_label = label.map(ToString::to_string).unwrap_or_else(|| {
+        claude_auth::active_account_label().unwrap_or_else(claude_auth::primary_account_label)
+    });
+    save_claude_tokens_for_account(&oauth_tokens, &save_label)?;
+
+    Ok(oauth_tokens)
+}
+
 /// Refresh Claude OAuth tokens
 pub async fn refresh_claude_tokens(refresh_token: &str) -> Result<OAuthTokens> {
-    let result: Result<OAuthTokens> = async {
-        #[derive(Serialize)]
-        struct ClaudeRefreshTokenRequest<'a> {
-            grant_type: &'static str,
-            refresh_token: &'a str,
-            client_id: &'static str,
-            scope: &'static str,
-        }
-
-        let payload = ClaudeRefreshTokenRequest {
-            grant_type: "refresh_token",
-            refresh_token,
-            client_id: claude::CLIENT_ID,
-            scope: claude::REFRESH_SCOPES,
-        };
-
-        let client = reqwest::Client::new();
-        let resp = client
-            .post(claude::TOKEN_URL)
-            .header("Content-Type", "application/json")
-            .timeout(Duration::from_secs(CLAUDE_TOKEN_TIMEOUT_SECS))
-            .json(&payload)
-            .send()
-            .await?;
-
-        if !resp.status().is_success() {
-            let text = resp.text().await?;
-            anyhow::bail!("Token refresh failed: {}", text);
-        }
-
-        #[derive(Deserialize)]
-        struct TokenResponse {
-            access_token: String,
-            refresh_token: Option<String>,
-            expires_in: i64,
-        }
-
-        let tokens: TokenResponse = resp.json().await?;
-        let expires_at = chrono::Utc::now().timestamp_millis() + (tokens.expires_in * 1000);
-
-        let oauth_tokens = OAuthTokens {
-            access_token: tokens.access_token,
-            refresh_token: tokens
-                .refresh_token
-                .unwrap_or_else(|| refresh_token.to_string()),
-            expires_at,
-            id_token: None,
-        };
-
-        let active_label =
-            claude_auth::active_account_label().unwrap_or_else(claude_auth::primary_account_label);
-        save_claude_tokens_for_account(&oauth_tokens, &active_label)?;
-
-        Ok(oauth_tokens)
-    }
-    .await;
+    let result = refresh_claude_tokens_inner(refresh_token, None).await;
 
     match &result {
         Ok(_) => {
@@ -1025,60 +1067,7 @@ pub async fn refresh_claude_tokens_for_account(
     refresh_token: &str,
     label: &str,
 ) -> Result<OAuthTokens> {
-    let result: Result<OAuthTokens> = async {
-        #[derive(Serialize)]
-        struct ClaudeRefreshTokenRequest<'a> {
-            grant_type: &'static str,
-            refresh_token: &'a str,
-            client_id: &'static str,
-            scope: &'static str,
-        }
-
-        let payload = ClaudeRefreshTokenRequest {
-            grant_type: "refresh_token",
-            refresh_token,
-            client_id: claude::CLIENT_ID,
-            scope: claude::REFRESH_SCOPES,
-        };
-
-        let client = reqwest::Client::new();
-        let resp = client
-            .post(claude::TOKEN_URL)
-            .header("Content-Type", "application/json")
-            .timeout(Duration::from_secs(CLAUDE_TOKEN_TIMEOUT_SECS))
-            .json(&payload)
-            .send()
-            .await?;
-
-        if !resp.status().is_success() {
-            let text = resp.text().await?;
-            anyhow::bail!("Token refresh failed for account '{}': {}", label, text);
-        }
-
-        #[derive(Deserialize)]
-        struct TokenResponse {
-            access_token: String,
-            refresh_token: Option<String>,
-            expires_in: i64,
-        }
-
-        let tokens: TokenResponse = resp.json().await?;
-        let expires_at = chrono::Utc::now().timestamp_millis() + (tokens.expires_in * 1000);
-
-        let oauth_tokens = OAuthTokens {
-            access_token: tokens.access_token,
-            refresh_token: tokens
-                .refresh_token
-                .unwrap_or_else(|| refresh_token.to_string()),
-            expires_at,
-            id_token: None,
-        };
-
-        save_claude_tokens_for_account(&oauth_tokens, label)?;
-
-        Ok(oauth_tokens)
-    }
-    .await;
+    let result = refresh_claude_tokens_inner(refresh_token, Some(label)).await;
 
     match &result {
         Ok(_) => {
@@ -1215,12 +1204,27 @@ fn build_claude_exchange_request(
 /// Build a Claude token refresh request (extracted for testability).
 #[cfg(test)]
 fn build_claude_refresh_request(refresh_token: &str) -> (String, String, Vec<u8>) {
+    build_claude_refresh_request_with_scope(refresh_token, Some(claude::REFRESH_SCOPES))
+}
+
+/// Build a Claude token refresh request with configurable scope (extracted for testability).
+#[cfg(test)]
+fn build_claude_refresh_request_with_scope(
+    refresh_token: &str,
+    scope: Option<&'static str>,
+) -> (String, String, Vec<u8>) {
     let body = serde_json::json!({
         "grant_type": "refresh_token",
         "refresh_token": refresh_token,
         "client_id": claude::CLIENT_ID,
-        "scope": claude::REFRESH_SCOPES,
     });
+    let mut body = body.as_object().expect("refresh body object").clone();
+    if let Some(scope) = scope {
+        body.insert(
+            "scope".to_string(),
+            serde_json::Value::String(scope.to_string()),
+        );
+    }
     (
         claude::TOKEN_URL.to_string(),
         "application/json".to_string(),

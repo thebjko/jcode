@@ -122,6 +122,28 @@ fn claude_refresh_request_contains_required_fields() -> Result<()> {
 }
 
 #[test]
+fn claude_refresh_request_can_omit_scope_for_legacy_fallback() -> Result<()> {
+    let (_url, _ct, body) = build_claude_refresh_request_with_scope("rt_refresh_token_value", None);
+    let body = json_body(body)?;
+    assert_eq!(require_json_str(&body, "grant_type")?, "refresh_token");
+    assert_eq!(
+        require_json_str(&body, "refresh_token")?,
+        "rt_refresh_token_value"
+    );
+    assert_eq!(require_json_str(&body, "client_id")?, claude::CLIENT_ID);
+    assert!(body.get("scope").is_none());
+    Ok(())
+}
+
+#[test]
+fn claude_refresh_invalid_scope_detection_matches_anthropic_error() {
+    let err = anyhow::anyhow!(
+        "Token refresh failed: {{\"error\": \"invalid_scope\", \"error_description\": \"The requested scope is invalid, unknown, or malformed.\"}}"
+    );
+    assert!(claude_refresh_error_is_invalid_scope(&err));
+}
+
+#[test]
 fn claude_refresh_request_targets_correct_url() -> Result<()> {
     let (url, _ct, _body) = build_claude_refresh_request("rt");
     assert_eq!(url, "https://platform.claude.com/v1/oauth/token");
