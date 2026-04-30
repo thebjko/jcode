@@ -354,6 +354,23 @@ pub trait Provider: Send + Sync {
     }
 }
 
+pub fn set_model_with_auth_refresh(provider: &dyn Provider, model: &str) -> Result<()> {
+    match provider.set_model(model) {
+        Ok(()) => Ok(()),
+        Err(first_err) => {
+            let first_message = first_err.to_string();
+            provider.on_auth_changed();
+            provider.set_model(model).map_err(|second_err| {
+                anyhow::anyhow!(
+                    "{} (retried after reloading auth from disk: {})",
+                    first_message,
+                    second_err
+                )
+            })
+        }
+    }
+}
+
 fn is_fresh_user_text_message(message: &Message) -> bool {
     if message.role != Role::User {
         return false;
@@ -1283,6 +1300,9 @@ impl Provider for MultiProvider {
         // OpenRouter models (with per-provider endpoints)
         let has_openrouter = self.openrouter_provider().is_some();
         if let Some(openrouter) = self.openrouter_provider() {
+            let openai_compatible_provider_label =
+                crate::provider_catalog::active_openai_compatible_display_name()
+                    .unwrap_or_else(|| "OpenAI-compatible".to_string());
             let current_openrouter_model = openrouter.model();
             let supports_openrouter_provider_features =
                 openrouter.supports_provider_routing_features();
@@ -1324,7 +1344,7 @@ impl Provider for MultiProvider {
                 } else {
                     routes.push(ModelRoute {
                         model: model.clone(),
-                        provider: "OpenAI-compatible".to_string(),
+                        provider: openai_compatible_provider_label.clone(),
                         api_method: "openai-compatible".to_string(),
                         available: has_openrouter,
                         detail: "custom endpoint".to_string(),

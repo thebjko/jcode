@@ -455,13 +455,14 @@ pub(crate) fn build_header_lines(app: &dyn TuiState, width: u16) -> Vec<Line<'st
     let auth = app.auth_status();
     let w = width as usize;
     let model = model.trim().to_string();
-    let provider_label = {
-        let trimmed = provider_name.trim();
-        if trimmed.is_empty() {
-            String::new()
-        } else {
-            let name = trimmed.to_lowercase();
-            let auth_tag = match name.as_str() {
+    let provider_label =
+        {
+            let trimmed = provider_name.trim();
+            if trimmed.is_empty() {
+                String::new()
+            } else {
+                let name = trimmed.to_lowercase();
+                let auth_tag = match name.as_str() {
                 "anthropic" => {
                     if std::env::var("ANTHROPIC_API_KEY").is_ok() {
                         "api-key"
@@ -487,16 +488,22 @@ pub(crate) fn build_header_lines(app: &dyn TuiState, width: u16) -> Vec<Line<'st
                         ""
                     }
                 }
-                "openrouter" => "api-key",
+                "openrouter" | "openai-compatible" => "api-key",
+                other
+                    if crate::provider_catalog::resolve_openai_compatible_profile_selection(other)
+                        .is_some() =>
+                {
+                    "api-key"
+                }
                 _ => "",
             };
-            if auth_tag.is_empty() {
-                name
-            } else {
-                format!("{}:{}", auth_tag, name)
+                if auth_tag.is_empty() {
+                    name
+                } else {
+                    format!("{}:{}", auth_tag, name)
+                }
             }
-        }
-    };
+        };
 
     let suppress_placeholder_detail = provider_label.is_empty()
         && upstream.is_none()

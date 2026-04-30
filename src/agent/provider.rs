@@ -53,7 +53,7 @@ impl Agent {
     }
 
     pub fn set_model(&mut self, model: &str) -> Result<()> {
-        self.provider.set_model(model)?;
+        crate::provider::set_model_with_auth_refresh(self.provider.as_ref(), model)?;
         self.session.model = Some(self.provider.model());
         self.log_env_snapshot("set_model");
         Ok(())

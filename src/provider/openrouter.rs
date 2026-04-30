@@ -282,12 +282,23 @@ fn is_kimi_coding_api_base(api_base: &str) -> bool {
         && url.path().trim_end_matches('/').starts_with("/coding")
 }
 
+fn is_coding_agent_api_base(api_base: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(api_base) else {
+        return false;
+    };
+    let host = url.host_str().unwrap_or_default();
+    let path = url.path().trim_end_matches('/');
+    is_kimi_coding_api_base(api_base)
+        || host == "coding.dashscope.aliyuncs.com"
+        || (host == "api.z.ai" && path.starts_with("/api/coding/paas"))
+}
+
 fn is_kimi_for_coding_model(model: &str) -> bool {
     model.trim().eq_ignore_ascii_case("kimi-for-coding")
 }
 
 fn should_send_kimi_coding_agent_headers(api_base: &str, model: Option<&str>) -> bool {
-    is_kimi_coding_api_base(api_base) || model.map(is_kimi_for_coding_model).unwrap_or(false)
+    is_coding_agent_api_base(api_base) || model.map(is_kimi_for_coding_model).unwrap_or(false)
 }
 
 fn apply_kimi_coding_agent_headers(
@@ -1223,11 +1234,11 @@ impl OpenRouterProvider {
 
         let key_name = configured_api_key_name();
         let api_key = Self::get_api_key().ok_or_else(|| {
-            anyhow::anyhow!(
-                "{} not found in environment or ~/.config/jcode/{}",
-                key_name,
-                configured_env_file_name()
-            )
+            let env_file = configured_env_file_name();
+            let path = crate::storage::app_config_dir()
+                .map(|dir| dir.join(&env_file).display().to_string())
+                .unwrap_or_else(|_| env_file.clone());
+            anyhow::anyhow!("{} not found in environment or {}", key_name, path)
         })?;
 
         Ok(match configured_auth_header_mode() {

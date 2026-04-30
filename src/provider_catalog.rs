@@ -83,6 +83,64 @@ pub fn resolve_openai_compatible_profile(
     resolved
 }
 
+pub fn resolve_openai_compatible_profile_selection(input: &str) -> Option<OpenAiCompatibleProfile> {
+    let provider = resolve_login_provider(input)?;
+    match provider.target {
+        LoginProviderTarget::OpenAiCompatible(profile) => Some(profile),
+        _ => None,
+    }
+}
+
+pub fn active_openai_compatible_display_name() -> Option<String> {
+    if let Ok(profile_name) = std::env::var("JCODE_NAMED_PROVIDER_PROFILE") {
+        let trimmed = profile_name.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+
+    if let Ok(namespace) = std::env::var("JCODE_OPENROUTER_CACHE_NAMESPACE") {
+        let trimmed = namespace.trim();
+        if let Some(profile) = openai_compatible_profiles()
+            .iter()
+            .copied()
+            .find(|profile| profile.id == trimmed)
+        {
+            return Some(profile.display_name.to_string());
+        }
+    }
+
+    let api_base = std::env::var("JCODE_OPENROUTER_API_BASE")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .or_else(|| env_override("JCODE_OPENAI_COMPAT_API_BASE"));
+
+    let Some(api_base) = api_base.and_then(|value| normalize_api_base(&value)) else {
+        return None;
+    };
+
+    for profile in openai_compatible_profiles().iter().copied() {
+        if normalize_api_base(profile.api_base).as_deref() == Some(api_base.as_str()) {
+            return Some(profile.display_name.to_string());
+        }
+    }
+
+    if !api_base.contains("openrouter.ai") {
+        return Some("OpenAI-compatible".to_string());
+    }
+
+    None
+}
+
+pub fn runtime_provider_display_name(provider_name: &str) -> String {
+    if provider_name.eq_ignore_ascii_case("openrouter") {
+        active_openai_compatible_display_name().unwrap_or_else(|| "OpenRouter".to_string())
+    } else {
+        provider_name.to_string()
+    }
+}
+
 pub fn apply_openai_compatible_profile_env(profile: Option<OpenAiCompatibleProfile>) {
     if std::env::var_os("JCODE_PROVIDER_PROFILE_ACTIVE").is_some() {
         return;

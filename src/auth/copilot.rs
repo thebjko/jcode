@@ -144,7 +144,7 @@ impl CopilotApiToken {
 /// 5. ~/.config/github-copilot/hosts.json (legacy Copilot CLI)
 /// 6. ~/.config/github-copilot/apps.json (legacy VS Code)
 /// 7. trusted OpenCode/pi auth.json OAuth entries
-/// 8. gh auth token fallback
+/// 8. optional `gh auth token` fallback when JCODE_COPILOT_ALLOW_GH_AUTH_TOKEN=1
 pub fn load_github_token() -> Result<String> {
     if let Some(token) = cached_github_token() {
         return Ok(token);
@@ -195,16 +195,28 @@ pub fn load_github_token() -> Result<String> {
         return Ok(token);
     }
 
-    if let Some(token) = load_token_from_gh_cli() {
-        cache_github_token(&token);
-        return Ok(token);
+    if allow_gh_cli_fallback() {
+        if let Some(token) = load_token_from_gh_cli() {
+            cache_github_token(&token);
+            return Ok(token);
+        }
     }
 
     anyhow::bail!(
         "GitHub Copilot token not found. \
-         Set COPILOT_GITHUB_TOKEN/GH_TOKEN/GITHUB_TOKEN, or run `gh auth login` / `gh extension install github/gh-copilot && gh copilot` \
-         to authenticate."
+         Set COPILOT_GITHUB_TOKEN/GH_TOKEN/GITHUB_TOKEN, run `jcode login --provider copilot`, \
+         or set JCODE_COPILOT_ALLOW_GH_AUTH_TOKEN=1 to explicitly reuse `gh auth token`."
     )
+}
+
+fn allow_gh_cli_fallback() -> bool {
+    std::env::var("JCODE_COPILOT_ALLOW_GH_AUTH_TOKEN")
+        .ok()
+        .map(|value| {
+            let value = value.trim();
+            !value.is_empty() && value != "0" && !value.eq_ignore_ascii_case("false")
+        })
+        .unwrap_or(false)
 }
 
 /// Check if Copilot credentials are available (without loading the full token)

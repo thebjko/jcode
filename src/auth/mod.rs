@@ -674,7 +674,7 @@ impl AuthStatus {
         timings.push(("openai", step_start.elapsed().as_millis()));
 
         let step_start = Instant::now();
-        status.copilot = if copilot::has_copilot_credentials() {
+        status.copilot = if copilot::has_copilot_credentials_fast() {
             status.copilot_has_api_token = true;
             AuthState::Available
         } else {

@@ -345,9 +345,9 @@ impl crate::tui::TuiState for App {
         if self.is_remote {
             self.remote_header_provider_name().unwrap_or_default()
         } else {
-            self.remote_provider_name
-                .clone()
-                .unwrap_or_else(|| self.provider.name().to_string())
+            self.remote_provider_name.clone().unwrap_or_else(|| {
+                crate::provider_catalog::runtime_provider_display_name(self.provider.name())
+            })
         }
     }
 

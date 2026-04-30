@@ -585,6 +585,28 @@ pub fn parse_callback_input_with_state(input: &str) -> Result<(String, String)> 
     Ok((code, state))
 }
 
+fn apply_claude_oauth_token_headers(req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    req.header(
+        "User-Agent",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    )
+    .header("Accept", "application/json, text/plain, */*")
+    .header("Accept-Language", "en-US,en;q=0.9")
+    .header("Origin", "https://claude.ai")
+    .header("Referer", "https://claude.ai/")
+    .header("Sec-Fetch-Site", "cross-site")
+    .header("Sec-Fetch-Mode", "cors")
+    .header("Sec-Fetch-Dest", "empty")
+}
+
+fn looks_like_cloudflare_challenge(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    lower.contains("cf-challenge")
+        || lower.contains("cloudflare")
+        || lower.contains("just a moment")
+        || lower.contains("/cdn-cgi/challenge-platform")
+}
+
 async fn exchange_claude_code_at_url(
     token_url: &str,
     verifier: &str,
@@ -615,15 +637,23 @@ async fn exchange_claude_code_at_url(
         ("state", state),
     ];
 
-    let resp = client
-        .post(token_url)
-        .header("Content-Type", "application/x-www-form-urlencoded")
-        .form(&params)
-        .send()
-        .await?;
+    let resp = apply_claude_oauth_token_headers(
+        client
+            .post(token_url)
+            .header("Content-Type", "application/x-www-form-urlencoded"),
+    )
+    .form(&params)
+    .send()
+    .await?;
 
     if !resp.status().is_success() {
+        let status = resp.status();
         let text = resp.text().await?;
+        if status == reqwest::StatusCode::FORBIDDEN && looks_like_cloudflare_challenge(&text) {
+            anyhow::bail!(
+                "Token exchange was blocked by Cloudflare before Anthropic returned OAuth tokens. jcode now sends browser-like token-exchange headers, but this network/IP is still being challenged. Switch VPN exit IP or network, then retry with `jcode login --provider claude --no-browser` and paste the callback URL."
+            );
+        }
         anyhow::bail!("Token exchange failed: {}", text);
     }
 

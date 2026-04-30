@@ -213,7 +213,9 @@ impl Agent {
                 crate::session::derive_session_provider_key(agent.provider.name());
         }
         if let Some(model) = agent.session.model.clone() {
-            if let Err(e) = agent.provider.set_model(&model) {
+            if let Err(e) =
+                crate::provider::set_model_with_auth_refresh(agent.provider.as_ref(), &model)
+            {
                 logging::error(&format!(
                     "Failed to restore session model '{}': {}",
                     model, e

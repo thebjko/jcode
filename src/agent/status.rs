@@ -131,7 +131,7 @@ impl Agent {
     }
 
     pub fn provider_name(&self) -> String {
-        self.provider.name().to_string()
+        crate::provider_catalog::runtime_provider_display_name(self.provider.name())
     }
 
     pub fn provider_model(&self) -> String {

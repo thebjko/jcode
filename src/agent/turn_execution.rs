@@ -372,7 +372,9 @@ impl Agent {
 
         let model_start = Instant::now();
         if let Some(model) = self.session.model.clone() {
-            if let Err(e) = self.provider.set_model(&model) {
+            if let Err(e) =
+                crate::provider::set_model_with_auth_refresh(self.provider.as_ref(), &model)
+            {
                 logging::error(&format!(
                     "Failed to restore session model '{}': {}",
                     model, e

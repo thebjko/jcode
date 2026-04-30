@@ -37,10 +37,11 @@ pub(super) async fn run_stream_with_retries(
         }
 
         crate::logging::info(&format!(
-            "API stream attempt {}/{} over HTTPS transport (model: {}, auth: {})",
+            "API stream attempt {}/{} over HTTPS transport (model: {}, endpoint: {}, auth: {})",
             attempt + 1,
             MAX_RETRIES,
             model,
+            api_base,
             auth.label()
         ));
 
