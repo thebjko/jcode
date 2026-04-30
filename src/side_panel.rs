@@ -1,31 +1,11 @@
 use anyhow::{Context, Result};
 pub use jcode_side_panel_types::{
-    SidePanelPage, SidePanelPageFormat, SidePanelPageSource, SidePanelSnapshot, snapshot_is_empty,
+    PersistedSidePanelPage, PersistedSidePanelState, SidePanelPage, SidePanelPageFormat,
+    SidePanelPageSource, SidePanelSnapshot, snapshot_is_empty,
 };
-use serde::{Deserialize, Serialize};
 use std::hash::{Hash as _, Hasher as _};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-struct PersistedSidePanelState {
-    #[serde(default)]
-    focused_page_id: Option<String>,
-    #[serde(default)]
-    pages: Vec<PersistedSidePanelPage>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct PersistedSidePanelPage {
-    id: String,
-    title: String,
-    file_path: String,
-    #[serde(default)]
-    format: SidePanelPageFormat,
-    #[serde(default)]
-    source: SidePanelPageSource,
-    updated_at_ms: u64,
-}
 
 pub fn snapshot_for_session(session_id: &str) -> Result<SidePanelSnapshot> {
     let state = load_state(session_id)?;

@@ -34,6 +34,26 @@ impl SidePanelPageSource {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PersistedSidePanelState {
+    #[serde(default)]
+    pub focused_page_id: Option<String>,
+    #[serde(default)]
+    pub pages: Vec<PersistedSidePanelPage>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PersistedSidePanelPage {
+    pub id: String,
+    pub title: String,
+    pub file_path: String,
+    #[serde(default)]
+    pub format: SidePanelPageFormat,
+    #[serde(default)]
+    pub source: SidePanelPageSource,
+    pub updated_at_ms: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct SidePanelPage {
     pub id: String,
