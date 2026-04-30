@@ -15,7 +15,6 @@
 use anyhow::Result;
 use futures::SinkExt;
 use futures::stream::StreamExt;
-use sha2::{Digest, Sha256};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -24,8 +23,13 @@ use tokio::net::TcpListener;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::logging;
-use crate::storage;
+mod auth;
+mod registry;
+use auth::{WsAuth, WsAuthSource, extract_ws_auth, ws_error_response};
+#[cfg(test)]
+pub(crate) use auth::{is_valid_hex_token, parse_bearer_token, parse_query_token};
 pub use jcode_gateway_types::{PairedDevice, PairingCode};
+pub use registry::DeviceRegistry;
 
 /// Default gateway port ("jc" on phone keypad = 52, but we use 7643)
 pub const DEFAULT_PORT: u16 = 7643;
@@ -48,136 +52,6 @@ impl Default for GatewayConfig {
             port: DEFAULT_PORT,
             bind_addr: "0.0.0.0".to_string(),
             enabled: false,
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Device registry (persisted to ~/.jcode/devices.json)
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
-pub struct DeviceRegistry {
-    pub devices: Vec<PairedDevice>,
-    #[serde(default)]
-    pub pending_codes: Vec<PairingCode>,
-}
-
-impl DeviceRegistry {
-    /// Load from ~/.jcode/devices.json
-    pub fn load() -> Self {
-        let path = match storage::jcode_dir() {
-            Ok(d) => d.join("devices.json"),
-            Err(_) => return Self::default(),
-        };
-        if !path.exists() {
-            return Self::default();
-        }
-        match std::fs::read_to_string(&path) {
-            Ok(contents) => serde_json::from_str(&contents).unwrap_or_default(),
-            Err(_) => Self::default(),
-        }
-    }
-
-    /// Save to ~/.jcode/devices.json
-    pub fn save(&self) -> Result<()> {
-        let path = storage::jcode_dir()?.join("devices.json");
-        let contents = serde_json::to_string_pretty(self)?;
-        std::fs::write(&path, contents)?;
-        Ok(())
-    }
-
-    /// Generate a 6-digit pairing code, valid for 5 minutes
-    pub fn generate_pairing_code(&mut self) -> String {
-        use rand::Rng;
-        let code: String = format!("{:06}", rand::rng().random_range(0..1_000_000u32));
-        let now = chrono::Utc::now();
-        let expires = now + chrono::Duration::minutes(5);
-
-        // Clean up expired codes
-        let now_str = now.to_rfc3339();
-        self.pending_codes.retain(|c| c.expires_at > now_str);
-
-        self.pending_codes.push(PairingCode {
-            code: code.clone(),
-            created_at: now.to_rfc3339(),
-            expires_at: expires.to_rfc3339(),
-        });
-
-        let _ = self.save();
-        code
-    }
-
-    /// Validate a pairing code and consume it. Returns true if valid.
-    pub fn validate_code(&mut self, code: &str) -> bool {
-        let now = chrono::Utc::now().to_rfc3339();
-        if let Some(idx) = self
-            .pending_codes
-            .iter()
-            .position(|c| c.code == code && c.expires_at > now)
-        {
-            self.pending_codes.remove(idx);
-            let _ = self.save();
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Register a new paired device. Returns the auth token.
-    pub fn pair_device(
-        &mut self,
-        device_id: String,
-        device_name: String,
-        apns_token: Option<String>,
-    ) -> String {
-        use rand::Rng;
-        // Generate a random auth token
-        let token_bytes: [u8; 32] = rand::rng().random();
-        let token = hex::encode(token_bytes);
-
-        // Store hash of token, not the token itself
-        let mut hasher = Sha256::new();
-        hasher.update(token.as_bytes());
-        let token_hash = format!("sha256:{}", hex::encode(hasher.finalize()));
-
-        let now = chrono::Utc::now().to_rfc3339();
-
-        // Remove existing device with same ID (re-pairing)
-        self.devices.retain(|d| d.id != device_id);
-
-        self.devices.push(PairedDevice {
-            id: device_id,
-            name: device_name,
-            apns_token,
-            token_hash,
-            paired_at: now.clone(),
-            last_seen: now,
-        });
-
-        let _ = self.save();
-        token
-    }
-
-    /// Validate an auth token. Returns the device if valid.
-    pub fn validate_token(&self, token: &str) -> Option<&PairedDevice> {
-        let mut hasher = Sha256::new();
-        hasher.update(token.as_bytes());
-        let token_hash = format!("sha256:{}", hex::encode(hasher.finalize()));
-
-        self.devices.iter().find(|d| d.token_hash == token_hash)
-    }
-
-    /// Update last_seen for a device
-    pub fn touch_device(&mut self, token: &str) {
-        let mut hasher = Sha256::new();
-        hasher.update(token.as_bytes());
-        let token_hash = format!("sha256:{}", hex::encode(hasher.finalize()));
-        let now = chrono::Utc::now().to_rfc3339();
-
-        if let Some(device) = self.devices.iter_mut().find(|d| d.token_hash == token_hash) {
-            device.last_seen = now;
-            let _ = self.save();
         }
     }
 }
@@ -445,137 +319,6 @@ async fn handle_ws_connection(
     logging::info(&format!("Gateway: {} disconnected", device_name));
     Ok(())
 }
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct WsAuth {
-    token: String,
-    source: WsAuthSource,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum WsAuthSource {
-    Header,
-    Query,
-}
-
-#[expect(
-    clippy::result_large_err,
-    reason = "Tungstenite handshake APIs require returning ErrorResponse directly"
-)]
-fn extract_ws_auth(
-    request: &tokio_tungstenite::tungstenite::handshake::server::Request,
-) -> std::result::Result<WsAuth, tokio_tungstenite::tungstenite::handshake::server::ErrorResponse> {
-    let header_token = match request
-        .headers()
-        .get("authorization")
-        .and_then(|value| value.to_str().ok())
-    {
-        Some(auth) => Some(parse_bearer_token(auth).ok_or_else(|| {
-            ws_error_response(
-                401,
-                "Unauthorized",
-                "Authorization must be 'Bearer <token>'",
-            )
-        })?),
-        None => None,
-    };
-    let query_token = request.uri().query().and_then(parse_query_token);
-
-    let (token, source) = match (header_token, query_token) {
-        (Some(header), Some(query)) if header != query => {
-            return Err(ws_error_response(
-                401,
-                "Unauthorized",
-                "Conflicting auth token sources",
-            ));
-        }
-        (Some(header), _) => (header, WsAuthSource::Header),
-        (None, Some(query)) => (query, WsAuthSource::Query),
-        (None, None) => {
-            return Err(ws_error_response(
-                401,
-                "Unauthorized",
-                "Missing Authorization header or token query parameter",
-            ));
-        }
-    };
-
-    if !is_valid_hex_token(token) {
-        return Err(ws_error_response(
-            401,
-            "Unauthorized",
-            "Malformed auth token",
-        ));
-    }
-
-    Ok(WsAuth {
-        token: token.to_string(),
-        source,
-    })
-}
-
-fn parse_bearer_token(header_value: &str) -> Option<&str> {
-    let mut parts = header_value.split_whitespace();
-    let scheme = parts.next()?;
-    if !scheme.eq_ignore_ascii_case("bearer") {
-        return None;
-    }
-    let token = parts.next()?;
-    if parts.next().is_some() {
-        return None;
-    }
-    if token.is_empty() {
-        return None;
-    }
-    Some(token)
-}
-
-fn parse_query_token(query: &str) -> Option<&str> {
-    for param in query.split('&') {
-        if let Some(token) = param.strip_prefix("token=")
-            && !token.is_empty()
-        {
-            return Some(token);
-        }
-    }
-    None
-}
-
-fn is_valid_hex_token(token: &str) -> bool {
-    token.len() == 64 && token.bytes().all(|b| b.is_ascii_hexdigit())
-}
-
-fn ws_error_response(
-    status: u16,
-    reason: &str,
-    body: &str,
-) -> tokio_tungstenite::tungstenite::handshake::server::ErrorResponse {
-    let primary = tokio_tungstenite::tungstenite::http::Response::builder()
-        .status(status)
-        .header("Content-Type", "text/plain; charset=utf-8")
-        .header("Connection", "close")
-        .body(Some(format!("{}\n", body)));
-    if let Ok(response) = primary {
-        return response;
-    }
-
-    let fallback = tokio_tungstenite::tungstenite::http::Response::builder()
-        .status(500)
-        .body(Some(format!("{}\n", reason)));
-    if let Ok(response) = fallback {
-        return response;
-    }
-
-    let mut response =
-        tokio_tungstenite::tungstenite::http::Response::new(Some(format!("{}\n", reason)));
-    *response.status_mut() =
-        tokio_tungstenite::tungstenite::http::StatusCode::INTERNAL_SERVER_ERROR;
-    response
-}
-
-// ---------------------------------------------------------------------------
-// HTTP handler for POST /pair and GET /health
-// ---------------------------------------------------------------------------
 
 fn http_response(status: u16, status_text: &str, body: &str) -> Vec<u8> {
     format!(
