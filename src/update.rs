@@ -3,6 +3,7 @@ use crate::storage;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -11,6 +12,14 @@ const UPDATE_CHECK_INTERVAL: Duration = Duration::from_secs(60); // minimum gap 
 const UPDATE_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(120);
 const BACKGROUND_UPDATE_THRESHOLD: Duration = Duration::from_secs(15);
+const DOWNLOAD_PROGRESS_BAR_WIDTH: usize = 24;
+const DOWNLOAD_PROGRESS_UPDATE_STEP: u64 = 1_048_576;
+
+#[derive(Debug, Clone, Copy)]
+pub struct DownloadProgress {
+    pub downloaded: u64,
+    pub total: Option<u64>,
+}
 
 #[derive(Debug, Clone)]
 pub struct UpdateEstimate {
@@ -606,7 +615,19 @@ pub fn spawn_background_session_update(session_id: String) {
                         format_duration_estimate(estimate.duration)
                     ),
                 });
-                match download_and_install_blocking(&release) {
+                let progress_session_id = session_id.clone();
+                let progress_version = release.tag_name.clone();
+                match download_and_install_blocking_with_progress(&release, |progress| {
+                    publish(SessionUpdateStatus::Status {
+                        session_id: progress_session_id.clone(),
+                        action,
+                        message: format!(
+                            "{} {}",
+                            progress_version,
+                            format_download_progress_bar(progress)
+                        ),
+                    });
+                }) {
                     Ok(_) => publish(SessionUpdateStatus::ReadyToReload {
                         session_id,
                         action,
@@ -876,6 +897,13 @@ fn version_is_newer(release: &str, current: &str) -> bool {
 }
 
 pub fn download_and_install_blocking(release: &GitHubRelease) -> Result<PathBuf> {
+    download_and_install_blocking_with_progress(release, |_| {})
+}
+
+pub fn download_and_install_blocking_with_progress(
+    release: &GitHubRelease,
+    mut on_progress: impl FnMut(DownloadProgress),
+) -> Result<PathBuf> {
     let started = Instant::now();
     let asset_name = get_asset_name();
     let asset = release
@@ -894,7 +922,7 @@ pub fn download_and_install_blocking(release: &GitHubRelease) -> Result<PathBuf>
         .user_agent("jcode-updater")
         .build()?;
 
-    let response = client
+    let mut response = client
         .get(&download_url)
         .send()
         .context("Failed to download update")?;
@@ -903,7 +931,33 @@ pub fn download_and_install_blocking(release: &GitHubRelease) -> Result<PathBuf>
         anyhow::bail!("Download failed: {}", response.status());
     }
 
-    let bytes = response.bytes().context("Failed to read download")?;
+    let total = response.content_length().or_else(|| {
+        if asset._size > 0 {
+            Some(asset._size)
+        } else {
+            None
+        }
+    });
+    let mut bytes = Vec::with_capacity(total.unwrap_or_default().min(usize::MAX as u64) as usize);
+    let mut buffer = [0_u8; 64 * 1024];
+    let mut downloaded = 0_u64;
+    let mut next_progress_at = 0_u64;
+    on_progress(DownloadProgress { downloaded, total });
+    loop {
+        let read = response
+            .read(&mut buffer)
+            .context("Failed to read download")?;
+        if read == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&buffer[..read]);
+        downloaded = downloaded.saturating_add(read as u64);
+        if downloaded >= next_progress_at || total.is_some_and(|total| downloaded >= total) {
+            on_progress(DownloadProgress { downloaded, total });
+            next_progress_at = downloaded.saturating_add(DOWNLOAD_PROGRESS_UPDATE_STEP);
+        }
+    }
+    on_progress(DownloadProgress { downloaded, total });
 
     if asset.name.ends_with(".tar.gz") {
         let cursor = std::io::Cursor::new(&bytes);
@@ -948,6 +1002,43 @@ pub fn download_and_install_blocking(release: &GitHubRelease) -> Result<PathBuf>
     record_release_update_duration(started.elapsed());
 
     Ok(versioned_path)
+}
+
+pub fn format_download_progress_bar(progress: DownloadProgress) -> String {
+    let human_downloaded = format_bytes(progress.downloaded);
+    let Some(total) = progress.total.filter(|total| *total > 0) else {
+        return format!("Downloading update... {} downloaded", human_downloaded);
+    };
+
+    let ratio = (progress.downloaded as f64 / total as f64).clamp(0.0, 1.0);
+    let filled = (ratio * DOWNLOAD_PROGRESS_BAR_WIDTH as f64).round() as usize;
+    let filled = filled.min(DOWNLOAD_PROGRESS_BAR_WIDTH);
+    let empty = DOWNLOAD_PROGRESS_BAR_WIDTH.saturating_sub(filled);
+    let percent = (ratio * 100.0).round() as u64;
+    format!(
+        "Downloading update... [{}{}] {:>3}% ({}/{})",
+        "█".repeat(filled),
+        "░".repeat(empty),
+        percent,
+        human_downloaded,
+        format_bytes(total)
+    )
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const KIB: f64 = 1024.0;
+    const MIB: f64 = KIB * 1024.0;
+    const GIB: f64 = MIB * 1024.0;
+    let bytes_f = bytes as f64;
+    if bytes_f >= GIB {
+        format!("{:.1} GiB", bytes_f / GIB)
+    } else if bytes_f >= MIB {
+        format!("{:.1} MiB", bytes_f / MIB)
+    } else if bytes_f >= KIB {
+        format!("{:.1} KiB", bytes_f / KIB)
+    } else {
+        format!("{} B", bytes)
+    }
 }
 
 pub enum UpdateCheckResult {
@@ -1048,6 +1139,27 @@ mod tests {
     fn test_asset_name() {
         let name = get_asset_name();
         assert!(name.starts_with("jcode-"));
+    }
+
+    #[test]
+    fn test_format_download_progress_bar_known_total() {
+        let rendered = format_download_progress_bar(DownloadProgress {
+            downloaded: 512,
+            total: Some(1024),
+        });
+        assert!(rendered.contains("50%"));
+        assert!(rendered.contains("512 B/1.0 KiB"));
+        assert!(rendered.contains('█'));
+        assert!(rendered.contains('░'));
+    }
+
+    #[test]
+    fn test_format_download_progress_bar_unknown_total() {
+        let rendered = format_download_progress_bar(DownloadProgress {
+            downloaded: 2 * 1024 * 1024,
+            total: None,
+        });
+        assert_eq!(rendered, "Downloading update... 2.0 MiB downloaded");
     }
 
     #[test]
