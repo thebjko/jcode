@@ -196,6 +196,32 @@ fn auth_status_check_returns_valid_struct() {
 }
 
 #[test]
+fn auth_status_check_fast_ignores_expired_full_cache() {
+    let _lock = crate::storage::lock_test_env();
+    AuthStatus::invalidate_cache();
+
+    let mut stale_status = AuthStatus::default();
+    stale_status.jcode = AuthState::Expired;
+    let stale_when = std::time::Instant::now()
+        .checked_sub(std::time::Duration::from_secs(
+            AUTH_STATUS_CACHE_TTL_SECS + 1,
+        ))
+        .expect("stale cache timestamp");
+
+    *AUTH_STATUS_CACHE.write().expect("auth cache lock") = Some((stale_status, stale_when));
+    *AUTH_STATUS_FAST_CACHE.write().expect("fast auth cache lock") = None;
+
+    let status = AuthStatus::check_fast();
+    assert_ne!(
+        status.jcode,
+        AuthState::Expired,
+        "check_fast must not reuse an expired full auth cache forever"
+    );
+
+    AuthStatus::invalidate_cache();
+}
+
+#[test]
 fn copilot_recent_token_exchange_failure_is_not_auto_usable() {
     let _lock = crate::storage::lock_test_env();
     let temp = tempfile::TempDir::new().expect("create temp dir");

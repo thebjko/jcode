@@ -105,12 +105,15 @@ impl AuthStatus {
 
     /// Fast auth snapshot for interactive UI surfaces like `/account`.
     ///
-    /// Prefers any previously cached full probe (even if stale), and otherwise
-    /// falls back to a cheap local-files/env-only probe that avoids subprocesses
-    /// such as `cursor-agent status` or `sqlite3` lookups.
+    /// Prefers a recent full probe, and otherwise falls back to a cheap
+    /// local-files/env-only probe that avoids subprocesses such as
+    /// `cursor-agent status` or `sqlite3` lookups. Do not reuse the full cache
+    /// forever: external credential files may be deleted or replaced while the
+    /// process is running.
     pub fn check_fast() -> Self {
         if let Ok(cache) = AUTH_STATUS_CACHE.read()
-            && let Some((ref status, _)) = *cache
+            && let Some((ref status, ref when)) = *cache
+            && when.elapsed().as_secs() < AUTH_STATUS_CACHE_TTL_SECS
         {
             return status.clone();
         }
