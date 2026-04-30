@@ -18,80 +18,12 @@ pub use crash::{
     CrashedSessionsInfo, detect_crashed_sessions, find_recent_crashed_sessions,
     find_session_by_name_or_id, recover_crashed_sessions,
 };
+pub use jcode_session_types::{EnvSnapshot, GitState, SessionImproveMode, SessionStatus};
 pub use render::{
     RenderedCompactedHistoryInfo, RenderedImage, RenderedImageSource, RenderedMessage,
     has_rendered_images, render_images, render_messages, render_messages_and_images,
     render_messages_and_images_with_compacted_history, summarize_tool_calls,
 };
-
-/// Session exit status - why the session ended
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-pub enum SessionStatus {
-    /// Session is currently active/running
-    #[default]
-    Active,
-    /// User closed the session normally (Ctrl+C, /quit, etc.)
-    Closed,
-    /// Session crashed (panic, error)
-    Crashed { message: Option<String> },
-    /// Session was reloaded (hot reload)
-    Reloaded,
-    /// Session was compacted (context too large)
-    Compacted,
-    /// Session ended due to rate limiting
-    RateLimited,
-    /// Session ended due to an error
-    Error { message: String },
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum SessionImproveMode {
-    #[serde(rename = "improve_run", alias = "run")]
-    ImproveRun,
-    #[serde(rename = "improve_plan", alias = "plan")]
-    ImprovePlan,
-    #[serde(rename = "refactor_run")]
-    RefactorRun,
-    #[serde(rename = "refactor_plan")]
-    RefactorPlan,
-}
-
-impl SessionStatus {
-    /// Get a short display string for the status
-    pub fn display(&self) -> &'static str {
-        match self {
-            SessionStatus::Active => "active",
-            SessionStatus::Closed => "closed",
-            SessionStatus::Crashed { .. } => "crashed",
-            SessionStatus::Reloaded => "reloaded",
-            SessionStatus::Compacted => "compacted",
-            SessionStatus::RateLimited => "rate limited",
-            SessionStatus::Error { .. } => "error",
-        }
-    }
-
-    /// Get an icon for the status
-    pub fn icon(&self) -> &'static str {
-        match self {
-            SessionStatus::Active => "▶",
-            SessionStatus::Closed => "✓",
-            SessionStatus::Crashed { .. } => "💥",
-            SessionStatus::Reloaded => "🔄",
-            SessionStatus::Compacted => "📦",
-            SessionStatus::RateLimited => "⏳",
-            SessionStatus::Error { .. } => "❌",
-        }
-    }
-
-    /// Get additional detail message if available
-    pub fn detail(&self) -> Option<&str> {
-        match self {
-            SessionStatus::Crashed { message } => message.as_deref(),
-            SessionStatus::Error { message } => Some(message.as_str()),
-            _ => None,
-        }
-    }
-}
 
 /// A memory injection event, stored for replay visualization
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -635,37 +567,6 @@ fn env_flag_enabled(name: &str) -> bool {
 
 fn default_is_test_session() -> bool {
     env_flag_enabled("JCODE_TEST_SESSION")
-}
-
-/// Minimal git state for reproducibility
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GitState {
-    pub root: String,
-    pub head: Option<String>,
-    pub branch: Option<String>,
-    pub dirty: Option<bool>,
-}
-
-/// Environment snapshot captured for a session
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EnvSnapshot {
-    pub captured_at: DateTime<Utc>,
-    pub reason: String,
-    pub session_id: String,
-    pub working_dir: Option<String>,
-    pub provider: String,
-    pub model: String,
-    pub jcode_version: String,
-    pub jcode_git_hash: Option<String>,
-    pub jcode_git_dirty: Option<bool>,
-    pub os: String,
-    pub arch: String,
-    pub pid: u32,
-    pub is_selfdev: bool,
-    pub is_debug: bool,
-    pub is_canary: bool,
-    pub testing_build: Option<String>,
-    pub working_git: Option<GitState>,
 }
 
 pub fn derive_session_provider_key(provider_name: &str) -> Option<String> {
