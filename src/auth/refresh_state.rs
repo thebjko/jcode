@@ -1,19 +1,11 @@
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 const REFRESH_STATUS_FILE: &str = "auth-refresh-state.json";
 const MAX_ERROR_CHARS: usize = 240;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ProviderRefreshRecord {
-    pub last_attempt_ms: i64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_success_ms: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_error: Option<String>,
-}
+pub use jcode_auth_types::ProviderRefreshRecord;
 
 pub fn status_path() -> Result<PathBuf> {
     Ok(crate::storage::jcode_dir()?.join(REFRESH_STATUS_FILE))

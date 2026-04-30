@@ -117,3 +117,21 @@ impl AuthValidationMethod {
         }
     }
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProviderValidationRecord {
+    pub checked_at_ms: i64,
+    pub success: bool,
+    pub provider_smoke_ok: Option<bool>,
+    pub tool_smoke_ok: Option<bool>,
+    pub summary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProviderRefreshRecord {
+    pub last_attempt_ms: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_success_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+}

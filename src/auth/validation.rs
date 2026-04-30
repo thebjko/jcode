@@ -1,18 +1,10 @@
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 const VALIDATION_STATUS_FILE: &str = "auth-validation.json";
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ProviderValidationRecord {
-    pub checked_at_ms: i64,
-    pub success: bool,
-    pub provider_smoke_ok: Option<bool>,
-    pub tool_smoke_ok: Option<bool>,
-    pub summary: String,
-}
+pub use jcode_auth_types::ProviderValidationRecord;
 
 pub fn status_path() -> Result<PathBuf> {
     Ok(crate::storage::jcode_dir()?.join(VALIDATION_STATUS_FILE))
