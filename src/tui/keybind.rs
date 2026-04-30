@@ -748,9 +748,38 @@ mod tests {
         assert_eq!(cmd.code, KeyCode::Char('j'));
         assert!(cmd.modifiers.contains(KeyModifiers::SUPER));
 
+        let option_left = parse_keybinding("option+left").expect("option+left should parse");
+        assert_eq!(option_left.code, KeyCode::Left);
+        assert!(option_left.modifiers.contains(KeyModifiers::ALT));
+
         let meta = parse_keybinding("meta+k").expect("meta+k should parse");
         assert_eq!(meta.code, KeyCode::Char('k'));
         assert!(meta.modifiers.contains(KeyModifiers::ALT));
+    }
+
+    #[test]
+    fn effort_switch_keys_match_macos_option_arrows_as_alt_arrows() {
+        let keys = EffortSwitchKeys {
+            increase: parse_keybinding("alt+right").expect("alt+right should parse"),
+            decrease: parse_keybinding("alt+left").expect("alt+left should parse"),
+        };
+
+        // macOS labels the Alt modifier as Option (⌥). Terminals that forward
+        // Option-arrow as an Alt-modified arrow should adjust reasoning effort.
+        assert_eq!(
+            keys.direction_for(KeyCode::Right, KeyModifiers::ALT),
+            Some(1)
+        );
+        assert_eq!(
+            keys.direction_for(KeyCode::Left, KeyModifiers::ALT),
+            Some(-1)
+        );
+        assert_eq!(
+            parse_keybinding("option+right")
+                .expect("option+right should parse")
+                .modifiers,
+            KeyModifiers::ALT
+        );
     }
 
     #[test]
