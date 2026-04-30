@@ -431,6 +431,14 @@ fn test_kimi_coding_header_detection_matches_endpoint_and_model() {
         None,
     ));
     assert!(should_send_kimi_coding_agent_headers(
+        "https://coding.dashscope.aliyuncs.com/v1",
+        None,
+    ));
+    assert!(should_send_kimi_coding_agent_headers(
+        "https://api.z.ai/api/coding/paas/v4",
+        None,
+    ));
+    assert!(should_send_kimi_coding_agent_headers(
         "https://example.com/v1",
         Some("kimi-for-coding"),
     ));

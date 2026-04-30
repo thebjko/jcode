@@ -155,6 +155,27 @@ fn normalize_candidate_token_rejects_empty_and_unknown_values() {
 }
 
 #[test]
+fn gh_cli_fallback_requires_explicit_opt_in() {
+    let key = "JCODE_COPILOT_ALLOW_GH_AUTH_TOKEN";
+    let previous = std::env::var_os(key);
+
+    crate::env::remove_var(key);
+    assert!(!allow_gh_cli_fallback());
+
+    crate::env::set_var(key, "0");
+    assert!(!allow_gh_cli_fallback());
+
+    crate::env::set_var(key, "1");
+    assert!(allow_gh_cli_fallback());
+
+    if let Some(previous) = previous {
+        crate::env::set_var(key, previous);
+    } else {
+        crate::env::remove_var(key);
+    }
+}
+
+#[test]
 fn save_and_load_github_token() -> Result<()> {
     let dir = TempDir::new().map_err(|e| anyhow!(e))?;
     let config_dir = dir.path().join("github-copilot");

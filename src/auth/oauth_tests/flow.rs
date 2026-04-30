@@ -488,6 +488,58 @@ async fn claude_exchange_uses_state_from_url_query_when_present() -> Result<()> 
 }
 
 #[tokio::test]
+async fn claude_exchange_sends_browser_like_headers() -> Result<()> {
+    let success_body = serde_json::json!({
+        "access_token": "at",
+        "refresh_token": "rt",
+        "expires_in": 3600
+    })
+    .to_string();
+    let (port, handle) = mock_token_server(200, &success_body).await;
+
+    let url = format!("http://127.0.0.1:{}/v1/oauth/token", port);
+    let _ = exchange_claude_code_at_url(&url, "verifier", "plain_code", "https://r").await?;
+
+    let (_method, _path, headers, _body) = handle.await.map_err(|e| anyhow!(e))?;
+    assert_eq!(
+        headers.get("origin").map(String::as_str),
+        Some("https://claude.ai")
+    );
+    assert_eq!(
+        headers.get("referer").map(String::as_str),
+        Some("https://claude.ai/")
+    );
+    assert_eq!(
+        headers.get("sec-fetch-mode").map(String::as_str),
+        Some("cors")
+    );
+    assert!(
+        headers
+            .get("user-agent")
+            .is_some_and(|value| value.contains("Mozilla/5.0")),
+        "expected browser-like user-agent, got {headers:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn claude_exchange_cloudflare_403_is_actionable() -> Result<()> {
+    let challenge = "<!DOCTYPE html><title>Just a moment...</title><script src='/cdn-cgi/challenge-platform'></script>";
+    let (port, _handle) = mock_token_server(403, challenge).await;
+
+    let url = format!("http://127.0.0.1:{}/v1/oauth/token", port);
+    let err = exchange_claude_code_at_url(&url, "verifier", "plain_code", "https://r")
+        .await
+        .expect_err("Cloudflare challenge should fail with guidance")
+        .to_string();
+
+    assert!(err.contains("Cloudflare"), "unexpected error: {err}");
+    assert!(err.contains("VPN"), "unexpected error: {err}");
+    assert!(err.contains("--no-browser"), "unexpected error: {err}");
+    Ok(())
+}
+
+#[tokio::test]
 async fn claude_exchange_rejects_state_mismatch() -> Result<()> {
     let result = exchange_claude_code_at_url(
         "http://127.0.0.1:1/v1/oauth/token",

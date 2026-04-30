@@ -85,6 +85,37 @@ fn matrix_login_provider_aliases_resolve_to_canonical_ids() {
 }
 
 #[test]
+fn auth_issue_profile_metadata_matches_direct_provider_endpoints() {
+    assert_eq!(ZAI_PROFILE.api_base, "https://api.z.ai/api/coding/paas/v4");
+    assert_eq!(ZAI_PROFILE.default_model, Some("glm-4.5"));
+    assert_eq!(DEEPSEEK_PROFILE.api_base, "https://api.deepseek.com");
+    assert_eq!(DEEPSEEK_PROFILE.default_model, Some("deepseek-v4-flash"));
+    assert_eq!(DEEPSEEK_PROFILE.setup_url, "https://api-docs.deepseek.com/");
+    assert!(!OPENAI_COMPAT_PROFILE.setup_url.contains("opencode.ai"));
+}
+
+#[test]
+fn auth_issue_runtime_display_name_tracks_direct_compatible_profiles() {
+    let _lock = crate::storage::lock_test_env();
+    let _guard = EnvGuard::save(&[
+        "JCODE_OPENROUTER_API_BASE",
+        "JCODE_OPENROUTER_API_KEY_NAME",
+        "JCODE_OPENROUTER_ENV_FILE",
+        "JCODE_OPENROUTER_CACHE_NAMESPACE",
+        "JCODE_OPENROUTER_PROVIDER_FEATURES",
+        "JCODE_OPENROUTER_ALLOW_NO_AUTH",
+        "JCODE_NAMED_PROVIDER_PROFILE",
+        "JCODE_PROVIDER_PROFILE_ACTIVE",
+    ]);
+
+    apply_openai_compatible_profile_env(Some(DEEPSEEK_PROFILE));
+    assert_eq!(runtime_provider_display_name("openrouter"), "DeepSeek");
+
+    apply_openai_compatible_profile_env(Some(ZAI_PROFILE));
+    assert_eq!(runtime_provider_display_name("openrouter"), "Z.AI");
+}
+
+#[test]
 fn matrix_login_provider_ids_and_aliases_are_unique() {
     let mut seen = std::collections::HashSet::new();
     for provider in login_providers() {

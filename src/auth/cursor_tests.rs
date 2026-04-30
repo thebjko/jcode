@@ -205,6 +205,20 @@ fn status_output_requires_successful_exit_for_authentication_keywords() {
     ));
 }
 
+#[cfg(unix)]
+#[test]
+fn external_auth_command_timeout_returns_none() {
+    let mut command = std::process::Command::new("sh");
+    command.arg("-c").arg("sleep 2; echo late");
+
+    let start = std::time::Instant::now();
+    let output = command_output_with_timeout(&mut command, std::time::Duration::from_millis(50))
+        .expect("timeout helper should not error");
+
+    assert!(output.is_none());
+    assert!(start.elapsed() < std::time::Duration::from_secs(1));
+}
+
 fn load_key_from_file(path: &PathBuf) -> Result<String> {
     if !path.exists() {
         anyhow::bail!("File not found");
