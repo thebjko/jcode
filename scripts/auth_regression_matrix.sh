@@ -153,6 +153,17 @@ fi
 failed=()
 passed=()
 skipped=()
+blocked=()
+
+is_unconfigured_failure() {
+  grep -Eiq 'not configured|missing|no credentials|not found in environment|requires.*token|requires.*api key' "$1"
+}
+
+is_external_account_blocked_failure() {
+  # These are upstream account/entitlement states, not auth-regression signal.
+  # Keep this list intentionally narrow so real code/provider failures still fail.
+  grep -Eiq 'feature_flag_blocked|can_signup_for_limited|Contact Support|not entitled|not eligible|subscription required|quota exceeded|rate limit' "$1"
+}
 
 echo "Auth regression matrix"
 echo "Mode: $mode"
@@ -176,9 +187,12 @@ for provider in "${selected[@]}"; do
     passed+=("$provider")
     echo "PASS $provider"
   else
-    if [[ "$mode" == "configured" ]] && grep -Eiq 'not configured|missing|no credentials|not found in environment|requires.*token|requires.*api key' "$log"; then
+    if [[ "$mode" == "configured" ]] && is_unconfigured_failure "$log"; then
       skipped+=("$provider")
       echo "SKIP $provider (not configured, see $log)"
+    elif [[ "$mode" == "configured" ]] && is_external_account_blocked_failure "$log"; then
+      blocked+=("$provider")
+      echo "BLOCKED $provider (upstream account/entitlement unavailable, see $log)"
     else
       failed+=("$provider")
       echo "FAIL $provider (exit $status, see $log)"
@@ -194,6 +208,7 @@ summary="$out_dir/summary.txt"
 {
   echo "passed: ${passed[*]:-<none>}"
   echo "skipped: ${skipped[*]:-<none>}"
+  echo "blocked: ${blocked[*]:-<none>}"
   echo "failed: ${failed[*]:-<none>}"
 } | tee "$summary"
 
