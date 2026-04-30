@@ -1,4 +1,4 @@
-pub(crate) fn panic_payload_to_string(payload: &(dyn std::any::Any + Send)) -> String {
+pub fn panic_payload_to_string(payload: &(dyn std::any::Any + Send)) -> String {
     if let Some(s) = payload.downcast_ref::<&str>() {
         (*s).to_string()
     } else if let Some(s) = payload.downcast_ref::<String>() {

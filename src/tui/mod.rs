@@ -14,7 +14,6 @@ pub mod login_picker;
 pub mod markdown;
 mod memory_profile;
 pub mod mermaid;
-pub(crate) mod panic_util;
 pub mod permissions;
 mod remote_diff;
 pub mod screenshot;

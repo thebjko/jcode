@@ -1,7 +1,7 @@
 use ratatui::{prelude::*, widgets::Paragraph};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::tui::panic_util::panic_payload_to_string;
+use jcode_core::panic_util::panic_payload_to_string;
 
 use super::layout_support::clear_area;
 use super::theme_support::dim_color;

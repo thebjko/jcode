@@ -3,7 +3,10 @@
 //! Config is loaded from `~/.jcode/config.toml` (or `$JCODE_HOME/config.toml`)
 //! Environment variables override config file settings.
 
-pub use jcode_config_types::CompactionMode;
+pub use jcode_config_types::{
+    CompactionMode, CrossProviderFailoverMode, DiagramDisplayMode, DiagramPanePosition,
+    DiffDisplayMode, MarkdownSpacingMode, SessionPickerResumeAction, UpdateChannel,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
@@ -279,23 +282,6 @@ pub struct KeybindingsConfig {
     pub session_picker_enter: SessionPickerResumeAction,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "kebab-case")]
-pub enum SessionPickerResumeAction {
-    #[default]
-    NewTerminal,
-    CurrentTerminal,
-}
-
-impl SessionPickerResumeAction {
-    pub fn alternate(self) -> Self {
-        match self {
-            Self::NewTerminal => Self::CurrentTerminal,
-            Self::CurrentTerminal => Self::NewTerminal,
-        }
-    }
-}
-
 impl Default for KeybindingsConfig {
     fn default() -> Self {
         Self {
@@ -348,114 +334,6 @@ impl Default for DictationConfig {
 }
 
 /// How to display file diffs from edit/write tools
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum DiffDisplayMode {
-    /// Don't show diffs at all
-    Off,
-    /// Show diffs inline in the chat (default)
-    #[default]
-    Inline,
-    /// Show the full inline diff in the chat without preview truncation
-    #[serde(
-        rename = "full-inline",
-        alias = "full_inline",
-        alias = "fullinline",
-        alias = "inline-full",
-        alias = "inline_full",
-        alias = "inlinefull",
-        alias = "full"
-    )]
-    FullInline,
-    /// Show diffs in a dedicated pinned pane
-    Pinned,
-    /// Show full file with diff highlights in side panel, synced to scroll position
-    File,
-}
-
-impl DiffDisplayMode {
-    pub fn is_inline(&self) -> bool {
-        matches!(self, DiffDisplayMode::Inline | DiffDisplayMode::FullInline)
-    }
-
-    pub fn is_full_inline(&self) -> bool {
-        matches!(self, DiffDisplayMode::FullInline)
-    }
-
-    pub fn is_pinned(&self) -> bool {
-        matches!(self, DiffDisplayMode::Pinned)
-    }
-
-    pub fn is_file(&self) -> bool {
-        matches!(self, DiffDisplayMode::File)
-    }
-
-    pub fn has_side_pane(&self) -> bool {
-        matches!(self, DiffDisplayMode::Pinned | DiffDisplayMode::File)
-    }
-
-    pub fn cycle(self) -> Self {
-        match self {
-            DiffDisplayMode::Off => DiffDisplayMode::Inline,
-            DiffDisplayMode::Inline => DiffDisplayMode::FullInline,
-            DiffDisplayMode::FullInline => DiffDisplayMode::Pinned,
-            DiffDisplayMode::Pinned => DiffDisplayMode::File,
-            DiffDisplayMode::File => DiffDisplayMode::Off,
-        }
-    }
-
-    pub fn label(&self) -> &'static str {
-        match self {
-            DiffDisplayMode::Off => "OFF",
-            DiffDisplayMode::Inline => "Inline",
-            DiffDisplayMode::FullInline => "Inline Full",
-            DiffDisplayMode::Pinned => "Pinned",
-            DiffDisplayMode::File => "File",
-        }
-    }
-}
-
-/// How to display mermaid diagrams
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum DiagramDisplayMode {
-    /// Don't show diagrams in dedicated widgets (only inline in messages)
-    None,
-    /// Show diagrams in info widget margins (opportunistic, if space available)
-    Margin,
-    /// Show diagrams in a dedicated pinned pane (forces space allocation)
-    #[default]
-    Pinned,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum DiagramPanePosition {
-    #[default]
-    Side,
-    Top,
-}
-
-/// How much vertical spacing to use when rendering markdown blocks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum MarkdownSpacingMode {
-    /// Compact chat/TUI-oriented spacing.
-    #[default]
-    Compact,
-    /// Document-style spacing between top-level blocks.
-    Document,
-}
-
-impl MarkdownSpacingMode {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Compact => "Compact",
-            Self::Document => "Document",
-        }
-    }
-}
-
 /// Display/UI configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -561,27 +439,6 @@ impl DisplayConfig {
     }
 }
 
-/// Update channel: how aggressively to receive updates
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-#[derive(Default)]
-pub enum UpdateChannel {
-    /// Only update from tagged GitHub Releases (default)
-    #[default]
-    Stable,
-    /// Update from latest commit on main branch (bleeding edge)
-    Main,
-}
-
-impl std::fmt::Display for UpdateChannel {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Stable => write!(f, "stable"),
-            Self::Main => write!(f, "main"),
-        }
-    }
-}
-
 /// Runtime feature toggles
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -603,34 +460,6 @@ impl Default for FeatureConfig {
             swarm: true,
             message_timestamps: true,
             update_channel: UpdateChannel::default(),
-        }
-    }
-}
-
-/// Provider configuration
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum CrossProviderFailoverMode {
-    /// Show a 3-second cancelable countdown, then resend on another provider.
-    #[default]
-    Countdown,
-    /// Do not resend the prompt to another provider automatically.
-    Manual,
-}
-
-impl CrossProviderFailoverMode {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Manual => "manual",
-            Self::Countdown => "countdown",
-        }
-    }
-
-    fn parse(value: &str) -> Option<Self> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "manual" => Some(Self::Manual),
-            "countdown" | "auto" | "automatic" => Some(Self::Countdown),
-            _ => None,
         }
     }
 }
