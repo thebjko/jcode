@@ -1023,6 +1023,16 @@ pub(super) fn handle_pre_control_shortcuts(
         app.cycle_effort(direction);
         return true;
     }
+    if cfg!(target_os = "macos")
+        && app.input.is_empty()
+        && !matches!(app.status, ProcessingStatus::RunningTool(_))
+        && let Some(direction) = app
+            .effort_switch_keys
+            .macos_option_arrow_escape_direction_for(code, modifiers)
+    {
+        app.cycle_effort(direction);
+        return true;
+    }
     if app.centered_toggle_keys.toggle.matches(code, modifiers) {
         app.toggle_centered_mode();
         return true;

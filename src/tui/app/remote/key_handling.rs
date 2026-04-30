@@ -30,6 +30,48 @@ pub(in crate::tui::app) async fn send_interleave_now(
     }
 }
 
+async fn apply_remote_effort_direction(
+    app: &mut App,
+    remote: &mut RemoteConnection,
+    direction: i8,
+) -> Result<()> {
+    let efforts = ["none", "low", "medium", "high", "xhigh"];
+    let current = app.remote_reasoning_effort.as_deref();
+    let current_index = current
+        .and_then(|c| efforts.iter().position(|e| *e == c))
+        .unwrap_or(efforts.len() - 1);
+    let len = efforts.len();
+    let next_index = if direction > 0 {
+        if current_index + 1 >= len {
+            current_index
+        } else {
+            current_index + 1
+        }
+    } else if current_index == 0 {
+        0
+    } else {
+        current_index - 1
+    };
+    let next_effort = efforts[next_index];
+    if Some(next_effort) == current {
+        let label = app_mod::effort_display_label(next_effort);
+        app.set_status_notice(format!(
+            "Effort: {} (already at {})",
+            label,
+            if direction > 0 { "max" } else { "min" }
+        ));
+    } else {
+        app.remote_reasoning_effort = Some(next_effort.to_string());
+        app.invalidate_model_picker_cache();
+        app.set_status_notice(format!(
+            "Effort: {} (will apply to next request)",
+            app_mod::effort_display_label(next_effort)
+        ));
+        remote.set_reasoning_effort(next_effort).await?;
+    }
+    Ok(())
+}
+
 impl App {
     pub(super) async fn handle_account_picker_command_remote(
         &mut self,
@@ -166,40 +208,17 @@ async fn handle_remote_key_internal(
         return Ok(());
     }
     if let Some(direction) = app.effort_switch_keys.direction_for(code, modifiers) {
-        let efforts = ["none", "low", "medium", "high", "xhigh"];
-        let current = app.remote_reasoning_effort.as_deref();
-        let current_index = current
-            .and_then(|c| efforts.iter().position(|e| *e == c))
-            .unwrap_or(efforts.len() - 1);
-        let len = efforts.len();
-        let next_index = if direction > 0 {
-            if current_index + 1 >= len {
-                current_index
-            } else {
-                current_index + 1
-            }
-        } else if current_index == 0 {
-            0
-        } else {
-            current_index - 1
-        };
-        let next_effort = efforts[next_index];
-        if Some(next_effort) == current {
-            let label = app_mod::effort_display_label(next_effort);
-            app.set_status_notice(format!(
-                "Effort: {} (already at {})",
-                label,
-                if direction > 0 { "max" } else { "min" }
-            ));
-        } else {
-            app.remote_reasoning_effort = Some(next_effort.to_string());
-            app.invalidate_model_picker_cache();
-            app.set_status_notice(format!(
-                "Effort: {} (will apply to next request)",
-                app_mod::effort_display_label(next_effort)
-            ));
-            remote.set_reasoning_effort(next_effort).await?;
-        }
+        apply_remote_effort_direction(app, remote, direction).await?;
+        return Ok(());
+    }
+    if cfg!(target_os = "macos")
+        && app.input.is_empty()
+        && !matches!(app.status, ProcessingStatus::RunningTool(_))
+        && let Some(direction) = app
+            .effort_switch_keys
+            .macos_option_arrow_escape_direction_for(code, modifiers)
+    {
+        apply_remote_effort_direction(app, remote, direction).await?;
         return Ok(());
     }
     if modifiers.contains(KeyModifiers::ALT) && matches!(code, KeyCode::Char('s')) {
