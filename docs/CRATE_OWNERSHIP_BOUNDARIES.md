@@ -91,6 +91,16 @@ Use this checklist for every type or pure-helper migration. Copy it into the PR/
    - [ ] Did `cargo fmt` pass?
    - [ ] Did selfdev build and reload pass from a clean committed HEAD?
 
+## Dependency boundary guard
+
+Run this guard after adding or changing any type crate dependency:
+
+```sh
+python3 scripts/check_dependency_boundaries.py
+```
+
+The guard blocks direct dependencies from `jcode-*-types` crates to root/runtime-heavy internal crates such as `jcode`, `jcode-core`, provider crates, TUI crates, protocol/runtime crates, and desktop/mobile crates. Type crates may depend on external lightweight libraries and other type crates. If a new internal dependency is needed, first decide whether it should itself be a type crate.
+
 ## Test policy
 
 Prefer focused filters for validation. Broad filters often select unrelated stateful, timing-sensitive, or benchmark tests.
