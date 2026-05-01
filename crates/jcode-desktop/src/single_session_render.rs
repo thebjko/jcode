@@ -499,7 +499,7 @@ pub(crate) fn single_session_text_key_for_tick(
         title: app.header_title(),
         version: desktop_header_version_label(),
         activity_active: app.has_activity_indicator(),
-        body: single_session_visible_styled_body(app, size),
+        body: single_session_visible_styled_body_for_tick(app, size, tick),
         draft: visualize_composer_whitespace(&app.composer_text()),
         status: app.composer_status_line_for_tick(tick),
     }
@@ -575,12 +575,20 @@ pub(crate) fn single_session_visible_styled_body(
     app: &SingleSessionApp,
     size: PhysicalSize<u32>,
 ) -> Vec<SingleSessionStyledLine> {
+    single_session_visible_styled_body_for_tick(app, size, 0)
+}
+
+pub(crate) fn single_session_visible_styled_body_for_tick(
+    app: &SingleSessionApp,
+    size: PhysicalSize<u32>,
+    tick: u64,
+) -> Vec<SingleSessionStyledLine> {
     let typography = single_session_typography();
     let line_height = typography.body_size * typography.body_line_height;
     let available_height =
         (single_session_draft_top(size) - PANEL_BODY_TOP_PADDING - 12.0).max(line_height);
     let visible_lines = ((available_height / line_height).floor() as usize).max(1);
-    let lines = app.body_styled_lines();
+    let lines = app.body_styled_lines_for_tick(tick);
     if lines.len() <= visible_lines {
         return lines;
     }

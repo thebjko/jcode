@@ -69,6 +69,7 @@ pub(crate) struct SingleSessionApp {
     pub(crate) model_picker: ModelPickerState,
     pub(crate) session_switcher: SessionSwitcherState,
     pub(crate) stdin_response: Option<StdinResponseState>,
+    welcome_name: Option<String>,
     queued_drafts: Vec<(String, Vec<(String, String)>)>,
     selection_anchor: Option<SelectionPoint>,
     selection_focus: Option<SelectionPoint>,
@@ -486,6 +487,7 @@ impl SingleSessionApp {
             model_picker: ModelPickerState::default(),
             session_switcher: SessionSwitcherState::default(),
             stdin_response: None,
+            welcome_name: desktop_welcome_name(),
             queued_drafts: Vec::new(),
             selection_anchor: None,
             selection_focus: None,
@@ -519,6 +521,7 @@ impl SingleSessionApp {
         self.model_picker = ModelPickerState::default();
         self.session_switcher = SessionSwitcherState::default();
         self.stdin_response = None;
+        self.welcome_name = desktop_welcome_name();
         self.queued_drafts.clear();
         self.clear_selection();
         self.input_undo_stack.clear();
@@ -568,6 +571,10 @@ impl SingleSessionApp {
 
     pub(crate) fn has_background_work(&self) -> bool {
         self.has_activity_indicator()
+    }
+
+    pub(crate) fn has_frame_animation(&self) -> bool {
+        self.is_empty_fresh_session()
     }
 
     fn current_session_id(&self) -> Option<&str> {
@@ -1033,6 +1040,10 @@ impl SingleSessionApp {
             return lines;
         }
 
+        if self.is_empty_fresh_session() {
+            return welcome_styled_lines(&self.welcome_name, 0);
+        }
+
         if let Some(status) = &self.status
             && self.session.is_none()
         {
@@ -1040,6 +1051,27 @@ impl SingleSessionApp {
         }
 
         single_session_styled_lines(self.session.as_ref())
+    }
+
+    pub(crate) fn body_styled_lines_for_tick(&self, tick: u64) -> Vec<SingleSessionStyledLine> {
+        if self.is_empty_fresh_session() {
+            welcome_styled_lines(&self.welcome_name, tick)
+        } else {
+            self.body_styled_lines()
+        }
+    }
+
+    fn is_empty_fresh_session(&self) -> bool {
+        self.session.is_none()
+            && self.live_session_id.is_none()
+            && self.messages.is_empty()
+            && self.streaming_response.is_empty()
+            && self.status.is_none()
+            && self.error.is_none()
+            && !self.show_help
+            && !self.model_picker.open
+            && !self.session_switcher.open
+            && self.stdin_response.is_none()
     }
 
     pub(crate) fn apply_session_event(&mut self, event: DesktopSessionEvent) {
@@ -1625,6 +1657,62 @@ fn is_in_flight_status(status: &str) -> bool {
 
 fn blank_styled_line() -> SingleSessionStyledLine {
     styled_line(String::new(), SingleSessionLineStyle::Blank)
+}
+
+pub(crate) fn welcome_styled_lines(
+    name: &Option<String>,
+    tick: u64,
+) -> Vec<SingleSessionStyledLine> {
+    let greeting = name
+        .as_deref()
+        .map(|name| format!("Welcome, {name}"))
+        .unwrap_or_else(|| "Hello there".to_string());
+    let prompts = [
+        "Start with a prompt",
+        "Ask anything",
+        "Ready when you are",
+        "Enter sends · Shift+Enter adds a line",
+    ];
+    let prompt = prompts[((tick / 42) as usize) % prompts.len()];
+    let ellipsis = match (tick / 14) % 4 {
+        0 => "",
+        1 => ".",
+        2 => "..",
+        _ => "...",
+    };
+
+    vec![
+        styled_line(greeting, SingleSessionLineStyle::AssistantHeading),
+        blank_styled_line(),
+        styled_line(
+            format!("{prompt}{ellipsis}"),
+            SingleSessionLineStyle::Status,
+        ),
+        styled_line("Ctrl+P opens recent sessions", SingleSessionLineStyle::Meta),
+    ]
+}
+
+#[cfg(any(target_os = "macos", windows))]
+fn desktop_welcome_name() -> Option<String> {
+    sanitize_welcome_name(&whoami::realname())
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
+fn desktop_welcome_name() -> Option<String> {
+    None
+}
+
+#[cfg_attr(not(any(test, target_os = "macos", windows)), allow(dead_code))]
+pub(crate) fn sanitize_welcome_name(raw: &str) -> Option<String> {
+    let name = raw
+        .trim()
+        .trim_matches(|ch: char| ch == ',' || ch == ';')
+        .split_whitespace()
+        .next()?;
+    if name.is_empty() || name.eq_ignore_ascii_case("unknown") {
+        return None;
+    }
+    Some(name.to_string())
 }
 
 fn stdin_response_styled_lines(state: &StdinResponseState) -> Vec<SingleSessionStyledLine> {

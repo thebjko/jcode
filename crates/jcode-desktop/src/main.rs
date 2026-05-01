@@ -223,7 +223,7 @@ async fn run() -> Result<()> {
     event_loop.run(move |event, target| {
         let has_background_work = app.has_background_work();
         power_inhibitor.set_active(has_background_work);
-        if has_background_work {
+        if has_background_work || app.has_frame_animation() {
             target.set_control_flow(ControlFlow::WaitUntil(
                 Instant::now() + BACKGROUND_POLL_INTERVAL,
             ));
@@ -564,6 +564,8 @@ async fn run() -> Result<()> {
 
                 if canvas.needs_initial_frame {
                     canvas.needs_initial_frame = false;
+                    window.request_redraw();
+                } else if app.has_frame_animation() {
                     window.request_redraw();
                 }
             }
@@ -989,6 +991,10 @@ impl DesktopApp {
 
     fn has_background_work(&self) -> bool {
         matches!(self, Self::SingleSession(app) if app.has_background_work())
+    }
+
+    fn has_frame_animation(&self) -> bool {
+        matches!(self, Self::SingleSession(app) if app.has_frame_animation())
     }
 
     fn status_title(&self) -> String {

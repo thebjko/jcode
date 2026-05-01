@@ -1516,6 +1516,42 @@ fn single_session_without_session_is_native_fresh_draft() {
 }
 
 #[test]
+fn fresh_single_session_shows_animated_welcome_screen() {
+    let app = SingleSessionApp::new(None);
+    let first = single_session_text_key_for_tick(&app, PhysicalSize::new(900, 700), 0);
+    let later = single_session_text_key_for_tick(&app, PhysicalSize::new(900, 700), 42);
+
+    let body = first
+        .body
+        .iter()
+        .map(|line| line.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        body.contains("Hello there") || body.contains("Welcome, "),
+        "expected generic or named welcome, got:\n{body}"
+    );
+    assert_visual_text_contains(&first, "Start with a prompt");
+    assert_visual_text_contains(&first, "Ctrl+P opens recent sessions");
+    assert_ne!(first.body, later.body);
+}
+
+#[test]
+fn welcome_name_is_optional_and_sanitized() {
+    assert_eq!(
+        sanitize_welcome_name("  Jeremy Huang  "),
+        Some("Jeremy".to_string())
+    );
+    assert_eq!(sanitize_welcome_name("unknown"), None);
+    assert_eq!(sanitize_welcome_name("   "), None);
+
+    let named = welcome_styled_lines(&Some("Jeremy".to_string()), 0);
+    assert_eq!(named[0].text, "Welcome, Jeremy");
+    let generic = welcome_styled_lines(&None, 0);
+    assert_eq!(generic[0].text, "Hello there");
+}
+
+#[test]
 fn fresh_single_session_submit_requests_backend_session() {
     let mut app = SingleSessionApp::new(None);
     app.handle_key(KeyInput::Character("hello desktop".to_string()));
