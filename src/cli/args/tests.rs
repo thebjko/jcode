@@ -1,5 +1,6 @@
 use super::*;
 use crate::cli::provider_init::ProviderChoice;
+use clap::{CommandFactory, error::ErrorKind};
 
 #[test]
 fn test_provider_choice_aliases_parse() {
@@ -205,6 +206,133 @@ fn login_scriptable_flags_parse() {
 fn quiet_global_flag_parses() {
     let args = Args::try_parse_from(["jcode", "--quiet", "model", "list"]).unwrap();
     assert!(args.quiet);
+}
+
+fn bridge_help() -> String {
+    let mut command = Args::command();
+    let bridge = command.find_subcommand_mut("bridge").unwrap();
+    let mut help = Vec::new();
+    bridge.write_long_help(&mut help).unwrap();
+    String::from_utf8(help).unwrap()
+}
+
+fn bridge_subcommand_help(name: &str) -> String {
+    let mut command = Args::command();
+    let bridge = command.find_subcommand_mut("bridge").unwrap();
+    let subcommand = bridge.find_subcommand_mut(name).unwrap();
+    let mut help = Vec::new();
+    subcommand.write_long_help(&mut help).unwrap();
+    String::from_utf8(help).unwrap()
+}
+
+#[test]
+fn bridge_serve_subcommand_parses() {
+    let args = Args::try_parse_from([
+        "jcode",
+        "bridge",
+        "serve",
+        "--listen",
+        "100.64.0.10:4242",
+        "--local-socket",
+        "/run/user/1000/jcode.sock",
+        "--token-file",
+        "~/.jcode/bridge-token",
+    ])
+    .unwrap();
+    match args.command {
+        Some(Command::Bridge(BridgeCommand::Serve {
+            listen,
+            local_socket,
+            token_file,
+        })) => {
+            assert_eq!(listen, "100.64.0.10:4242");
+            assert_eq!(local_socket, "/run/user/1000/jcode.sock");
+            assert_eq!(token_file, "~/.jcode/bridge-token");
+        }
+        other => panic!("unexpected command: {:?}", other),
+    }
+}
+
+#[test]
+fn bridge_serve_requires_local_socket() {
+    let err = Args::try_parse_from([
+        "jcode",
+        "bridge",
+        "serve",
+        "--listen",
+        "100.64.0.10:4242",
+        "--token-file",
+        "~/.jcode/bridge-token",
+    ])
+    .unwrap_err();
+
+    assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
+    assert!(err.to_string().contains("--local-socket <LOCAL_SOCKET>"));
+}
+
+#[test]
+fn bridge_dial_subcommand_parses() {
+    let args = Args::try_parse_from([
+        "jcode",
+        "bridge",
+        "dial",
+        "--remote",
+        "100.64.0.10:4242",
+        "--bind",
+        "/tmp/jcode-remote.sock",
+        "--token-file",
+        "~/.jcode/bridge-token",
+    ])
+    .unwrap();
+    match args.command {
+        Some(Command::Bridge(BridgeCommand::Dial {
+            remote,
+            bind,
+            token_file,
+        })) => {
+            assert_eq!(remote, "100.64.0.10:4242");
+            assert_eq!(bind, "/tmp/jcode-remote.sock");
+            assert_eq!(token_file, "~/.jcode/bridge-token");
+        }
+        other => panic!("unexpected command: {:?}", other),
+    }
+}
+
+#[test]
+fn bridge_dial_requires_bind() {
+    let err = Args::try_parse_from([
+        "jcode",
+        "bridge",
+        "dial",
+        "--remote",
+        "100.64.0.10:4242",
+        "--token-file",
+        "~/.jcode/bridge-token",
+    ])
+    .unwrap_err();
+
+    assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
+    assert!(err.to_string().contains("--bind <BIND>"));
+}
+
+#[test]
+fn bridge_help_mentions_private_network_transport() {
+    let help = bridge_help();
+    assert!(help.contains("private network"));
+    assert!(help.contains("local jcode socket"));
+}
+
+#[test]
+fn bridge_subcommand_help_lists_required_flags() {
+    let serve_help = bridge_subcommand_help("serve");
+    assert!(serve_help.contains("--listen <LISTEN>"));
+    assert!(serve_help.contains("--local-socket <LOCAL_SOCKET>"));
+    assert!(serve_help.contains("--token-file <TOKEN_FILE>"));
+
+    let dial_help = bridge_subcommand_help("dial");
+    assert!(dial_help.contains("--remote <REMOTE>"));
+    assert!(dial_help.contains("--bind <BIND>"));
+    assert!(dial_help.contains("--token-file <TOKEN_FILE>"));
 }
 
 #[test]

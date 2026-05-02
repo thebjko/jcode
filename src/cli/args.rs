@@ -116,6 +116,10 @@ pub(crate) enum Command {
     /// Connect to a running server
     Connect,
 
+    /// Bridge a local jcode socket over a private network
+    #[command(subcommand)]
+    Bridge(BridgeCommand),
+
     /// Run a single message and exit
     Run {
         /// Emit a machine-readable JSON result instead of streaming text
@@ -385,6 +389,39 @@ pub(crate) enum Command {
     Restart {
         #[command(subcommand)]
         action: RestartCommand,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum BridgeCommand {
+    /// Listen on a private-network TCP address and forward to a local jcode socket
+    Serve {
+        /// TCP listen address, e.g. 100.64.0.10:4242
+        #[arg(long)]
+        listen: String,
+
+        /// Local jcode Unix socket to forward to
+        #[arg(long = "local-socket")]
+        local_socket: String,
+
+        /// Path to a file containing the bridge authentication token
+        #[arg(long = "token-file")]
+        token_file: String,
+    },
+
+    /// Dial a remote bridge and expose it as a local Unix socket
+    Dial {
+        /// Remote bridge address, e.g. 100.64.0.10:4242
+        #[arg(long)]
+        remote: String,
+
+        /// Local Unix socket path to bind for local jcode clients
+        #[arg(long)]
+        bind: String,
+
+        /// Path to a file containing the bridge authentication token
+        #[arg(long = "token-file")]
+        token_file: String,
     },
 }
 

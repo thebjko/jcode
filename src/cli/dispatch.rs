@@ -14,7 +14,7 @@ use crate::{
 };
 
 use super::{
-    commands, debug, hot_exec, login, output, provider_init, selfdev, terminal, tui_launch,
+    bridge, commands, debug, hot_exec, login, output, provider_init, selfdev, terminal, tui_launch,
 };
 use provider_init::ProviderChoice;
 
@@ -61,6 +61,9 @@ pub(crate) async fn run_main(mut args: Args) -> Result<()> {
         }
         Some(Command::Connect) => {
             tui_launch::run_client().await?;
+        }
+        Some(Command::Bridge(subcmd)) => {
+            bridge::run_bridge_command(subcmd).await?;
         }
         Some(Command::Run {
             message,

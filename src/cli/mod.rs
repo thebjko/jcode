@@ -1,5 +1,6 @@
 pub mod args;
 pub mod auth_test;
+pub mod bridge;
 pub mod commands;
 pub mod debug;
 pub mod dispatch;

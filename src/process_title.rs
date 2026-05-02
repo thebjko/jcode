@@ -75,6 +75,7 @@ pub(crate) fn initial_title(args: &Args) -> String {
     match &args.command {
         Some(Command::Serve { .. }) => "jcode:server".to_string(),
         Some(Command::Connect) => "jcode:client".to_string(),
+        Some(Command::Bridge(_)) => "jcode bridge".to_string(),
         Some(Command::Run { .. }) => "jcode run".to_string(),
         Some(Command::Login { .. }) => "jcode login".to_string(),
         Some(Command::Repl) => "jcode repl".to_string(),
@@ -171,6 +172,24 @@ mod tests {
         with_selfdev_env_removed(|| {
             let args = Args::parse_from(["jcode", "self-dev"]);
             assert_eq!(initial_title(&args), "jcode:selfdev");
+        });
+    }
+
+    #[test]
+    fn initial_title_labels_bridge_command() {
+        with_selfdev_env_removed(|| {
+            let args = Args::parse_from([
+                "jcode",
+                "bridge",
+                "dial",
+                "--remote",
+                "100.64.0.10:4242",
+                "--bind",
+                "/tmp/jcode-remote.sock",
+                "--token-file",
+                "bridge-token",
+            ]);
+            assert_eq!(initial_title(&args), "jcode bridge");
         });
     }
 }
