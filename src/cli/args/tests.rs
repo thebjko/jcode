@@ -316,6 +316,40 @@ fn bridge_dial_requires_bind() {
 }
 
 #[test]
+fn bridge_serve_requires_token_file() {
+    let err = Args::try_parse_from([
+        "jcode",
+        "bridge",
+        "serve",
+        "--listen",
+        "100.64.0.10:4242",
+        "--local-socket",
+        "/run/user/1000/jcode.sock",
+    ])
+    .unwrap_err();
+
+    assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
+    assert!(err.to_string().contains("--token-file <TOKEN_FILE>"));
+}
+
+#[test]
+fn bridge_dial_requires_token_file() {
+    let err = Args::try_parse_from([
+        "jcode",
+        "bridge",
+        "dial",
+        "--remote",
+        "100.64.0.10:4242",
+        "--bind",
+        "/tmp/jcode-remote.sock",
+    ])
+    .unwrap_err();
+
+    assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
+    assert!(err.to_string().contains("--token-file <TOKEN_FILE>"));
+}
+
+#[test]
 fn bridge_help_mentions_private_network_transport() {
     let help = bridge_help();
     assert!(help.contains("private network"));
