@@ -11,7 +11,7 @@ const AUTH_ERR: &str = "ERR";
 const AUTH_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_AUTH_LINE_LEN: usize = 4096;
 
-pub async fn run_bridge_command(command: BridgeCommand) -> Result<()> {
+pub(crate) async fn run_bridge_command(command: BridgeCommand) -> Result<()> {
     match command {
         BridgeCommand::Serve {
             listen,
