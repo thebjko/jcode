@@ -547,12 +547,17 @@ jcode --resume fox
 jcode serve
 jcode connect
 
+# Bridge a remote server over a private network
+jcode bridge serve --listen 100.64.0.10:4242 --local-socket /run/user/$UID/jcode.sock --token-file ~/.jcode/bridge-token
+jcode bridge dial --remote 100.64.0.10:4242 --bind /tmp/jcode-remote.sock --token-file ~/.jcode/bridge-token
+JCODE_SOCKET=/tmp/jcode-remote.sock jcode connect
+
 # Send voice input from your configured STT command
 jcode dictate
 ```
 
 jcode supports interactive TUI use, non-interactive runs, persistent server/client workflows,
-and hotkey-friendly dictation without requiring a bundled speech-to-text stack.
+private-network bridge workflows, and hotkey-friendly dictation without requiring a bundled speech-to-text stack.
 
 <div align="center">
 
@@ -610,6 +615,7 @@ Notes:
 ## Further Reading
 
 - [Ambient Mode / OpenClaw](docs/AMBIENT_MODE.md)
+- [Bridge V1](docs/BRIDGE_V1.md)
 - [Browser Provider Protocol](docs/BROWSER_PROVIDER_PROTOCOL.md)
 - [Memory Architecture](docs/MEMORY_ARCHITECTURE.md)
 - [Swarm Architecture](docs/SWARM_ARCHITECTURE.md)
