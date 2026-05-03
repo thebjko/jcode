@@ -256,9 +256,9 @@ impl App {
         self.push_display_message(DisplayMessage::system(
             "**Jcode Subscription Login**\n\n\
              This doesn't exist yet.\n\n\
-             This would be a managed API key for a curated list of models chosen for good compatibility with jcode. It would be net-zero profit: your dollars would go toward tokens as much as possible. This subscription would be required for the mobile app version.\n\n\
-             Jcode currently has no way of making money. Net-zero profit may change in the distant future if jcode reaches a scale where it can be profitable while still subsidizing token costs.\n\n\
-             If you are interested in this, please tell Jeremy."
+             This would be a jcode subscription for a curated list of models chosen for good compatibility with jcode. It would work similarly to OpenRouter, but jcode would pick the best model/provider routes by balancing price, performance, KV cache support, latency, and throughput. Right now, the model of choice would be DeepSeek V4 Pro.\n\n\
+             The goal would be to maximize the amount of token usage you get for your subscription. The plan is to stay around zero profit until jcode can beat raw API prices while providing some level of competitive subsidization. This subscription would be required for the mobile app version.\n\n\
+             If you are interested in this, please send feedback letting me know."
                 .to_string(),
         ));
         self.set_status_notice("Login: jcode unavailable");
