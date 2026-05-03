@@ -358,7 +358,7 @@ pub(in crate::tui::app) fn handle_server_event(
                 crate::provider::parse_failover_prompt_message(&message).is_some();
             app.push_display_message(DisplayMessage {
                 role: "error".to_string(),
-                content: message,
+                content: message.clone(),
                 tool_calls: vec![],
                 duration_secs: None,
                 title: None,
@@ -380,6 +380,9 @@ pub(in crate::tui::app) fn handle_server_event(
             }
             remote.clear_pending();
             remote.reset_call_output_tokens_seen();
+            if crate::tui::app::commands::stop_auto_poke_for_non_retryable_error(app, &message) {
+                return false;
+            }
             if !is_failover_prompt && !app.schedule_pending_remote_retry("⚠ Remote request failed.")
             {
                 app.clear_pending_remote_retry();

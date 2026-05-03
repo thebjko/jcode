@@ -88,6 +88,78 @@ pub(super) fn disable_auto_poke(app: &mut App) -> usize {
     cleared
 }
 
+pub(super) fn is_non_retryable_auto_poke_error(error: &str) -> bool {
+    let lower = error.to_ascii_lowercase();
+
+    // These failures are deterministic for the current request/session shape. Retrying the same
+    // auto-poke cannot help and can create an infinite spam loop.
+    let deterministic_markers = [
+        "400 bad request",
+        "invalid_request_error",
+        "string_above_max_length",
+        "string_too_long",
+        "maximum length",
+        "request too large",
+        "payload too large",
+        "body too large",
+        "input too large",
+        "context length exceeded",
+        "context_length_exceeded",
+        "maximum context length",
+        "token limit exceeded",
+        "invalid model",
+        "model_not_found",
+        "model_not_supported",
+        "unsupported parameter",
+        "unsupported_value",
+        "invalid parameter",
+        "invalid schema",
+        "invalid tool",
+        "invalid image",
+        "image too large",
+        "unsupported image",
+        "unsupported file",
+        "file too large",
+        "content_policy_violation",
+        "safety_violation",
+        "permission_denied",
+        "unauthorized",
+        "401 unauthorized",
+        "403 forbidden",
+        "insufficient_quota",
+        "billing",
+        "credit balance",
+    ];
+
+    deterministic_markers
+        .iter()
+        .any(|marker| lower.contains(marker))
+}
+
+pub(super) fn stop_auto_poke_for_non_retryable_error(app: &mut App, error: &str) -> bool {
+    if !app.auto_poke_incomplete_todos || !is_non_retryable_auto_poke_error(error) {
+        return false;
+    }
+
+    let cleared = disable_auto_poke(app);
+    app.rate_limit_pending_message = None;
+    app.rate_limit_reset = None;
+    app.push_display_message(DisplayMessage::system(format!(
+        "🛑 Auto-poke stopped because the last request failed with a non-retryable error.{} Fix the request/session, then run `/poke` again if you want to resume.",
+        if cleared == 0 {
+            String::new()
+        } else {
+            format!(
+                " Cleared {} queued poke follow-up{}.",
+                cleared,
+                if cleared == 1 { "" } else { "s" }
+            )
+        }
+    )));
+    app.set_status_notice("Poke stopped: non-retryable error");
+    true
+}
+
 pub(super) fn poke_disabled_message(cleared: usize) -> String {
     format!(
         "Auto-poke disabled.{}",

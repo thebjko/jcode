@@ -109,6 +109,54 @@ fn test_remote_error_with_retryable_pending_schedules_retry() {
 }
 
 #[test]
+fn test_remote_non_retryable_error_stops_auto_poke_without_retry() {
+    let mut app = create_test_app();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
+    let mut remote = crate::tui::backend::RemoteConnection::dummy();
+
+    app.auto_poke_incomplete_todos = true;
+    app.queued_messages
+        .push("You have 1 incomplete todo. Continue working, or update the todo tool.".to_string());
+    app.rate_limit_pending_message = Some(PendingRemoteMessage {
+        content: "You have 1 incomplete todo. Continue working, or update the todo tool."
+            .to_string(),
+        images: vec![],
+        is_system: true,
+        system_reminder: None,
+        auto_retry: true,
+        retry_attempts: 0,
+        retry_at: None,
+    });
+    app.is_processing = true;
+    app.status = ProcessingStatus::Streaming;
+
+    app.handle_server_event(
+        crate::protocol::ServerEvent::Error {
+            id: 12,
+            message: "OpenAI API error 400 Bad Request: {\"error\":{\"message\":\"Invalid 'input[0].encrypted_content': string too long. Expected a string with maximum length 10485760, but got a string with length 11237432 instead.\",\"type\":\"invalid_request_error\",\"code\":\"string_above_max_length\"}}".to_string(),
+            retry_after_secs: None,
+        },
+        &mut remote,
+    );
+
+    assert!(!app.auto_poke_incomplete_todos);
+    assert!(app.queued_messages().is_empty());
+    assert!(app.rate_limit_pending_message.is_none());
+    assert!(app.rate_limit_reset.is_none());
+    assert!(
+        app.display_messages()
+            .iter()
+            .any(|m| m.role == "system" && m.content.contains("Auto-poke stopped"))
+    );
+    assert!(
+        !app.display_messages()
+            .iter()
+            .any(|m| m.content.contains("Auto-retrying"))
+    );
+}
+
+#[test]
 fn test_schedule_pending_remote_retry_respects_retry_limit() {
     let mut app = create_test_app();
     app.rate_limit_pending_message = Some(PendingRemoteMessage {

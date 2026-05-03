@@ -336,16 +336,21 @@ impl App {
 
         if is_context_limit_error(&error) {
             let recovery = self.auto_recover_context_limit();
+            let should_stop_auto_poke = recovery.is_none();
             let hint = match recovery {
                 Some(msg) => format!(" {}", msg),
                 None => " Context limit exceeded but auto-recovery failed. Run `/fix` to try manual recovery.".to_string(),
             };
             self.push_display_message(DisplayMessage::error(format!("Error: {}{}", error, hint)));
+            if should_stop_auto_poke {
+                super::commands::stop_auto_poke_for_non_retryable_error(self, &error);
+            }
         } else {
             self.push_display_message(DisplayMessage::error(format!(
                 "Error: {} Run `/fix` to attempt recovery.",
                 error
             )));
+            super::commands::stop_auto_poke_for_non_retryable_error(self, &error);
         }
     }
 
