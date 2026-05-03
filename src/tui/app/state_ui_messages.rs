@@ -10,6 +10,51 @@ const COMPACTED_HISTORY_LOAD_SCROLL_THRESHOLD: usize = 2;
 const COMPACTED_HISTORY_MARKER_PREFIX: &str = "Earlier conversation compacted — ";
 const OVERNIGHT_CARD_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 
+fn display_message_from_stored_message(
+    message: &crate::session::StoredMessage,
+) -> Option<DisplayMessage> {
+    let text = stored_message_visible_text(message);
+    if text.trim().is_empty() {
+        return None;
+    }
+    match message.display_role {
+        Some(crate::session::StoredDisplayRole::System) => Some(DisplayMessage::system(text)),
+        Some(crate::session::StoredDisplayRole::BackgroundTask) => {
+            Some(DisplayMessage::background_task(text))
+        }
+        None => match message.role {
+            Role::User => Some(DisplayMessage::user(text)),
+            Role::Assistant => Some(DisplayMessage::assistant(text)),
+        },
+    }
+}
+
+fn stored_message_visible_text(message: &crate::session::StoredMessage) -> String {
+    let mut parts = Vec::new();
+    for block in &message.content {
+        match block {
+            ContentBlock::Text { text, .. } | ContentBlock::Reasoning { text } => {
+                if !text.trim().is_empty() {
+                    parts.push(text.trim().to_string());
+                }
+            }
+            ContentBlock::ToolUse { name, input, .. } => {
+                parts.push(format!("[tool:{} {}]", name, input));
+            }
+            ContentBlock::ToolResult { content, .. } => {
+                if !content.trim().is_empty() {
+                    parts.push(content.trim().to_string());
+                }
+            }
+            ContentBlock::Image { media_type, .. } => {
+                parts.push(format!("[image:{}]", media_type));
+            }
+            ContentBlock::OpenAICompaction { .. } => {}
+        }
+    }
+    parts.join("\n\n")
+}
+
 impl App {
     pub fn push_display_message(&mut self, mut message: DisplayMessage) {
         compact_display_message_tool_data(&mut message);
@@ -145,7 +190,37 @@ impl App {
         if !has_card && !active {
             return false;
         }
-        self.upsert_overnight_display_card(&manifest)
+        let card_changed = self.upsert_overnight_display_card(&manifest);
+        let transcript_changed = self.maybe_tail_overnight_current_session_transcript(&manifest);
+        card_changed || transcript_changed
+    }
+
+    fn maybe_tail_overnight_current_session_transcript(
+        &mut self,
+        manifest: &crate::overnight::OvernightManifest,
+    ) -> bool {
+        if manifest.coordinator_session_id != self.session.id {
+            return false;
+        }
+        let Ok(latest_session) = crate::session::Session::load(&self.session.id) else {
+            return false;
+        };
+        if latest_session.messages.len() <= self.session.messages.len() {
+            return false;
+        }
+
+        let appended: Vec<DisplayMessage> = latest_session.messages[self.session.messages.len()..]
+            .iter()
+            .filter_map(display_message_from_stored_message)
+            .collect();
+        self.session = latest_session;
+        if appended.is_empty() {
+            return false;
+        }
+        for message in appended {
+            self.push_display_message(message);
+        }
+        true
     }
 
     pub(super) fn remove_display_message(&mut self, idx: usize) -> Option<DisplayMessage> {
