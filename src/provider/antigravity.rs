@@ -107,11 +107,10 @@ struct FetchAvailableQuotaInfo {
 }
 
 fn metadata_platform() -> &'static str {
-    if cfg!(target_os = "windows") {
-        "WINDOWS"
-    } else {
-        "MACOS"
-    }
+    // The Cloud Code backend currently rejects OS-specific string enum values
+    // such as MACOS, WINDOWS, and LINUX for ClientMetadata.Platform. Use the
+    // string value that is accepted across platforms instead of varying by OS.
+    "PLATFORM_UNSPECIFIED"
 }
 
 fn antigravity_version() -> String {
