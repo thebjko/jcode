@@ -13,14 +13,6 @@ pub(super) fn handle_overnight_command(app: &mut App, trimmed: &str) -> bool {
         Ok(OvernightCommand::Review) => open_overnight_review(app),
         Ok(OvernightCommand::Cancel) => cancel_overnight(app),
         Ok(OvernightCommand::Start { duration, mission }) => {
-            if app.is_remote {
-                app.push_display_message(DisplayMessage::error(
-                    "`/overnight` start must run from a local session so it can launch a local coordinator and monitor resources."
-                        .to_string(),
-                ));
-                return true;
-            }
-
             let working_dir = app
                 .session
                 .working_dir
