@@ -325,6 +325,42 @@ fn make_custom_compatible_provider() -> OpenRouterProvider {
 }
 
 #[test]
+fn direct_deepseek_profile_uses_static_1m_context_when_catalog_is_absent() {
+    let _lock = ENV_LOCK.lock().unwrap();
+    let _base = EnvVarGuard::set("JCODE_OPENROUTER_API_BASE", "https://api.deepseek.com");
+    let _key_name = EnvVarGuard::set("JCODE_OPENROUTER_API_KEY_NAME", "DEEPSEEK_API_KEY");
+    let _api_key = EnvVarGuard::set("DEEPSEEK_API_KEY", "test");
+    let _namespace = EnvVarGuard::set("JCODE_OPENROUTER_CACHE_NAMESPACE", "deepseek");
+    let _model = EnvVarGuard::set("JCODE_OPENROUTER_MODEL", "deepseek-v4-flash");
+    let _catalog = EnvVarGuard::set("JCODE_OPENROUTER_MODEL_CATALOG", "0");
+
+    let provider = OpenRouterProvider::new().expect("provider");
+
+    assert_eq!(provider.context_window(), 1_000_000);
+}
+
+#[test]
+fn named_openai_compatible_model_context_window_overrides_default() {
+    let mut config = crate::config::NamedProviderConfig {
+        base_url: "https://compat.example.test/v1".to_string(),
+        api_key: Some("test".to_string()),
+        default_model: Some("custom-long-context".to_string()),
+        models: vec![crate::config::NamedProviderModelConfig {
+            id: "custom-long-context".to_string(),
+            context_window: Some(512_000),
+            input: Vec::new(),
+        }],
+        ..Default::default()
+    };
+    config.model_catalog = false;
+
+    let provider =
+        OpenRouterProvider::new_named_openai_compatible("custom", &config).expect("provider");
+
+    assert_eq!(provider.context_window(), 512_000);
+}
+
+#[test]
 fn named_openai_compatible_loads_api_key_from_env_file() {
     let _lock = ENV_LOCK.lock().unwrap();
     let temp = TempDir::new().expect("create temp dir");

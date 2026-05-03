@@ -227,9 +227,10 @@ impl Agent {
                     StreamEvent::ToolUseEnd => {
                         if let Some(mut tool) = current_tool.take() {
                             // Parse the accumulated JSON
-                            let tool_input =
+                            let tool_input = ToolCall::normalize_input_to_object(
                                 serde_json::from_str::<serde_json::Value>(&current_tool_input)
-                                    .unwrap_or(serde_json::Value::Null);
+                                    .unwrap_or(serde_json::Value::Null),
+                            );
                             tool.input = tool_input.clone();
                             tool.intent = ToolCall::intent_from_input(&tool_input);
 

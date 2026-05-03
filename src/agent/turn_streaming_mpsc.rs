@@ -298,10 +298,10 @@ impl Agent {
                     }
                     StreamEvent::ToolUseEnd => {
                         if let Some(mut tool) = current_tool.take() {
-                            let tool_input =
+                            tool.input = ToolCall::normalize_input_to_object(
                                 serde_json::from_str::<serde_json::Value>(&current_tool_input)
-                                    .unwrap_or(serde_json::Value::Null);
-                            tool.input = tool_input;
+                                    .unwrap_or(serde_json::Value::Null),
+                            );
                             tool.refresh_intent_from_input();
 
                             let _ = event_tx.send(ServerEvent::ToolExec {

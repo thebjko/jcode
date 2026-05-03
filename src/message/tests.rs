@@ -68,6 +68,27 @@ fn tool_call_intent_from_input_trims_optional_intent() {
 }
 
 #[test]
+fn tool_call_normalizes_non_object_input_to_empty_object() {
+    for input in [
+        serde_json::Value::Null,
+        serde_json::json!(20),
+        serde_json::json!(false),
+        serde_json::json!(["not", "an", "object"]),
+        serde_json::json!("not an object"),
+    ] {
+        assert_eq!(
+            ToolCall::normalize_input_to_object(input),
+            serde_json::json!({})
+        );
+    }
+
+    assert_eq!(
+        ToolCall::normalize_input_to_object(serde_json::json!({"path":"README.md"})),
+        serde_json::json!({"path":"README.md"})
+    );
+}
+
+#[test]
 fn sanitize_tool_id_hyphens_passthrough() {
     assert_eq!(sanitize_tool_id("call-abc-123"), "call-abc-123");
     assert_eq!(

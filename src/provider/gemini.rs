@@ -789,7 +789,7 @@ pub(crate) fn build_contents(messages: &[Message]) -> Vec<GeminiContent> {
                         parts.push(GeminiPart {
                             function_call: Some(GeminiFunctionCall {
                                 name: name.clone(),
-                                args: input.clone(),
+                                args: crate::message::ToolCall::input_as_object(input),
                                 id: Some(id.clone()),
                             }),
                             ..Default::default()

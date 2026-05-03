@@ -4,6 +4,13 @@ fn truncated_stream_payload_context(data: &str) -> String {
     crate::util::truncate_str(&data.trim().replace('\n', "\\n"), 240).to_string()
 }
 
+fn normalize_tool_arguments(raw_arguments: String) -> String {
+    match serde_json::from_str::<Value>(&raw_arguments) {
+        Ok(Value::Object(_)) => raw_arguments,
+        _ => "{}".to_string(),
+    }
+}
+
 // ============================================================================
 // SSE Stream Parser
 // ============================================================================
@@ -356,13 +363,15 @@ impl OpenRouterStream {
                                 // Emit previous tool call if any
                                 if let Some(prev) = self.current_tool_call.take()
                                     && !prev.id.is_empty()
+                                    && !prev.name.is_empty()
                                 {
                                     self.pending.push_back(StreamEvent::ToolUseStart {
                                         id: prev.id,
                                         name: prev.name,
                                     });
-                                    self.pending
-                                        .push_back(StreamEvent::ToolInputDelta(prev.arguments));
+                                    self.pending.push_back(StreamEvent::ToolInputDelta(
+                                        normalize_tool_arguments(prev.arguments),
+                                    ));
                                     self.pending.push_back(StreamEvent::ToolUseEnd);
                                 }
 
@@ -399,13 +408,15 @@ impl OpenRouterStream {
                         // Emit any pending tool call
                         if let Some(tc) = self.current_tool_call.take()
                             && !tc.id.is_empty()
+                            && !tc.name.is_empty()
                         {
                             self.pending.push_back(StreamEvent::ToolUseStart {
                                 id: tc.id,
                                 name: tc.name,
                             });
-                            self.pending
-                                .push_back(StreamEvent::ToolInputDelta(tc.arguments));
+                            self.pending.push_back(StreamEvent::ToolInputDelta(
+                                normalize_tool_arguments(tc.arguments),
+                            ));
                             self.pending.push_back(StreamEvent::ToolUseEnd);
                         }
 

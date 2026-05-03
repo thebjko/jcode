@@ -198,6 +198,26 @@ fn build_contents_preserves_tool_calls_and_results() {
 }
 
 #[test]
+fn build_contents_normalizes_non_object_tool_call_args_for_gemini_struct() {
+    let messages = vec![Message {
+        role: Role::Assistant,
+        content: vec![ContentBlock::ToolUse {
+            id: "call_primitive".to_string(),
+            name: "read".to_string(),
+            input: json!(20),
+        }],
+        timestamp: None,
+        tool_duration_ms: None,
+    }];
+
+    let contents = build_contents(&messages);
+    assert_eq!(
+        contents[0].parts[0].function_call.as_ref().unwrap().args,
+        json!({})
+    );
+}
+
+#[test]
 fn build_tools_uses_function_declarations() {
     let defs = vec![ToolDefinition {
         name: "read".to_string(),
