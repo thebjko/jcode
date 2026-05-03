@@ -543,6 +543,15 @@ impl crate::tui::TuiState for App {
     }
 
     fn status_notice(&self) -> Option<String> {
+        if !self.is_remote
+            && self.provider.uses_jcode_compaction()
+            && let Ok(manager) = self.registry.compaction().try_read()
+            && manager.is_compacting()
+        {
+            return Some(Self::format_compaction_progress_notice(
+                self.app_started.elapsed(),
+            ));
+        }
         self.status_notice.as_ref().and_then(|(text, at)| {
             if at.elapsed() <= Duration::from_secs(3) {
                 Some(text.clone())

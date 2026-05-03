@@ -1857,6 +1857,9 @@ pub(super) fn handle_config_command(app: &mut App, trimmed: &str) -> bool {
 
                 match manager.force_compact_with(&provider_messages, app.provider.clone()) {
                     Ok(()) => {
+                        app.set_status_notice(App::format_compaction_progress_notice(
+                            std::time::Duration::ZERO,
+                        ));
                         app.push_display_message(DisplayMessage {
                             role: "system".to_string(),
                             content: format!(

@@ -46,6 +46,29 @@ impl App {
         )
     }
 
+    pub(super) fn format_compaction_progress_notice(elapsed: std::time::Duration) -> String {
+        const BAR_WIDTH: usize = 12;
+        const PULSE_WIDTH: usize = 4;
+        let max_start = BAR_WIDTH.saturating_sub(PULSE_WIDTH);
+        let frame = (elapsed.as_millis() / 180) as usize;
+        let period = (max_start * 2).max(1);
+        let phase = frame % period;
+        let start = if phase <= max_start {
+            phase
+        } else {
+            period - phase
+        };
+        let mut bar = String::with_capacity(BAR_WIDTH);
+        for idx in 0..BAR_WIDTH {
+            if (start..start + PULSE_WIDTH).contains(&idx) {
+                bar.push('█');
+            } else {
+                bar.push('░');
+            }
+        }
+        format!("Compacting context [{}] {:.0}s", bar, elapsed.as_secs_f32())
+    }
+
     pub(super) fn format_compaction_complete_message(
         event: &crate::compaction::CompactionEvent,
         context_limit: u64,
