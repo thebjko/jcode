@@ -1244,7 +1244,11 @@ pub(super) fn handle_global_control_shortcuts(
                 app.interleave_message = None;
                 app.pending_soft_interrupts.clear();
                 app.pending_soft_interrupt_requests.clear();
-                app.set_status_notice("Interrupting...");
+                if app.cancel_overnight_for_interrupt() {
+                    app.set_status_notice("Interrupting... Overnight cancelled");
+                } else {
+                    app.set_status_notice("Interrupting...");
+                }
             } else {
                 app.handle_quit_request();
             }
@@ -1364,9 +1368,16 @@ pub(super) fn handle_basic_key(app: &mut App, code: KeyCode) -> bool {
                 app.interleave_message = None;
                 app.pending_soft_interrupts.clear();
                 app.pending_soft_interrupt_requests.clear();
+                let cancelled_overnight = app.cancel_overnight_for_interrupt();
                 if disabled_auto_poke {
                     super::commands::disable_auto_poke(app);
-                    app.set_status_notice("Interrupting... Auto-poke OFF");
+                    if cancelled_overnight {
+                        app.set_status_notice("Interrupting... Auto-poke OFF, overnight cancelled");
+                    } else {
+                        app.set_status_notice("Interrupting... Auto-poke OFF");
+                    }
+                } else if cancelled_overnight {
+                    app.set_status_notice("Interrupting... Overnight cancelled");
                 } else {
                     app.set_status_notice("Interrupting...");
                 }

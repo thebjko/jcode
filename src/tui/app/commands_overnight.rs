@@ -242,6 +242,42 @@ fn cancel_overnight(app: &mut App) {
 }
 
 impl App {
+    pub(super) fn cancel_overnight_for_interrupt(&mut self) -> bool {
+        if self.overnight_auto_poke.is_none()
+            && !self
+                .queued_messages
+                .iter()
+                .any(|message| is_overnight_auto_poke_message(message))
+        {
+            return false;
+        }
+
+        self.overnight_auto_poke = None;
+        let before = self.queued_messages.len();
+        self.queued_messages
+            .retain(|message| !is_overnight_auto_poke_message(message));
+        if before != self.queued_messages.len() && !self.has_queued_followups() {
+            self.pending_queued_dispatch = false;
+        }
+
+        match crate::overnight::cancel_latest_run() {
+            Ok(manifest) => {
+                let _ = self.upsert_overnight_display_card(&manifest);
+                self.push_display_message(DisplayMessage::system(format!(
+                    "🌙 Overnight run `{}` cancelled by interrupt.",
+                    manifest.run_id
+                )));
+            }
+            Err(error) => {
+                self.push_display_message(DisplayMessage::error(format!(
+                    "Interrupted, but failed to cancel overnight run: {}",
+                    crate::util::format_error_chain(&error)
+                )));
+            }
+        }
+        true
+    }
+
     pub(super) fn enable_overnight_auto_poke(
         &mut self,
         manifest: &crate::overnight::OvernightManifest,
@@ -375,6 +411,10 @@ impl App {
         self.overnight_auto_poke = Some(state);
         true
     }
+}
+
+fn is_overnight_auto_poke_message(message: &str) -> bool {
+    message.starts_with("Overnight auto-poke for run `")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
