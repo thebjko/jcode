@@ -364,6 +364,12 @@ Start with the highest-leverage cache boundaries:
   result contract without depending on the root tool registry.
 - Validation: `cargo check -p jcode-tool-types --quiet`, `cargo test -p jcode-tool-types --quiet`,
   and `cargo check -p jcode --quiet` pass.
+- 2026-05-05: added `jcode-tool-core` for runtime tool contracts and moved `Tool`, `ToolContext`,
+  `ToolExecutionMode`, and `StdinInputRequest` out of `src/tool/mod.rs`. `jcode-tool-types` stays
+  DTO-only, while channel/runtime-bearing context lives in the runtime-contract crate instead of
+  contaminating pure type crates.
+- Validation: `cargo check -p jcode-tool-core --quiet`, `cargo check -p jcode-tool-types --quiet`,
+  and `cargo check -p jcode --quiet` pass.
 - 2026-05-05: moved provider streaming contracts `StreamEvent` and `ConnectionPhase` from
   `src/message.rs` into `jcode-message-types`, again preserving root facade re-exports. Together
   with `ToolDefinition`, this materially reduces the root-only surface of the provider trait and

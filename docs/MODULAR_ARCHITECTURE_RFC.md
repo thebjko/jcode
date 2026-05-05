@@ -71,8 +71,8 @@ The current code organization is mixed:
 Current workspace members from `Cargo.toml` are grouped roughly as follows:
 
 - root package: `jcode`
-- foundation/runtime support: `jcode-agent-runtime`, `jcode-core`, `jcode-storage`, `jcode-terminal-launch`
-- data-contract crates: `jcode-ambient-types`, `jcode-auth-types`, `jcode-background-types`, `jcode-batch-types`, `jcode-config-types`, `jcode-gateway-types`, `jcode-memory-types`, `jcode-message-types`, `jcode-selfdev-types`, `jcode-session-types`, `jcode-side-panel-types`, `jcode-task-types`, `jcode-usage-types`
+- foundation/runtime support: `jcode-agent-runtime`, `jcode-core`, `jcode-storage`, `jcode-terminal-launch`, `jcode-tool-core`
+- data-contract crates: `jcode-ambient-types`, `jcode-auth-types`, `jcode-background-types`, `jcode-batch-types`, `jcode-config-types`, `jcode-gateway-types`, `jcode-memory-types`, `jcode-message-types`, `jcode-selfdev-types`, `jcode-session-types`, `jcode-side-panel-types`, `jcode-task-types`, `jcode-tool-types`, `jcode-usage-types`
 - protocol and planning: `jcode-protocol`, `jcode-plan`
 - heavy or optional integrations: `jcode-embedding`, `jcode-pdf`, `jcode-notify-email`
 - auth and providers: `jcode-azure-auth`, `jcode-provider-core`, `jcode-provider-metadata`, `jcode-provider-openrouter`, `jcode-provider-gemini`
@@ -117,6 +117,8 @@ These splits already exist and should be treated as real architectural footholds
 | `jcode-session-types` | session DTOs, currently depending only on message types internally |
 | `jcode-side-panel-types` | side-panel page and update data contracts |
 | `jcode-task-types` | task/tool scheduling data contracts |
+| `jcode-tool-core` | runtime tool contracts such as the `Tool` trait and execution context |
+| `jcode-tool-types` | stable tool output/image DTOs |
 | `jcode-usage-types` | usage accounting data contracts |
 | `jcode-storage` | storage helpers layered on `jcode-core` |
 | `jcode-embedding` | ONNX/tokenizer-based embedding implementation and heavy inference deps |
@@ -312,6 +314,7 @@ These crates should be small, low-dependency, and slow-changing. They are allowe
 Existing examples:
 
 - `jcode-message-types`
+- `jcode-tool-types`
 - `jcode-session-types`
 - `jcode-config-types`
 - `jcode-protocol`
