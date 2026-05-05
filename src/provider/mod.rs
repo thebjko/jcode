@@ -39,13 +39,11 @@ use std::borrow::Cow;
 use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 
-// Re-export native tool result types for use by agent
-pub use claude::{NativeToolResult, NativeToolResultSender};
 pub use jcode_provider_core::{
     CHEAPNESS_REFERENCE_INPUT_TOKENS, CHEAPNESS_REFERENCE_OUTPUT_TOKENS,
-    ModelCatalogRefreshSummary, ModelRoute, NativeCompactionResult, PremiumMode, RouteBillingKind,
-    RouteCheapnessEstimate, RouteCostConfidence, RouteCostSource, shared_http_client,
-    summarize_model_catalog_refresh,
+    ModelCatalogRefreshSummary, ModelRoute, NativeCompactionResult, NativeToolResult,
+    NativeToolResultSender, PremiumMode, RouteBillingKind, RouteCheapnessEstimate,
+    RouteCostConfidence, RouteCostSource, shared_http_client, summarize_model_catalog_refresh,
 };
 pub(crate) use jcode_provider_core::{ProviderFailoverPrompt, parse_failover_prompt_message};
 pub use route_builders::{

@@ -357,6 +357,9 @@ Start with the highest-leverage cache boundaries:
   and re-exported it from the root/Copilot facades. The `Provider` trait no longer needs to name
   the root `copilot` module for this control surface.
 - Validation: `cargo check -p jcode-provider-core --quiet` and `cargo check -p jcode --quiet` pass.
+- 2026-05-05: moved provider-native tool result DTOs/sender aliases into `jcode-provider-core`.
+  The global `Provider` trait no longer has to expose types owned by the root Claude module.
+- Validation: `cargo check -p jcode-provider-core --quiet` and `cargo check -p jcode --quiet` pass.
 
 - 2026-05-05: moved the stable provider-facing `ToolDefinition` contract from `src/message.rs` into
   `jcode-message-types` and re-exported it from the root message facade. This is a prerequisite for
