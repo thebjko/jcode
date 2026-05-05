@@ -134,6 +134,41 @@ impl App {
         let mut routes = Vec::new();
 
         for model in self.provider.available_models_display() {
+            if !model.contains('/') && crate::provider::provider_for_model(&model) == Some("openai")
+            {
+                if auth.openai_has_oauth {
+                    routes.push(crate::provider::ModelRoute {
+                        model: model.clone(),
+                        provider: "OpenAI".to_string(),
+                        api_method: "openai-oauth".to_string(),
+                        available: true,
+                        detail: String::new(),
+                        cheapness: None,
+                    });
+                }
+                if auth.openai_has_api_key {
+                    routes.push(crate::provider::ModelRoute {
+                        model: model.clone(),
+                        provider: "OpenAI".to_string(),
+                        api_method: "openai-api-key".to_string(),
+                        available: true,
+                        detail: String::new(),
+                        cheapness: None,
+                    });
+                }
+                if auth.openai == crate::auth::AuthState::NotConfigured {
+                    routes.push(crate::provider::ModelRoute {
+                        model,
+                        provider: "OpenAI".to_string(),
+                        api_method: "openai-oauth".to_string(),
+                        available: false,
+                        detail: "no credentials".to_string(),
+                        cheapness: None,
+                    });
+                }
+                continue;
+            }
+
             let (provider, api_method, available, detail) = if model.contains('/') {
                 (
                     "auto".to_string(),
@@ -149,16 +184,7 @@ impl App {
                         auth.anthropic.has_oauth || auth.anthropic.has_api_key,
                         String::new(),
                     ),
-                    Some("openai") => (
-                        "OpenAI".to_string(),
-                        if auth.openai_has_api_key && !auth.openai_has_oauth {
-                            "openai-api-key".to_string()
-                        } else {
-                            "openai-oauth".to_string()
-                        },
-                        auth.openai != crate::auth::AuthState::NotConfigured,
-                        String::new(),
-                    ),
+                    Some("openai") => unreachable!("OpenAI models are handled above"),
                     Some("gemini") => (
                         "Gemini".to_string(),
                         "code-assist-oauth".to_string(),

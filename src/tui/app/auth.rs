@@ -1588,7 +1588,7 @@ impl App {
                         let guidance = if key_name == crate::subscription_catalog::JCODE_API_KEY_ENV
                         {
                             format!(
-                                "Use `--provider jcode` or `/login jcode` to access curated models via your router.\nDocs: {}",
+                                "Use `/login jcode` to access curated models via your router. If the model list looks stale, run `/refresh-model-list`.\nDocs: {}",
                                 docs_url
                             )
                         } else if let Some(resolved) = resolved_openai_compatible.as_ref() {
@@ -1603,10 +1603,7 @@ impl App {
                         } else if key_name == "OPENROUTER_API_KEY" {
                             "You can now use `/model` to switch to OpenRouter models. If the model list looks stale, run `/refresh-model-list`.".to_string()
                         } else {
-                            format!(
-                                "Use `--provider {}` to use this backend. If the model list looks stale, run `/refresh-model-list`.",
-                                provider.to_lowercase().replace(' ', "-")
-                            )
+                            "API key saved. Run `/refresh-model-list` to refresh model discovery, then use `/model` to pick an accessible model.".to_string()
                         };
                         let saved_label = if let Some(resolved) =
                             resolved_openai_compatible.as_ref()

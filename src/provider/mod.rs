@@ -1357,8 +1357,6 @@ impl Provider for MultiProvider {
 
         // OpenAI models
         let openai_auth = crate::auth::AuthStatus::check_fast();
-        let use_openai_api_key_method =
-            openai_auth.openai_has_api_key && !openai_auth.openai_has_oauth;
         for model in openai_models {
             let availability = model_availability_for_account(&model);
             let (available, detail) = if self.openai_provider().is_none() {
@@ -1378,10 +1376,18 @@ impl Provider for MultiProvider {
                     }
                 }
             };
-            if use_openai_api_key_method {
-                routes.push(build_openai_api_key_route(&model, available, detail));
-            } else {
-                routes.push(build_openai_oauth_route(&model, available, detail));
+            if openai_auth.openai_has_oauth {
+                routes.push(build_openai_oauth_route(&model, available, detail.clone()));
+            }
+            if openai_auth.openai_has_api_key {
+                routes.push(build_openai_api_key_route(
+                    &model,
+                    self.openai_provider().is_some(),
+                    String::new(),
+                ));
+            }
+            if !openai_auth.openai_has_oauth && !openai_auth.openai_has_api_key {
+                routes.push(build_openai_oauth_route(&model, false, detail));
             }
         }
 
