@@ -1,4 +1,4 @@
-use qr2term::render::{QrDark, QrLight};
+use qrcode::{Color, QrCode, types::QrError};
 
 const QUIET_ZONE_WIDTH: usize = 2;
 
@@ -20,28 +20,26 @@ fn tui_qr_rendering_enabled() -> bool {
     env_truthy("JCODE_SHOW_TUI_LOGIN_QR") || env_truthy("JCODE_TUI_LOGIN_QR")
 }
 
-pub fn render_unicode_qr(data: &str) -> Result<String, qr2term::QrError> {
-    let mut matrix = qr2term::qr::Qr::from(data)?.to_matrix();
-    matrix.surround(QUIET_ZONE_WIDTH, QrLight);
-
-    let size = matrix.size();
-    let pixels = matrix.pixels();
+pub fn render_unicode_qr(data: &str) -> Result<String, QrError> {
+    let code = QrCode::new(data.as_bytes())?;
+    let code_size = code.width();
+    let size = code_size + QUIET_ZONE_WIDTH * 2;
     let mut out = String::new();
 
     for row in (0..size).step_by(2) {
         for col in 0..size {
-            let top = pixels[row * size + col];
+            let top = qr_color_at(&code, code_size, col, row);
             let bottom = if row + 1 < size {
-                pixels[(row + 1) * size + col]
+                qr_color_at(&code, code_size, col, row + 1)
             } else {
-                QrLight
+                Color::Light
             };
 
             let ch = match (top, bottom) {
-                (QrDark, QrDark) => '█',
-                (QrDark, QrLight) => '▀',
-                (QrLight, QrDark) => '▄',
-                (QrLight, QrLight) => ' ',
+                (Color::Dark, Color::Dark) => '█',
+                (Color::Dark, Color::Light) => '▀',
+                (Color::Light, Color::Dark) => '▄',
+                (Color::Light, Color::Light) => ' ',
             };
             out.push(ch);
         }
@@ -51,6 +49,17 @@ pub fn render_unicode_qr(data: &str) -> Result<String, qr2term::QrError> {
     }
 
     Ok(out)
+}
+
+fn qr_color_at(code: &QrCode, code_size: usize, col: usize, row: usize) -> Color {
+    if col < QUIET_ZONE_WIDTH
+        || row < QUIET_ZONE_WIDTH
+        || col >= code_size + QUIET_ZONE_WIDTH
+        || row >= code_size + QUIET_ZONE_WIDTH
+    {
+        return Color::Light;
+    }
+    code[(col - QUIET_ZONE_WIDTH, row - QUIET_ZONE_WIDTH)]
 }
 
 pub fn markdown_section(data: &str, heading: &str) -> Option<String> {
