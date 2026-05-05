@@ -979,13 +979,32 @@ pub struct App {
     last_overnight_card_refresh: Option<Instant>,
 }
 
-/// A placeholder provider for remote mode (never actually called)
-struct NullProvider;
+/// Inert provider used by runtime modes whose output is supplied by another source.
+///
+/// Remote clients render server events. Replay renders recorded events. Neither mode may call a
+/// live provider from the TUI process.
+struct InertRuntimeProvider {
+    runtime_mode: AppRuntimeMode,
+}
+
+impl InertRuntimeProvider {
+    fn new(runtime_mode: AppRuntimeMode) -> Self {
+        Self { runtime_mode }
+    }
+
+    fn provider_label(&self) -> &'static str {
+        match self.runtime_mode {
+            AppRuntimeMode::RemoteClient => "remote",
+            AppRuntimeMode::Replay => "replay",
+            AppRuntimeMode::TestHarness => "test-harness",
+        }
+    }
+}
 
 #[async_trait::async_trait]
-impl Provider for NullProvider {
+impl Provider for InertRuntimeProvider {
     fn name(&self) -> &str {
-        "remote"
+        self.provider_label()
     }
     fn model(&self) -> String {
         "unknown".to_string()
@@ -999,12 +1018,13 @@ impl Provider for NullProvider {
         _session_id: Option<&str>,
     ) -> Result<std::pin::Pin<Box<dyn futures::Stream<Item = Result<StreamEvent>> + Send>>> {
         Err(anyhow::anyhow!(
-            "NullProvider cannot be used for completion"
+            "{} runtime does not allow live provider completion from the TUI",
+            self.provider_label()
         ))
     }
 
     fn fork(&self) -> Arc<dyn Provider> {
-        Arc::new(NullProvider)
+        Arc::new(InertRuntimeProvider::new(self.runtime_mode))
     }
 }
 
@@ -1343,7 +1363,7 @@ impl App {
     }
 
     fn kv_cache_provider_name(&self) -> String {
-        if self.is_remote || self.is_replay {
+        if self.uses_server_or_replay_metadata() {
             self.remote_provider_name
                 .clone()
                 .unwrap_or_else(|| self.provider.name().to_string())
@@ -1353,7 +1373,7 @@ impl App {
     }
 
     fn kv_cache_provider_model(&self) -> String {
-        if self.is_remote || self.is_replay {
+        if self.uses_server_or_replay_metadata() {
             self.remote_provider_model
                 .clone()
                 .unwrap_or_else(|| self.provider.model())

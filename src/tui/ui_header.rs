@@ -765,7 +765,7 @@ mod tests {
         let provider: Arc<dyn Provider> = Arc::new(MockProvider);
         let rt = tokio::runtime::Runtime::new().expect("test runtime");
         let registry = rt.block_on(Registry::new(provider.clone()));
-        crate::tui::app::App::new(provider, registry)
+        crate::tui::app::App::new_for_test_harness(provider, registry)
     }
 
     #[test]

@@ -121,7 +121,7 @@ fn test_model_picker_reuses_cached_entries_until_invalidated() {
     });
     let rt = tokio::runtime::Runtime::new().unwrap();
     let registry = rt.block_on(crate::tool::Registry::new(provider.clone()));
-    let mut app = App::new(provider, registry);
+    let mut app = App::new_for_test_harness(provider, registry);
     app.queue_mode = false;
     app.diff_mode = crate::config::DiffDisplayMode::Inline;
 
@@ -162,7 +162,7 @@ fn test_model_picker_opens_loading_state_before_async_routes_complete() {
     });
     let rt = tokio::runtime::Runtime::new().unwrap();
     let registry = rt.block_on(crate::tool::Registry::new(provider.clone()));
-    let mut app = App::new(provider, registry);
+    let mut app = App::new_for_test_harness(provider, registry);
     app.queue_mode = false;
     app.diff_mode = crate::config::DiffDisplayMode::Inline;
 
@@ -208,7 +208,7 @@ fn test_model_picker_does_not_cache_single_model_fallback() {
     });
     let rt = tokio::runtime::Runtime::new().unwrap();
     let registry = rt.block_on(crate::tool::Registry::new(provider.clone()));
-    let mut app = App::new(provider, registry);
+    let mut app = App::new_for_test_harness(provider, registry);
     app.queue_mode = false;
     app.diff_mode = crate::config::DiffDisplayMode::Inline;
 
@@ -269,7 +269,7 @@ fn test_login_completed_spawns_auth_refresh_when_runtime_is_available() {
     });
     let rt = tokio::runtime::Runtime::new().unwrap();
     let registry = rt.block_on(crate::tool::Registry::new(provider.clone()));
-    let mut app = App::new(provider, registry);
+    let mut app = App::new_for_test_harness(provider, registry);
     app.queue_mode = false;
     app.diff_mode = crate::config::DiffDisplayMode::Inline;
 

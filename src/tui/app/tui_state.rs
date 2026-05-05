@@ -112,12 +112,12 @@ impl App {
     }
 
     fn widget_route_info(&self, model: Option<&str>) -> WidgetRouteInfo {
-        let remote_provider_name = if self.is_remote || self.is_replay {
+        let remote_provider_name = if self.uses_server_or_replay_metadata() {
             self.remote_header_provider_name()
         } else {
             None
         };
-        let provider_name = if self.is_remote || self.is_replay {
+        let provider_name = if self.uses_server_or_replay_metadata() {
             remote_provider_name.as_deref()
         } else {
             Some(self.provider.name())
@@ -133,7 +133,7 @@ impl App {
 
         WidgetRouteInfo {
             provider,
-            is_remote: self.is_remote || self.is_replay,
+            is_remote: self.uses_server_or_replay_metadata(),
         }
     }
 
@@ -835,7 +835,7 @@ impl crate::tui::TuiState for App {
             service_tier,
             native_compaction_mode,
             native_compaction_threshold_tokens,
-        ) = if self.is_remote || self.is_replay {
+        ) = if self.uses_server_or_replay_metadata() {
             (
                 self.remote_provider_model.clone(),
                 self.remote_reasoning_effort.clone(),
@@ -1049,7 +1049,7 @@ impl crate::tui::TuiState for App {
             background_info,
             usage_info,
             tokens_per_second,
-            provider_name: if self.is_remote || self.is_replay {
+            provider_name: if self.uses_server_or_replay_metadata() {
                 self.remote_provider_name
                     .clone()
                     .or_else(|| Some(self.provider.name().to_string()))

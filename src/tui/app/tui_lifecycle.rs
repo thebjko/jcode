@@ -839,6 +839,14 @@ impl App {
         app
     }
 
+    pub fn new_for_test_harness(provider: Arc<dyn Provider>, registry: Registry) -> Self {
+        let mut app = Self::new(provider, registry);
+        app.runtime_mode = AppRuntimeMode::TestHarness;
+        app.is_remote = false;
+        app.is_replay = false;
+        app
+    }
+
     /// Configure ambient mode: override system prompt and queue an initial message.
     pub fn set_ambient_mode(&mut self, system_prompt: String, initial_message: String) {
         self.ambient_system_prompt = Some(system_prompt);
@@ -926,7 +934,8 @@ impl App {
     }
 
     pub fn new_for_remote_with_options(resume_session: Option<String>, fresh_spawn: bool) -> Self {
-        let provider: Arc<dyn Provider> = Arc::new(NullProvider);
+        let provider: Arc<dyn Provider> =
+            Arc::new(InertRuntimeProvider::new(AppRuntimeMode::RemoteClient));
         let registry = Registry::empty();
         let session = resume_session
             .as_ref()

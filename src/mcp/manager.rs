@@ -40,14 +40,14 @@ pub struct McpManager {
 }
 
 impl McpManager {
-    /// Create a new manager in owned mode (standalone/TUI - no sharing)
+    /// Create a new manager in owned in-process mode (used by tests and local harnesses).
     pub fn new() -> Self {
         Self {
             pool: None,
             pool_handles: RwLock::new(HashMap::new()),
             owned_clients: RwLock::new(HashMap::new()),
             config: McpConfig::load(),
-            session_id: "standalone".to_string(),
+            session_id: "owned".to_string(),
         }
     }
 
@@ -69,7 +69,7 @@ impl McpManager {
             pool_handles: RwLock::new(HashMap::new()),
             owned_clients: RwLock::new(HashMap::new()),
             config,
-            session_id: "standalone".to_string(),
+            session_id: "owned".to_string(),
         }
     }
 

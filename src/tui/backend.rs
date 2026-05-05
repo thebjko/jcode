@@ -1,7 +1,7 @@
-//! Backend abstraction for TUI - allows running locally or via server
+//! Backend abstraction for TUI runtime transports.
 //!
-//! This module provides a unified interface for message processing,
-//! whether running standalone (LocalBackend) or as a client (RemoteBackend).
+//! This module provides a unified interface for message processing across
+//! local harnesses and server-backed remote clients.
 //!
 //! Also provides debug socket events for exposing full TUI state.
 
@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::Mutex;
 
-/// Debug events broadcast by standalone TUI via debug socket.
+/// Debug events broadcast by local harnesses via debug socket.
 /// These expose the full internal state for debugging/comparison.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]

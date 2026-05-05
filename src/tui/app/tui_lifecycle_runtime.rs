@@ -12,7 +12,8 @@ impl App {
     }
 
     fn new_for_replay_with_title(session: crate::session::Session, set_title: bool) -> Self {
-        let provider: Arc<dyn Provider> = Arc::new(NullProvider);
+        let provider: Arc<dyn Provider> =
+            Arc::new(InertRuntimeProvider::new(AppRuntimeMode::Replay));
         let registry = Registry::empty();
         let mut app = Self::new_minimal_with_session(provider, registry, session);
         app.is_remote = false;
@@ -131,6 +132,13 @@ impl App {
 
     pub fn is_replay_runtime(&self) -> bool {
         self.runtime_mode == AppRuntimeMode::Replay
+    }
+
+    pub(crate) fn uses_server_or_replay_metadata(&self) -> bool {
+        matches!(
+            self.runtime_mode,
+            AppRuntimeMode::RemoteClient | AppRuntimeMode::Replay
+        )
     }
 
     /// Check if the selected reload candidate is newer than startup.
