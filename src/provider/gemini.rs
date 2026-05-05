@@ -669,7 +669,13 @@ impl Provider for GeminiProvider {
             .map(|guard| guard.clone())
             .unwrap_or_default();
         if discovered.is_empty() {
-            return merge_gemini_model_lists(vec![self.model()]);
+            return merge_gemini_model_lists(
+                AVAILABLE_MODELS
+                    .iter()
+                    .map(|model| (*model).to_string())
+                    .chain(std::iter::once(self.model()))
+                    .collect(),
+            );
         }
 
         merge_gemini_model_lists(
@@ -682,6 +688,20 @@ impl Provider for GeminiProvider {
 
     fn available_models_for_switching(&self) -> Vec<String> {
         self.available_models_display()
+    }
+
+    fn model_routes(&self) -> Vec<super::ModelRoute> {
+        self.available_models_display()
+            .into_iter()
+            .map(|model| super::ModelRoute {
+                model,
+                provider: "Gemini".to_string(),
+                api_method: "code-assist-oauth".to_string(),
+                available: true,
+                detail: String::new(),
+                cheapness: None,
+            })
+            .collect()
     }
 
     async fn prefetch_models(&self) -> Result<()> {
