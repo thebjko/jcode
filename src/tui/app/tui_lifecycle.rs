@@ -321,6 +321,7 @@ impl App {
             remote_server_icon: None,
             current_message_id: None,
             is_remote: false,
+            runtime_mode: AppRuntimeMode::TestHarness,
             pending_remote_rewind_notice: None,
             server_spawning: false,
             is_replay: false,
@@ -682,6 +683,7 @@ impl App {
             remote_server_icon: None,
             current_message_id: None,
             is_remote: false,
+            runtime_mode: AppRuntimeMode::TestHarness,
             pending_remote_rewind_notice: None,
             server_spawning: false,
             is_replay: false,
@@ -932,6 +934,7 @@ impl App {
             .unwrap_or_else(|| Session::create(None, None));
         let mut app = Self::new_minimal_with_session(provider, registry, session);
         app.is_remote = true;
+        app.runtime_mode = AppRuntimeMode::RemoteClient;
         app.remote_startup_phase = Some(super::RemoteStartupPhase::Connecting);
         app.remote_startup_phase_started = Some(Instant::now());
 

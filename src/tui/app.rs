@@ -37,6 +37,16 @@ use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tokio::time::interval;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AppRuntimeMode {
+    /// Normal product TUI. The client renders state owned by the jcode server.
+    RemoteClient,
+    /// Deterministic playback of recorded session/server events. Never calls live providers.
+    Replay,
+    /// Local in-process harness used by unit tests and transitional UI fixtures only.
+    TestHarness,
+}
+
 mod auth;
 mod auth_account_picker_saved_accounts;
 mod catchup;
@@ -709,6 +719,7 @@ pub struct App {
     current_message_id: Option<u64>,
     // Whether running in remote mode
     is_remote: bool,
+    runtime_mode: AppRuntimeMode,
     // Remote rewind/undo request waiting for the server's replacement History payload.
     pending_remote_rewind_notice: Option<PendingRemoteRewindNotice>,
     // Server was just spawned - allow initial connection retries in run_remote

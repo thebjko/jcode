@@ -17,6 +17,7 @@ impl App {
         let mut app = Self::new_minimal_with_session(provider, registry, session);
         app.is_remote = false;
         app.is_replay = true;
+        app.runtime_mode = AppRuntimeMode::Replay;
         let model_name = app.session.model.clone().unwrap_or_default();
         let session_name = app.session.short_name.clone().unwrap_or_default();
 
@@ -118,6 +119,18 @@ impl App {
         self.remote_session_id
             .clone()
             .or_else(|| self.resume_session_id.clone())
+    }
+
+    pub fn runtime_mode(&self) -> AppRuntimeMode {
+        self.runtime_mode
+    }
+
+    pub fn is_remote_client(&self) -> bool {
+        self.runtime_mode == AppRuntimeMode::RemoteClient
+    }
+
+    pub fn is_replay_runtime(&self) -> bool {
+        self.runtime_mode == AppRuntimeMode::Replay
     }
 
     /// Check if the selected reload candidate is newer than startup.
