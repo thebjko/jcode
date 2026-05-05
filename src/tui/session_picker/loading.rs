@@ -730,7 +730,11 @@ struct SessionSummary {
 #[derive(Deserialize)]
 struct SessionMessageSummary {
     role: Role,
-    #[serde(default)]
+    // `/resume` only needs role/display/token metadata for the initial list.
+    // Deserializing full message content here makes large sessions expensive to
+    // show, and preview/search content is loaded lazily through the transcript
+    // paths when needed.
+    #[serde(default, skip_deserializing)]
     content: serde_json::Value,
     #[serde(default)]
     display_role: Option<StoredDisplayRole>,
