@@ -310,7 +310,7 @@ mod state;
 use self::state::latest_peer_touches;
 pub use self::state::{
     FileAccess, SessionControlHandle, SharedContext, SwarmEvent, SwarmEventType, SwarmMember,
-    SwarmState, SwarmTaskProgress, VersionedPlan,
+    SwarmState,
 };
 use self::state::{
     SessionInterruptQueues, fanout_live_client_event, fanout_session_event,
@@ -318,6 +318,7 @@ use self::state::{
     register_session_interrupt_queue, remove_session_interrupt_queue,
     rename_session_interrupt_queue, session_event_fanout_sender, unregister_session_event_sender,
 };
+pub use crate::plan::{SwarmTaskProgress, VersionedPlan};
 
 pub use self::await_members_state::pending_await_members_for_session;
 use self::reload_state::clear_reload_marker_if_stale_for_pid;
