@@ -19,8 +19,8 @@ pub use jcode_overnight_core::{
     OvernightTaskCardValidation, OvernightTaskStatusCounts, ResourceSnapshot, UsageLimitSnapshot,
     UsageProjection, UsageProviderSnapshot, build_continuation_prompt, build_coordinator_prompt,
     build_final_wrapup_prompt, build_handoff_ready_prompt, build_morning_report_prompt,
-    build_post_wake_continuation_prompt, build_visible_current_session_prompt, event_class,
-    format_minutes, git_summary, html_escape, overnight_usage, parse_duration,
+    build_post_wake_continuation_prompt, build_review_html, build_visible_current_session_prompt,
+    event_class, format_minutes, git_summary, html_escape, overnight_usage, parse_duration,
     parse_overnight_command, preflight_summary, prompt_event_summary, render_task_cards_html,
     resource_summary, summarize_task_cards_slice, task_card_title, task_card_validated,
     task_status_bucket,
@@ -1219,7 +1219,10 @@ Notes:
 pub fn render_review_html(manifest: &OvernightManifest) -> Result<()> {
     let events = read_events(manifest).unwrap_or_default();
     let notes = std::fs::read_to_string(&manifest.review_notes_path).unwrap_or_else(|_| {
-        "# Overnight review notes\n\nCoordinator has not written notes yet.".to_string()
+        "# Overnight review notes
+
+Coordinator has not written notes yet."
+            .to_string()
     });
     let preflight = if manifest.preflight_path.exists() {
         std::fs::read_to_string(&manifest.preflight_path).unwrap_or_default()
@@ -1227,147 +1230,7 @@ pub fn render_review_html(manifest: &OvernightManifest) -> Result<()> {
         String::new()
     };
     let task_cards = read_task_cards(manifest).unwrap_or_default();
-    let task_summary = summarize_task_cards_slice(&task_cards);
-    let task_cards_html = render_task_cards_html(&task_cards);
-
-    let mut timeline = String::new();
-    for event in events
-        .iter()
-        .rev()
-        .take(200)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-    {
-        let class = event_class(&event.kind);
-        timeline.push_str(&format!(
-            "<li class=\"{}\"><time>{}</time><strong>{}</strong><span>{}</span></li>\n",
-            class,
-            html_escape(&event.timestamp.format("%H:%M:%S").to_string()),
-            html_escape(&event.kind),
-            html_escape(&event.summary)
-        ));
-    }
-
-    let status = manifest.status.label();
-    let html = format!(
-        r#"<!doctype html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>Overnight run {run_id}</title>
-<style>
-body {{ font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; background: #0f1117; color: #e8eaf0; }}
-a {{ color: #8ab4ff; }}
-header {{ padding: 28px 36px; background: linear-gradient(135deg, #1d2340, #12141c); border-bottom: 1px solid #30364a; }}
-main {{ padding: 24px 36px 48px; max-width: 1200px; margin: 0 auto; }}
-.cards {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; margin-top: 18px; }}
-	.card {{ background: #171b26; border: 1px solid #2c3347; border-radius: 14px; padding: 16px; }}
-	.card .label {{ color: #9aa4bc; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }}
-	.card .value {{ font-size: 18px; margin-top: 6px; }}
-	.task-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }}
-	.task-card {{ background: #111620; border: 1px solid #2b3348; border-radius: 14px; padding: 16px; }}
-	.task-card h3 {{ margin: 0 0 8px; }}
-	.task-card p {{ margin: 8px 0; }}
-	.task-card ul {{ margin: 8px 0 0 18px; padding: 0; }}
-	.meta {{ color: #9aa4bc; font-size: 13px; }}
-	.status-pill {{ display: inline-block; margin-right: 6px; padding: 3px 8px; border-radius: 999px; background: #24314f; color: #cfe0ff; font-size: 12px; }}
-	section {{ margin-top: 28px; background: #151923; border: 1px solid #2a3041; border-radius: 16px; padding: 20px; }}
-	h1, h2 {{ margin: 0 0 12px; }}
-ul.timeline {{ list-style: none; padding: 0; margin: 0; }}
-.timeline li {{ display: grid; grid-template-columns: 86px 240px 1fr; gap: 12px; padding: 9px 0; border-bottom: 1px solid #252b3a; }}
-.timeline li:last-child {{ border-bottom: none; }}
-.timeline time {{ color: #9aa4bc; }}
-.timeline strong {{ color: #d9def0; }}
-.timeline .ok strong {{ color: #8ee99a; }}
-.timeline .warn strong {{ color: #ffd166; }}
-.timeline .bad strong {{ color: #ff7b7b; }}
-pre {{ white-space: pre-wrap; word-break: break-word; background: #0b0d12; color: #e8eaf0; padding: 14px; border-radius: 12px; border: 1px solid #272d3c; overflow-x: auto; }}
-.badge {{ display: inline-block; padding: 4px 9px; border-radius: 999px; background: #24314f; color: #cfe0ff; font-size: 12px; }}
-.path {{ font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: #b7c4e8; }}
-</style>
-</head>
-<body>
-<header>
-  <h1>🌙 Overnight run <code>{run_id}</code></h1>
-  <div class="badge">{status}</div>
-  <div class="cards">
-    <div class="card"><div class="label">Coordinator</div><div class="value"><code>{coordinator}</code><br>{coordinator_name}</div></div>
-	    <div class="card"><div class="label">Started</div><div class="value">{started}</div></div>
-	    <div class="card"><div class="label">Target wake</div><div class="value">{target}</div></div>
-	    <div class="card"><div class="label">Last activity</div><div class="value">{last_activity}</div></div>
-	    <div class="card"><div class="label">Task cards</div><div class="value">{task_completed}/{task_total} complete<br><span class="meta">{task_active} active · {task_blocked} blocked · {task_deferred} deferred</span></div></div>
-	  </div>
-	</header>
-	<main>
-<section>
-  <h2>Executive summary</h2>
-  <p>Mission: {mission}</p>
-	  <p>Working directory: <span class="path">{working_dir}</span></p>
-	  <p>Provider/model: <code>{provider}</code> / <code>{model}</code></p>
-	</section>
-	<section>
-	  <h2>Structured task cards</h2>
-	  {task_cards_html}
-	</section>
-	<section>
-	  <h2>Coordinator review notes</h2>
-  <pre>{notes}</pre>
-</section>
-<section>
-  <h2>Timeline</h2>
-  <ul class="timeline">
-  {timeline}
-  </ul>
-</section>
-<section>
-  <h2>Preflight, usage, and resources</h2>
-  <pre>{preflight}</pre>
-</section>
-<section>
-  <h2>Artifacts</h2>
-  <ul>
-    <li>Human log: <span class="path">{human_log}</span></li>
-    <li>Events JSONL: <span class="path">{events_path}</span></li>
-    <li>Task cards: <span class="path">{task_cards}</span></li>
-    <li>Issue drafts: <span class="path">{issue_drafts}</span></li>
-    <li>Validation outputs: <span class="path">{validation}</span></li>
-  </ul>
-</section>
-</main>
-</body>
-</html>"#,
-        run_id = html_escape(&manifest.run_id),
-        status = html_escape(status),
-        coordinator = html_escape(&manifest.coordinator_session_id),
-        coordinator_name = html_escape(&manifest.coordinator_session_name),
-        started = html_escape(&manifest.started_at.to_rfc3339()),
-        target = html_escape(&manifest.target_wake_at.to_rfc3339()),
-        last_activity = html_escape(&manifest.last_activity_at.to_rfc3339()),
-        task_total = task_summary.total,
-        task_completed = task_summary.counts.completed,
-        task_active = task_summary.counts.active,
-        task_blocked = task_summary.counts.blocked,
-        task_deferred = task_summary.counts.deferred,
-        mission = html_escape(
-            manifest
-                .mission
-                .as_deref()
-                .unwrap_or("Continue the current session's highest-value verified work.")
-        ),
-        working_dir = html_escape(manifest.working_dir.as_deref().unwrap_or("unknown")),
-        provider = html_escape(&manifest.provider_name),
-        model = html_escape(&manifest.model),
-        task_cards_html = task_cards_html,
-        notes = html_escape(&notes),
-        timeline = timeline,
-        preflight = html_escape(&preflight),
-        human_log = html_escape(&manifest.human_log_path.display().to_string()),
-        events_path = html_escape(&manifest.events_path.display().to_string()),
-        task_cards = html_escape(&manifest.task_cards_dir.display().to_string()),
-        issue_drafts = html_escape(&manifest.issue_drafts_dir.display().to_string()),
-        validation = html_escape(&manifest.validation_dir.display().to_string()),
-    );
+    let html = build_review_html(manifest, &events, &notes, &preflight, &task_cards);
     write_text_file(&manifest.review_path, &html)
 }
 
