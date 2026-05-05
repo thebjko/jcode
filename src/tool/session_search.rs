@@ -12,18 +12,20 @@ use crate::session::{Session, StoredMessage, session_journal_path_from_snapshot}
 use crate::storage;
 use anyhow::Result;
 use async_trait::async_trait;
-use chrono::{DateTime, NaiveDate, SecondsFormat, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use jcode_import_core::{
     collect_recent_files_recursive, extract_external_text_from_json, file_modified_datetime,
     parse_rfc3339_json,
 };
 use jcode_session_types::{
-    SessionSearchQueryProfile as QueryProfile,
+    SessionSearchContextLine as ResultContextLine, SessionSearchQueryProfile as QueryProfile,
+    SessionSearchRenderOptions, SessionSearchReport as SearchReport,
+    SessionSearchResult as SearchResult, SessionSearchResultKind as SearchResultKind,
+    format_session_search_no_results, format_session_search_results,
     score_session_search_text_match as score_message_match,
     session_search_datetime_matches as session_datetime_matches,
     session_search_field_filter_matches as field_filter_matches,
-    session_search_format_matched_terms as format_matched_terms,
-    session_search_markdown_code_block as markdown_code_block,
+    session_search_format_datetime as format_datetime,
     session_search_path_matches_query as path_matches_query,
     session_search_raw_matches_query as raw_matches_query,
     session_search_truncate_title_text as truncate_title_text,
@@ -197,51 +199,6 @@ impl RoleFilter {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SearchResultKind {
-    Metadata,
-    Message,
-}
-
-impl SearchResultKind {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Metadata => "metadata",
-            Self::Message => "message",
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-struct SearchResult {
-    source: String,
-    session_id: String,
-    short_name: Option<String>,
-    title: Option<String>,
-    working_dir: Option<String>,
-    provider_key: Option<String>,
-    model: Option<String>,
-    updated_at: DateTime<Utc>,
-    kind: SearchResultKind,
-    role: String,
-    message_index: Option<usize>,
-    message_id: Option<String>,
-    message_timestamp: Option<DateTime<Utc>>,
-    snippet: String,
-    score: f64,
-    matched_terms: Vec<String>,
-    exact_match: bool,
-    context: Vec<ResultContextLine>,
-}
-
-#[derive(Debug, Clone)]
-struct ResultContextLine {
-    message_index: usize,
-    role: String,
-    timestamp: Option<DateTime<Utc>>,
-    text: String,
-}
-
 #[derive(Debug, Clone)]
 struct ExternalSessionRecord {
     source: &'static str,
@@ -263,18 +220,6 @@ struct ExternalMessageRecord {
     text: String,
     timestamp: Option<DateTime<Utc>>,
     id: Option<String>,
-}
-
-#[derive(Debug, Default)]
-struct SearchReport {
-    results: Vec<SearchResult>,
-    scanned_jcode_sessions: usize,
-    candidate_jcode_sessions: usize,
-    scanned_external_sessions: usize,
-    external_sources: Vec<&'static str>,
-    read_errors: usize,
-    parse_errors: usize,
-    truncated: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -1777,142 +1722,23 @@ fn group_and_limit_results(
     grouped
 }
 
-fn format_results(query: &str, report: &SearchReport, options: &SearchOptions) -> String {
-    let results = &report.results;
-    let mut output = format!(
-        "## Found {} results for '{}'\n\n",
-        results.len(),
-        query.trim()
-    );
-
-    output.push_str(&format!(
-        "_Defaults: current session {}, external sources {}, tool calls/results {}, system reminders {}. Max per session: {}._\n\n",
-        if options.include_current { "included" } else { "excluded" },
-        if options.include_external { "included" } else { "hidden" },
-        if options.include_tools { "included" } else { "hidden" },
-        if options.include_system { "included" } else { "hidden" },
-        options.max_per_session,
-    ));
-
-    output.push_str(&format!(
-        "_Scanned: {} Jcode sessions ({} candidates), {} external sessions{}{}._\n\n",
-        report.scanned_jcode_sessions,
-        report.candidate_jcode_sessions,
-        report.scanned_external_sessions,
-        if report.external_sources.is_empty() {
-            String::new()
-        } else {
-            format!(" from {}", report.external_sources.join(", "))
-        },
-        if report.truncated {
-            "; scan truncated"
-        } else {
-            ""
-        },
-    ));
-
-    for (i, result) in results.iter().enumerate() {
-        let session_name = result
-            .short_name
-            .as_deref()
-            .or(result.title.as_deref())
-            .unwrap_or(&result.session_id);
-        output.push_str(&format!("### Result {} - {}\n", i + 1, session_name));
-        output.push_str(&format!("- Source: `{}`\n", result.source));
-        output.push_str(&format!("- Session ID: `{}`\n", result.session_id));
-        if let Some(title) = &result.title {
-            output.push_str(&format!("- Title: {}\n", title));
-        }
-        if let Some(dir) = &result.working_dir {
-            output.push_str(&format!("- Working dir: `{}`\n", dir));
-        }
-        if let Some(provider_key) = &result.provider_key {
-            output.push_str(&format!("- Provider: `{}`\n", provider_key));
-        }
-        if let Some(model) = &result.model {
-            output.push_str(&format!("- Model: `{}`\n", model));
-        }
-        output.push_str(&format!(
-            "- Updated: {}\n- Match: {}",
-            format_datetime(result.updated_at),
-            result.kind.label(),
-        ));
-        if let Some(index) = result.message_index {
-            output.push_str(&format!(" #{}", index + 1));
-        }
-        output.push_str(&format!(" ({})", result.role));
-        if let Some(message_id) = &result.message_id {
-            output.push_str(&format!(", id `{}`", message_id));
-        }
-        if let Some(timestamp) = result.message_timestamp {
-            output.push_str(&format!(", at {}", format_datetime(timestamp)));
-        }
-        output.push('\n');
-        output.push_str(&format!(
-            "- Why: {}{}\n",
-            if result.exact_match {
-                "exact phrase; "
-            } else {
-                ""
-            },
-            format_matched_terms(&result.matched_terms),
-        ));
-        output.push_str("\n");
-        output.push_str(&markdown_code_block(&result.snippet));
-        if !result.context.is_empty() {
-            output.push_str("\n\nContext:\n");
-            for context in &result.context {
-                output.push_str(&format!(
-                    "- #{} {}{}\n",
-                    context.message_index + 1,
-                    context.role,
-                    context
-                        .timestamp
-                        .map(|ts| format!(" at {}", format_datetime(ts)))
-                        .unwrap_or_default()
-                ));
-                output.push_str(&markdown_code_block(&context.text));
-                output.push('\n');
-            }
-        }
-        output.push_str("\n\n");
+fn render_options(options: &SearchOptions) -> SessionSearchRenderOptions {
+    SessionSearchRenderOptions {
+        include_current: options.include_current,
+        include_external: options.include_external,
+        include_tools: options.include_tools,
+        include_system: options.include_system,
+        max_per_session: options.max_per_session,
+        has_working_dir_filter: options.working_dir_filter.is_some(),
     }
+}
 
-    output
+fn format_results(query: &str, report: &SearchReport, options: &SearchOptions) -> String {
+    format_session_search_results(query, report, &render_options(options))
 }
 
 fn no_results_message(query: &str, options: &SearchOptions) -> String {
-    let mut output = format!("No results found for '{}' in past sessions.", query.trim());
-    let mut hints = Vec::new();
-    if !options.include_current {
-        hints.push(
-            "current session is excluded by default; retry with include_current=true if needed",
-        );
-    }
-    if !options.include_tools {
-        hints.push(
-            "tool calls/results are hidden by default; retry with include_tools=true for raw logs",
-        );
-    }
-    if !options.include_system {
-        hints.push("system reminders are hidden by default; retry with include_system=true for internal context");
-    }
-    if options.working_dir_filter.is_some() {
-        hints.push("the working_dir filter may be too narrow");
-    }
-    if !hints.is_empty() {
-        output.push_str("\n\nSearch notes:\n");
-        for hint in hints {
-            output.push_str("- ");
-            output.push_str(hint);
-            output.push('\n');
-        }
-    }
-    output
-}
-
-fn format_datetime(ts: DateTime<Utc>) -> String {
-    ts.to_rfc3339_opts(SecondsFormat::Secs, true)
+    format_session_search_no_results(query, &render_options(options))
 }
 
 #[cfg(test)]
