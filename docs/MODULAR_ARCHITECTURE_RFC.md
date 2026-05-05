@@ -87,7 +87,7 @@ The root crate still directly owns most of the following concerns:
 - server orchestration and socket lifecycle
 - session state and persistence
 - agent turn execution and tool orchestration
-- provider traits and several provider implementations
+- provider implementation composition and runtime provider wiring; the shared `Provider` trait now lives in `jcode-provider-core`
 - protocol/message/config types
 - tool registry and many tool implementations
 - TUI application state and rendering
@@ -126,7 +126,7 @@ These splits already exist and should be treated as real architectural footholds
 | `jcode-azure-auth` | Azure bearer token retrieval |
 | `jcode-notify-email` | SMTP/IMAP/mail transport |
 | `jcode-provider-metadata` | provider/login catalog and profile metadata |
-| `jcode-provider-core` | shared provider value types, route/cost types, shared HTTP client, schema helpers |
+| `jcode-provider-core` | shared provider contract (`Provider`/`EventStream`), value types, route/cost/model helpers, shared HTTP client, schema helpers |
 | `jcode-provider-openrouter` | OpenRouter-specific catalog/cache/support helpers |
 | `jcode-provider-gemini` | Gemini schema/model/support helpers |
 | `jcode-tui-core` | low-level terminal UI primitives that do not need full app state |
@@ -208,7 +208,7 @@ Broadly reused types like protocol structures, message forms, IDs, route metadat
 The existing workspace crates are good first splits, but they mostly isolate leaves. The center of gravity is still inside the root crate, especially around:
 
 - session state
-- provider trait and runtime behavior
+- provider runtime behavior and concrete provider composition
 - server lifecycle
 - tool registry wiring
 - TUI app state and reducers
@@ -340,7 +340,7 @@ These own product behavior but should depend only downward on contracts/support 
 
 Target crates:
 
-- `jcode-provider`: provider trait, provider composition, provider routing, streaming contract adapters.
+- `jcode-provider`: provider composition, provider routing, streaming contract adapters, and concrete runtime implementations layered on the `jcode-provider-core` trait.
 - `jcode-agent`: turn loop, compaction orchestration, provider/tool interaction, recovery logic.
 - `jcode-session`: session model, state transitions, persistence-facing session operations.
 - `jcode-server`: daemon lifecycle, client attachment, swarm/background coordination, service registries.
