@@ -364,6 +364,12 @@ Start with the highest-leverage cache boundaries:
   result contract without depending on the root tool registry.
 - Validation: `cargo check -p jcode-tool-types --quiet`, `cargo test -p jcode-tool-types --quiet`,
   and `cargo check -p jcode --quiet` pass.
+- 2026-05-05: moved provider streaming contracts `StreamEvent` and `ConnectionPhase` from
+  `src/message.rs` into `jcode-message-types`, again preserving root facade re-exports. Together
+  with `ToolDefinition`, this materially reduces the root-only surface of the provider trait and
+  prepares a future `jcode-provider` crate.
+- Validation: `cargo check -p jcode-message-types --quiet`, `cargo test -p jcode-message-types --quiet`,
+  and `cargo check -p jcode --quiet` pass.
 
 - 2026-03-30: moved the workspace-map subsystem into the new `crates/jcode-tui-workspace` crate.
 - Boundary decision: move **workspace map data/model + widget rendering** first, while keeping the surrounding
