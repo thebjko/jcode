@@ -1,9 +1,13 @@
 use crate::build;
 use crate::storage;
 use anyhow::{Context, Result};
+use jcode_update_core::{
+    BACKGROUND_UPDATE_THRESHOLD, estimate_release_update_duration, estimate_source_update_duration,
+    format_duration_estimate, get_asset_name, summarize_git_pull_failure, update_estimate,
+    verify_asset_checksum_text, version_is_newer,
+};
+pub use jcode_update_core::{DownloadProgress, UpdateEstimate, format_download_progress_bar};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
-use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -13,22 +17,7 @@ const GITHUB_REPO: &str = "1jehuang/jcode";
 const UPDATE_CHECK_INTERVAL: Duration = Duration::from_secs(60); // minimum gap between checks
 const UPDATE_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(120);
-const BACKGROUND_UPDATE_THRESHOLD: Duration = Duration::from_secs(15);
-const DOWNLOAD_PROGRESS_BAR_WIDTH: usize = 24;
 const DOWNLOAD_PROGRESS_UPDATE_STEP: u64 = 1_048_576;
-
-#[derive(Debug, Clone, Copy)]
-pub struct DownloadProgress {
-    pub downloaded: u64,
-    pub total: Option<u64>,
-}
-
-#[derive(Debug, Clone)]
-pub struct UpdateEstimate {
-    pub duration: Duration,
-    pub summary: String,
-    pub should_background: bool,
-}
 
 pub enum PreparedUpdate {
     None {
@@ -188,103 +177,6 @@ fn record_source_update_duration(duration: Duration) {
     }
 }
 
-fn format_duration_estimate(duration: Duration) -> String {
-    match duration.as_secs() {
-        0..=15 => "under 15s".to_string(),
-        16..=45 => "~30s".to_string(),
-        46..=90 => "~1 min".to_string(),
-        91..=180 => "~2-3 min".to_string(),
-        181..=360 => "~3-6 min".to_string(),
-        _ => "5+ min".to_string(),
-    }
-}
-
-fn estimate_release_update_duration(
-    asset_size_bytes: u64,
-    historical_secs: Option<f64>,
-) -> Duration {
-    if let Some(previous) = historical_secs {
-        return Duration::from_secs(previous.max(5.0).round() as u64);
-    }
-
-    let size_mb = asset_size_bytes as f64 / (1024.0 * 1024.0);
-    let secs = if size_mb <= 15.0 {
-        10
-    } else if size_mb <= 35.0 {
-        20
-    } else if size_mb <= 60.0 {
-        35
-    } else {
-        50
-    };
-    Duration::from_secs(secs)
-}
-
-fn estimate_source_update_duration(
-    repo_exists: bool,
-    has_previous_build: bool,
-    historical_secs: Option<f64>,
-) -> Duration {
-    if let Some(previous) = historical_secs {
-        return Duration::from_secs(previous.max(20.0).round() as u64);
-    }
-
-    let secs = if !repo_exists {
-        420
-    } else if has_previous_build {
-        90
-    } else {
-        180
-    };
-    Duration::from_secs(secs)
-}
-
-fn update_estimate(summary: String, duration: Duration) -> UpdateEstimate {
-    UpdateEstimate {
-        duration,
-        summary,
-        should_background: duration >= BACKGROUND_UPDATE_THRESHOLD,
-    }
-}
-
-fn get_asset_name() -> &'static str {
-    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-    {
-        "jcode-linux-x86_64"
-    }
-    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
-    {
-        "jcode-linux-aarch64"
-    }
-    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-    {
-        "jcode-macos-x86_64"
-    }
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-    {
-        "jcode-macos-aarch64"
-    }
-    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-    {
-        "jcode-windows-x86_64.exe"
-    }
-    #[cfg(all(target_os = "windows", target_arch = "aarch64"))]
-    {
-        "jcode-windows-aarch64.exe"
-    }
-    #[cfg(not(any(
-        all(target_os = "linux", target_arch = "x86_64"),
-        all(target_os = "linux", target_arch = "aarch64"),
-        all(target_os = "macos", target_arch = "x86_64"),
-        all(target_os = "macos", target_arch = "aarch64"),
-        all(target_os = "windows", target_arch = "x86_64"),
-        all(target_os = "windows", target_arch = "aarch64"),
-    )))]
-    {
-        "jcode-unknown"
-    }
-}
-
 pub fn should_auto_update() -> bool {
     if std::env::var("JCODE_NO_AUTO_UPDATE").is_ok() {
         return false;
@@ -301,38 +193,6 @@ pub fn should_auto_update() -> bool {
     }
 
     true
-}
-
-fn summarize_git_pull_failure(stderr: &[u8]) -> String {
-    let stderr = String::from_utf8_lossy(stderr);
-    let text = stderr.trim();
-    if text.is_empty() {
-        return "git pull failed".to_string();
-    }
-
-    if text.contains("Need to specify how to reconcile divergent branches")
-        || text.contains("Not possible to fast-forward")
-        || text.contains("refusing to merge unrelated histories")
-    {
-        return "git pull requires manual reconciliation (local and upstream have diverged)"
-            .to_string();
-    }
-
-    if text.contains("There is no tracking information for the current branch") {
-        return "git pull failed: current branch has no upstream tracking branch".to_string();
-    }
-
-    let line = text
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty() && !line.starts_with("hint:"))
-        .unwrap_or("git pull failed");
-    let line = line.strip_prefix("fatal: ").unwrap_or(line);
-    if line.eq_ignore_ascii_case("git pull failed") {
-        "git pull failed".to_string()
-    } else {
-        format!("git pull failed: {}", line)
-    }
 }
 
 pub fn run_git_pull_ff_only(repo_dir: &Path, quiet: bool) -> Result<()> {
@@ -433,64 +293,6 @@ fn platform_asset(release: &GitHubRelease) -> Result<&GitHubAsset> {
 
 fn checksum_asset(release: &GitHubRelease) -> Option<&GitHubAsset> {
     release.assets.iter().find(|a| a.name == "SHA256SUMS")
-}
-
-fn parse_sha256sums(contents: &str) -> Result<HashMap<String, String>> {
-    let mut checksums = HashMap::new();
-    for (line_idx, line) in contents.lines().enumerate() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-
-        let mut parts = line.split_whitespace();
-        let Some(checksum) = parts.next() else {
-            continue;
-        };
-        let Some(name) = parts.next() else {
-            anyhow::bail!("Invalid SHA256SUMS line {}: missing filename", line_idx + 1);
-        };
-        if parts.next().is_some() {
-            anyhow::bail!(
-                "Invalid SHA256SUMS line {}: expected '<sha256>  <filename>'",
-                line_idx + 1
-            );
-        }
-        if checksum.len() != 64 || !checksum.chars().all(|c| c.is_ascii_hexdigit()) {
-            anyhow::bail!(
-                "Invalid SHA256SUMS line {}: invalid SHA256 digest",
-                line_idx + 1
-            );
-        }
-
-        let name = name.trim_start_matches('*').to_string();
-        let previous = checksums.insert(name.clone(), checksum.to_ascii_lowercase());
-        if previous.is_some() {
-            anyhow::bail!(
-                "Invalid SHA256SUMS line {}: duplicate entry for {}",
-                line_idx + 1,
-                name
-            );
-        }
-    }
-    Ok(checksums)
-}
-
-fn verify_asset_checksum_text(contents: &str, asset_name: &str, bytes: &[u8]) -> Result<()> {
-    let checksums = parse_sha256sums(contents)?;
-    let expected = checksums
-        .get(asset_name)
-        .ok_or_else(|| anyhow::anyhow!("SHA256SUMS does not list {}", asset_name))?;
-    let actual = format!("{:x}", Sha256::digest(bytes));
-    if !actual.eq_ignore_ascii_case(expected) {
-        anyhow::bail!(
-            "Checksum mismatch for {}: expected {}, got {}",
-            asset_name,
-            expected,
-            actual
-        );
-    }
-    Ok(())
 }
 
 fn verify_asset_checksum_if_available(
@@ -972,21 +774,6 @@ fn build_from_source() -> Result<PathBuf> {
     Ok(binary)
 }
 
-fn version_is_newer(release: &str, current: &str) -> bool {
-    let parse = |v: &str| -> (u32, u32, u32) {
-        let v = v.trim_start_matches('v');
-        let parts: Vec<&str> = v.split('.').collect();
-        let major = parts.first().and_then(|s| s.parse().ok()).unwrap_or(0);
-        let minor = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
-        let patch = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
-        (major, minor, patch)
-    };
-
-    let r = parse(release);
-    let c = parse(current);
-    r > c
-}
-
 pub fn download_and_install_blocking(release: &GitHubRelease) -> Result<PathBuf> {
     download_and_install_blocking_with_progress(release, |_| {})
 }
@@ -1148,43 +935,6 @@ pub fn download_and_install_blocking_with_progress(
     Ok(versioned_path)
 }
 
-pub fn format_download_progress_bar(progress: DownloadProgress) -> String {
-    let human_downloaded = format_bytes(progress.downloaded);
-    let Some(total) = progress.total.filter(|total| *total > 0) else {
-        return format!("Downloading update... {} downloaded", human_downloaded);
-    };
-
-    let ratio = (progress.downloaded as f64 / total as f64).clamp(0.0, 1.0);
-    let filled = (ratio * DOWNLOAD_PROGRESS_BAR_WIDTH as f64).round() as usize;
-    let filled = filled.min(DOWNLOAD_PROGRESS_BAR_WIDTH);
-    let empty = DOWNLOAD_PROGRESS_BAR_WIDTH.saturating_sub(filled);
-    let percent = (ratio * 100.0).round() as u64;
-    format!(
-        "Downloading update... [{}{}] {:>3}% ({}/{})",
-        "█".repeat(filled),
-        "░".repeat(empty),
-        percent,
-        human_downloaded,
-        format_bytes(total)
-    )
-}
-
-fn format_bytes(bytes: u64) -> String {
-    const KIB: f64 = 1024.0;
-    const MIB: f64 = KIB * 1024.0;
-    const GIB: f64 = MIB * 1024.0;
-    let bytes_f = bytes as f64;
-    if bytes_f >= GIB {
-        format!("{:.1} GiB", bytes_f / GIB)
-    } else if bytes_f >= MIB {
-        format!("{:.1} MiB", bytes_f / MIB)
-    } else if bytes_f >= KIB {
-        format!("{:.1} KiB", bytes_f / KIB)
-    } else {
-        format!("{} B", bytes)
-    }
-}
-
 pub enum UpdateCheckResult {
     NoUpdate,
     UpdateAvailable {
@@ -1268,6 +1018,8 @@ pub fn check_and_maybe_update(auto_install: bool) -> UpdateCheckResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use jcode_update_core::parse_sha256sums;
+    use sha2::{Digest, Sha256};
 
     #[test]
     fn test_version_is_newer() {
