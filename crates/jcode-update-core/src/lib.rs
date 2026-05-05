@@ -1,4 +1,5 @@
 use anyhow::Result;
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::time::Duration;
@@ -17,6 +18,29 @@ pub struct UpdateEstimate {
     pub duration: Duration,
     pub summary: String,
     pub should_background: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct GitHubRelease {
+    pub tag_name: String,
+    #[serde(rename = "name")]
+    pub _name: Option<String>,
+    #[serde(rename = "html_url")]
+    pub _html_url: String,
+    #[serde(rename = "published_at")]
+    pub _published_at: Option<String>,
+    pub assets: Vec<GitHubAsset>,
+    #[serde(default)]
+    #[serde(rename = "target_commitish")]
+    pub _target_commitish: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct GitHubAsset {
+    pub name: String,
+    pub browser_download_url: String,
+    #[serde(rename = "size")]
+    pub _size: u64,
 }
 
 pub fn format_duration_estimate(duration: Duration) -> String {

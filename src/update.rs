@@ -6,7 +6,9 @@ use jcode_update_core::{
     format_duration_estimate, get_asset_name, summarize_git_pull_failure, update_estimate,
     verify_asset_checksum_text, version_is_newer,
 };
-pub use jcode_update_core::{DownloadProgress, UpdateEstimate, format_download_progress_bar};
+pub use jcode_update_core::{
+    DownloadProgress, GitHubAsset, GitHubRelease, UpdateEstimate, format_download_progress_bar,
+};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Read;
@@ -74,29 +76,6 @@ pub fn is_release_build() -> bool {
 
 fn current_update_semver() -> &'static str {
     env!("JCODE_UPDATE_SEMVER")
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct GitHubRelease {
-    pub tag_name: String,
-    #[serde(rename = "name")]
-    pub _name: Option<String>,
-    #[serde(rename = "html_url")]
-    pub _html_url: String,
-    #[serde(rename = "published_at")]
-    pub _published_at: Option<String>,
-    pub assets: Vec<GitHubAsset>,
-    #[serde(default)]
-    #[serde(rename = "target_commitish")]
-    pub _target_commitish: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct GitHubAsset {
-    pub name: String,
-    pub browser_download_url: String,
-    #[serde(rename = "size")]
-    pub _size: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
