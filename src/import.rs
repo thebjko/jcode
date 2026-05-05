@@ -10,8 +10,9 @@ use chrono::{DateTime, Utc};
 use jcode_import_core::{
     ClaudeCodeContent, ClaudeCodeContentBlock, ClaudeCodeEntry, ClaudeCodeSessionInfo,
     SessionIndexEntry, SessionsIndex, claude_code_session_info_from_index,
-    claude_text_from_content, clean_optional_text, ordered_claude_code_message_entries,
-    parse_rfc3339_string, resolve_claude_session_path,
+    claude_text_from_content, clean_optional_text, codex_title_candidate,
+    extract_text_from_json_value, ordered_claude_code_message_entries, parse_rfc3339_json,
+    parse_rfc3339_string, resolve_claude_session_path, truncate_title,
 };
 pub use jcode_import_core::{
     imported_claude_code_session_id, imported_codex_session_id, imported_opencode_session_id,
@@ -654,69 +655,6 @@ fn collect_recent_files_recursive(root: &Path, extension: &str, limit: usize) ->
     files.into_iter().map(|(_, path)| path).collect()
 }
 
-fn parse_rfc3339(value: Option<&serde_json::Value>) -> Option<DateTime<Utc>> {
-    value
-        .and_then(|v| v.as_str())
-        .and_then(|ts| DateTime::parse_from_rfc3339(ts).ok())
-        .map(|dt| dt.with_timezone(&Utc))
-}
-
-fn extract_text_from_json_value(value: &serde_json::Value) -> String {
-    fn visit(value: &serde_json::Value, out: &mut Vec<String>) {
-        match value {
-            serde_json::Value::String(text) => {
-                if !text.trim().is_empty() {
-                    out.push(text.trim().to_string());
-                }
-            }
-            serde_json::Value::Array(items) => {
-                for item in items {
-                    visit(item, out);
-                }
-            }
-            serde_json::Value::Object(map) => {
-                if let Some(text) = map.get("text").and_then(|v| v.as_str()) {
-                    if !text.trim().is_empty() {
-                        out.push(text.trim().to_string());
-                    }
-                    return;
-                }
-                if let Some(text) = map.get("title").and_then(|v| v.as_str())
-                    && !text.trim().is_empty()
-                {
-                    out.push(text.trim().to_string());
-                }
-                for (key, nested) in map {
-                    if key == "type" || key == "title" {
-                        continue;
-                    }
-                    visit(nested, out);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    let mut out = Vec::new();
-    visit(value, &mut out);
-    out.join(" ")
-}
-
-fn codex_title_candidate(text: &str) -> Option<String> {
-    let cleaned = text.replace("<environment_context>", "");
-    let cleaned = cleaned.trim();
-    if cleaned.is_empty() {
-        return None;
-    }
-    if cleaned.starts_with("# AGENTS.md instructions")
-        || cleaned.starts_with("<permissions instructions>")
-        || cleaned.contains("\n<INSTRUCTIONS>")
-    {
-        return None;
-    }
-    Some(truncate_title(cleaned))
-}
-
 fn append_text_message(
     session: &mut Session,
     role: Role,
@@ -808,8 +746,8 @@ pub fn import_codex_session_from_path(
         .or(session_id_hint)
         .ok_or_else(|| anyhow::anyhow!("Codex session id missing in {}", path.display()))?;
 
-    let created_at = parse_rfc3339(meta.get("timestamp"))
-        .or_else(|| parse_rfc3339(header.get("timestamp")))
+    let created_at = parse_rfc3339_json(meta.get("timestamp"))
+        .or_else(|| parse_rfc3339_json(header.get("timestamp")))
         .unwrap_or_else(Utc::now);
     let mut updated_at = Some(created_at);
     let mut title: Option<String> = None;
@@ -890,7 +828,7 @@ pub fn import_codex_session_from_path(
         if model.is_none() {
             model = model_value.and_then(|v| v.as_str()).map(|s| s.to_string());
         }
-        let timestamp = parse_rfc3339(timestamp_value);
+        let timestamp = parse_rfc3339_json(timestamp_value);
         if timestamp.is_some() {
             updated_at = timestamp;
         }
@@ -921,7 +859,7 @@ pub fn import_pi_session(session_path: &str) -> Result<Session> {
         .and_then(|v| v.as_str())
         .unwrap_or_default()
         .to_string();
-    let created_at = parse_rfc3339(header.get("timestamp")).unwrap_or_else(Utc::now);
+    let created_at = parse_rfc3339_json(header.get("timestamp")).unwrap_or_else(Utc::now);
     let mut updated_at = Some(created_at);
     let mut title: Option<String> = None;
     let mut model: Option<String> = None;
@@ -946,7 +884,7 @@ pub fn import_pi_session(session_path: &str) -> Result<Session> {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
             continue;
         };
-        let timestamp = parse_rfc3339(value.get("timestamp"));
+        let timestamp = parse_rfc3339_json(value.get("timestamp"));
         if timestamp.is_some() {
             updated_at = timestamp;
         }
@@ -1119,53 +1057,6 @@ pub fn import_opencode_session_from_path(
     session.provider_key = provider_key;
     session.model = model;
     finalize_imported_session(session, created_at, updated_at)
-}
-
-/// Truncate a string to use as a title (first line, max 80 chars)
-fn truncate_title(s: &str) -> String {
-    let first_line = s.lines().next().unwrap_or(s);
-    if first_line.len() > 80 {
-        format!("{}...", &first_line[..77])
-    } else {
-        first_line.to_string()
-    }
-}
-
-/// Print sessions in a formatted table
-pub fn print_sessions_table(sessions: &[ClaudeCodeSessionInfo]) {
-    if sessions.is_empty() {
-        println!("No Claude Code sessions found.");
-        return;
-    }
-
-    println!("Claude Code Sessions:\n");
-    println!(
-        "{:<36}  {:>5}  {:<20}  First Prompt",
-        "Session ID", "Msgs", "Modified"
-    );
-    println!("{}", "-".repeat(100));
-
-    for session in sessions {
-        let modified = session
-            .modified
-            .map(|d| d.format("%Y-%m-%d %H:%M").to_string())
-            .unwrap_or_else(|| "Unknown".to_string());
-
-        let prompt = if session.first_prompt.len() > 40 {
-            format!("{}...", &session.first_prompt[..37])
-        } else {
-            session.first_prompt.clone()
-        };
-
-        println!(
-            "{:<36}  {:>5}  {:<20}  {}",
-            session.session_id, session.message_count, modified, prompt
-        );
-    }
-
-    println!("\nTotal: {} sessions", sessions.len());
-    println!("\nTo import a session:");
-    println!("  jcode import session <session-id>");
 }
 
 #[cfg(test)]
