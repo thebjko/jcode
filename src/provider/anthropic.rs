@@ -10,6 +10,13 @@ use crate::message::{ContentBlock, Message, Role, StreamEvent, ToolDefinition};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use futures::StreamExt;
+use jcode_provider_core::{
+    ANTHROPIC_OAUTH_BETA_HEADERS, anthropic_effectively_1m, anthropic_is_1m_model as is_1m_model,
+    anthropic_map_tool_name_for_oauth as map_tool_name_for_oauth,
+    anthropic_map_tool_name_from_oauth as map_tool_name_from_oauth, anthropic_oauth_beta_headers,
+    anthropic_stainless_arch as stainless_arch, anthropic_stainless_os as stainless_os,
+    anthropic_strip_1m_suffix as strip_1m_suffix,
+};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -45,19 +52,16 @@ pub(crate) const CLAUDE_CLI_USER_AGENT: &str = "claude-cli/2.1.123 (external, sd
 pub(crate) const OAUTH_BILLING_HEADER: &str =
     "cc_version=2.1.123; cc_entrypoint=sdk-cli; cch=33f85;";
 
-/// Beta headers required for OAuth (tool-enabled Claude Code style)
-pub(crate) const OAUTH_BETA_HEADERS: &str = "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,advisor-tool-2026-03-01,advanced-tool-use-2025-11-20,effort-2025-11-24";
+pub(crate) const OAUTH_BETA_HEADERS: &str = ANTHROPIC_OAUTH_BETA_HEADERS;
+#[cfg(test)]
+pub(crate) const OAUTH_BETA_HEADERS_1M: &str = jcode_provider_core::ANTHROPIC_OAUTH_BETA_HEADERS_1M;
 
-/// Beta headers with 1M context
-const OAUTH_BETA_HEADERS_1M: &str = "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,advisor-tool-2026-03-01,advanced-tool-use-2025-11-20,effort-2025-11-24,context-1m-2025-08-07";
+pub fn effectively_1m(model: &str) -> bool {
+    anthropic_effectively_1m(model)
+}
 
-/// Get the appropriate beta headers based on model
 fn oauth_beta_headers(model: &str) -> &'static str {
-    if is_1m_model(model) {
-        OAUTH_BETA_HEADERS_1M
-    } else {
-        OAUTH_BETA_HEADERS
-    }
+    anthropic_oauth_beta_headers(model)
 }
 
 pub(crate) fn new_oauth_request_id() -> String {
@@ -80,23 +84,6 @@ pub(crate) fn apply_oauth_attribution_headers(
         .header("X-Stainless-Runtime-Version", "v24.3.0")
         .header("X-Stainless-Timeout", "600")
         .header("anthropic-dangerous-direct-browser-access", "true")
-}
-
-fn stainless_arch() -> &'static str {
-    match std::env::consts::ARCH {
-        "x86_64" => "x64",
-        "aarch64" => "arm64",
-        other => other,
-    }
-}
-
-fn stainless_os() -> &'static str {
-    match std::env::consts::OS {
-        "linux" => "Linux",
-        "macos" => "MacOS",
-        "windows" => "Windows",
-        other => other,
-    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -378,21 +365,6 @@ async fn ensure_oauth_preflight(
     Ok(())
 }
 
-/// Check if a model name explicitly requests 1M context via suffix (e.g. "claude-opus-4-6[1m]")
-fn is_1m_model(model: &str) -> bool {
-    model.ends_with("[1m]")
-}
-
-/// Check if a model explicitly requests 1M context via the [1m] suffix.
-pub fn effectively_1m(model: &str) -> bool {
-    is_1m_model(model)
-}
-
-/// Strip the [1m] suffix to get the actual API model name
-fn strip_1m_suffix(model: &str) -> &str {
-    model.strip_suffix("[1m]").unwrap_or(model)
-}
-
 /// Default model
 const DEFAULT_MODEL: &str = "claude-opus-4-6";
 
@@ -401,39 +373,6 @@ const API_VERSION: &str = "2023-06-01";
 
 /// Claude Agent SDK identity block observed in the official Claude Code client.
 const CLAUDE_CODE_IDENTITY: &str = "You are a Claude agent, built on Anthropic's Claude Agent SDK.";
-
-fn map_tool_name_for_oauth(name: &str) -> String {
-    match name {
-        "bash" => "Bash",
-        "read" => "Read",
-        "write" => "Write",
-        "edit" => "Edit",
-        "glob" => "Glob",
-        "grep" => "Grep",
-        "subagent" => "Agent",
-        "schedule" => "ScheduleWakeup",
-        "skill_manage" => "Skill",
-        _ => name,
-    }
-    .to_string()
-}
-
-fn map_tool_name_from_oauth(name: &str) -> String {
-    match name {
-        "Bash" => "bash",
-        "Read" => "read",
-        "Write" => "write",
-        "Edit" => "edit",
-        "Glob" => "glob",
-        "Grep" => "grep",
-        "Agent" => "subagent",
-        "ScheduleWakeup" => "schedule",
-        "Skill" => "skill_manage",
-        // ToolSearch intentionally has no direct local analogue yet.
-        _ => name,
-    }
-    .to_string()
-}
 
 /// Maximum number of retries for transient errors
 const MAX_RETRIES: u32 = 3;
