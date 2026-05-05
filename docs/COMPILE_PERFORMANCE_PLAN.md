@@ -347,6 +347,12 @@ Start with the highest-leverage cache boundaries:
   `Provider` trait or network implementations prematurely.
 - Validation: `cargo test -p jcode-provider-core --quiet`, `cargo test -p jcode pricing:: --quiet`,
   `cargo check -p jcode --quiet`, and `cargo check -p jcode --features embeddings --quiet` pass.
+- 2026-05-05: moved provider failover prompt/decision/classifier contracts and provider
+  selection/fallback-order contracts into `jcode-provider-core`, leaving root provider modules as
+  facades for env/runtime/account state. This continues shrinking `src/provider/mod.rs` support
+  surfaces toward an eventual `jcode-provider` runtime crate.
+- Validation: `cargo test -p jcode-provider-core --quiet`, focused root provider selection/failover
+  tests, and `cargo check -p jcode --quiet` pass.
 
 - 2026-03-30: moved the workspace-map subsystem into the new `crates/jcode-tui-workspace` crate.
 - Boundary decision: move **workspace map data/model + widget rendering** first, while keeping the surrounding

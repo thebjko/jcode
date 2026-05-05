@@ -1,76 +1,13 @@
 use super::*;
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) enum ActiveProvider {
-    Claude,
-    OpenAI,
-    Copilot,
-    Antigravity,
-    Gemini,
-    Cursor,
-    OpenRouter,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub(super) struct ProviderAvailability {
-    pub(super) openai: bool,
-    pub(super) claude: bool,
-    pub(super) copilot: bool,
-    pub(super) antigravity: bool,
-    pub(super) gemini: bool,
-    pub(super) cursor: bool,
-    pub(super) openrouter: bool,
-    pub(super) copilot_premium_zero: bool,
-}
-
-impl ProviderAvailability {
-    pub(super) fn is_configured(self, provider: ActiveProvider) -> bool {
-        match provider {
-            ActiveProvider::Claude => self.claude,
-            ActiveProvider::OpenAI => self.openai,
-            ActiveProvider::Copilot => self.copilot,
-            ActiveProvider::Antigravity => self.antigravity,
-            ActiveProvider::Gemini => self.gemini,
-            ActiveProvider::Cursor => self.cursor,
-            ActiveProvider::OpenRouter => self.openrouter,
-        }
-    }
-}
+pub(super) use jcode_provider_core::{ActiveProvider, ProviderAvailability};
 
 impl MultiProvider {
     pub(super) fn auto_default_provider(availability: ProviderAvailability) -> ActiveProvider {
-        if availability.copilot_premium_zero && availability.copilot {
-            ActiveProvider::Copilot
-        } else if availability.openai {
-            ActiveProvider::OpenAI
-        } else if availability.claude {
-            ActiveProvider::Claude
-        } else if availability.copilot {
-            ActiveProvider::Copilot
-        } else if availability.antigravity {
-            ActiveProvider::Antigravity
-        } else if availability.gemini {
-            ActiveProvider::Gemini
-        } else if availability.cursor {
-            ActiveProvider::Cursor
-        } else if availability.openrouter {
-            ActiveProvider::OpenRouter
-        } else {
-            ActiveProvider::Claude
-        }
+        jcode_provider_core::auto_default_provider(availability)
     }
 
     pub(super) fn parse_provider_hint(value: &str) -> Option<ActiveProvider> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "claude" | "anthropic" => Some(ActiveProvider::Claude),
-            "openai" => Some(ActiveProvider::OpenAI),
-            "copilot" => Some(ActiveProvider::Copilot),
-            "antigravity" => Some(ActiveProvider::Antigravity),
-            "gemini" => Some(ActiveProvider::Gemini),
-            "cursor" => Some(ActiveProvider::Cursor),
-            "openrouter" => Some(ActiveProvider::OpenRouter),
-            _ => None,
-        }
+        jcode_provider_core::parse_provider_hint(value)
     }
 
     pub(super) fn forced_provider_from_env() -> Option<ActiveProvider> {
@@ -88,27 +25,11 @@ impl MultiProvider {
     }
 
     pub(super) fn provider_label(provider: ActiveProvider) -> &'static str {
-        match provider {
-            ActiveProvider::Claude => "Anthropic",
-            ActiveProvider::OpenAI => "OpenAI",
-            ActiveProvider::Copilot => "GitHub Copilot",
-            ActiveProvider::Antigravity => "Antigravity",
-            ActiveProvider::Gemini => "Gemini",
-            ActiveProvider::Cursor => "Cursor",
-            ActiveProvider::OpenRouter => "OpenRouter",
-        }
+        jcode_provider_core::provider_label(provider)
     }
 
     pub(super) fn provider_key(provider: ActiveProvider) -> &'static str {
-        match provider {
-            ActiveProvider::Claude => "claude",
-            ActiveProvider::OpenAI => "openai",
-            ActiveProvider::Copilot => "copilot",
-            ActiveProvider::Antigravity => "antigravity",
-            ActiveProvider::Gemini => "gemini",
-            ActiveProvider::Cursor => "cursor",
-            ActiveProvider::OpenRouter => "openrouter",
-        }
+        jcode_provider_core::provider_key(provider)
     }
 
     pub(super) fn set_active_provider(&self, provider: ActiveProvider) {
