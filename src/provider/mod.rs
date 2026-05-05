@@ -1378,6 +1378,39 @@ impl Provider for MultiProvider {
             routes.push(build_openai_oauth_route(&model, available, detail));
         }
 
+        let mut added_direct_openai_compatible_routes = false;
+        for profile in crate::provider_catalog::openai_compatible_profiles()
+            .iter()
+            .copied()
+        {
+            if !crate::provider_catalog::openai_compatible_profile_is_configured(profile) {
+                continue;
+            }
+            let resolved = crate::provider_catalog::resolve_openai_compatible_profile(profile);
+            let api_method = format!("openai-compatible:{}", resolved.id);
+            for model in crate::provider_catalog::openai_compatible_profile_static_models(profile) {
+                let already_present = routes.iter().any(|route| {
+                    route.model == model
+                        && route.provider == resolved.display_name
+                        && (route.api_method == "openai-compatible"
+                            || route.api_method == api_method)
+                });
+                if already_present {
+                    added_direct_openai_compatible_routes = true;
+                    continue;
+                }
+                routes.push(ModelRoute {
+                    model,
+                    provider: resolved.display_name.clone(),
+                    api_method: api_method.clone(),
+                    available: true,
+                    detail: resolved.api_base.clone(),
+                    cheapness: None,
+                });
+                added_direct_openai_compatible_routes = true;
+            }
+        }
+
         // GitHub Copilot models
         {
             if let Some(copilot) = self.copilot_provider() {
@@ -1506,39 +1539,6 @@ impl Provider for MultiProvider {
                         ));
                     }
                 }
-            }
-        }
-
-        let mut added_direct_openai_compatible_routes = false;
-        for profile in crate::provider_catalog::openai_compatible_profiles()
-            .iter()
-            .copied()
-        {
-            if !crate::provider_catalog::openai_compatible_profile_is_configured(profile) {
-                continue;
-            }
-            let resolved = crate::provider_catalog::resolve_openai_compatible_profile(profile);
-            let api_method = format!("openai-compatible:{}", resolved.id);
-            for model in crate::provider_catalog::openai_compatible_profile_static_models(profile) {
-                let already_present = routes.iter().any(|route| {
-                    route.model == model
-                        && route.provider == resolved.display_name
-                        && (route.api_method == "openai-compatible"
-                            || route.api_method == api_method)
-                });
-                if already_present {
-                    added_direct_openai_compatible_routes = true;
-                    continue;
-                }
-                routes.push(ModelRoute {
-                    model,
-                    provider: resolved.display_name.clone(),
-                    api_method: api_method.clone(),
-                    available: true,
-                    detail: resolved.api_base.clone(),
-                    cheapness: None,
-                });
-                added_direct_openai_compatible_routes = true;
             }
         }
 

@@ -505,6 +505,9 @@ fn load_env_api_key() -> Option<String> {
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+        .or_else(|| {
+            crate::provider_catalog::load_api_key_from_env_or_config("OPENAI_API_KEY", "openai.env")
+        })
 }
 
 pub fn extract_account_id(id_token: &str) -> Option<String> {

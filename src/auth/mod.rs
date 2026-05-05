@@ -200,6 +200,13 @@ impl AuthStatus {
                     AuthState::NotConfigured
                 }
             }
+            crate::provider_catalog::LoginProviderTarget::OpenAiApiKey => {
+                if api_key_available("OPENAI_API_KEY", "openai.env") {
+                    AuthState::Available
+                } else {
+                    AuthState::NotConfigured
+                }
+            }
             crate::provider_catalog::LoginProviderTarget::Azure => {
                 if crate::auth::azure::has_configuration() {
                     AuthState::Available
@@ -247,6 +254,13 @@ impl AuthStatus {
             crate::provider_catalog::LoginProviderTarget::OpenRouter => {
                 if self.state_for_provider(provider) == AuthState::Available {
                     "API key (`OPENROUTER_API_KEY`)".to_string()
+                } else {
+                    "not configured".to_string()
+                }
+            }
+            crate::provider_catalog::LoginProviderTarget::OpenAiApiKey => {
+                if self.state_for_provider(provider) == AuthState::Available {
+                    "API key (`OPENAI_API_KEY`)".to_string()
                 } else {
                     "not configured".to_string()
                 }
@@ -395,6 +409,20 @@ impl AuthStatus {
                         "~/.config/jcode/openrouter.env",
                     ),
                     external_api_key_source("OPENROUTER_API_KEY"),
+                ]);
+                (
+                    source,
+                    detail,
+                    AuthExpiryConfidence::NotApplicable,
+                    AuthRefreshSupport::NotApplicable,
+                    AuthValidationMethod::PresenceCheck,
+                )
+            }
+            crate::provider_catalog::LoginProviderTarget::OpenAiApiKey => {
+                let (source, detail) = summarize_sources(vec![
+                    env_source("OPENAI_API_KEY"),
+                    config_source("OPENAI_API_KEY", "openai.env", "~/.config/jcode/openai.env"),
+                    external_api_key_source("OPENAI_API_KEY"),
                 ]);
                 (
                     source,

@@ -204,6 +204,9 @@ impl App {
             crate::provider_catalog::LoginProviderTarget::Jcode => self.start_jcode_login(),
             crate::provider_catalog::LoginProviderTarget::Claude => self.start_claude_login(),
             crate::provider_catalog::LoginProviderTarget::OpenAi => self.start_openai_login(),
+            crate::provider_catalog::LoginProviderTarget::OpenAiApiKey => {
+                self.start_openai_api_key_login()
+            }
             crate::provider_catalog::LoginProviderTarget::OpenRouter => {
                 self.start_openrouter_login()
             }
@@ -802,6 +805,19 @@ impl App {
             "OPENROUTER_API_KEY",
             None,
             None,
+            false,
+            None,
+        );
+    }
+
+    fn start_openai_api_key_login(&mut self) {
+        self.start_api_key_login(
+            "OpenAI API",
+            "https://platform.openai.com/api-keys",
+            "openai.env",
+            "OPENAI_API_KEY",
+            Some("gpt-5.5"),
+            Some("https://api.openai.com/v1"),
             false,
             None,
         );
@@ -1577,18 +1593,18 @@ impl App {
                             )
                         } else if let Some(resolved) = resolved_openai_compatible.as_ref() {
                             if resolved.requires_api_key {
-                                "Fetching models now. Jcode will switch to an accessible model and open `/model` when the catalog is ready.".to_string()
+                                "Fetching models now. Jcode will switch to an accessible model and open `/model` when the catalog is ready. If the model list looks stale, run `/refresh-model-list`.".to_string()
                             } else {
                                 format!(
-                                    "Local endpoint configured at `{}`. Fetching models now; Jcode will switch to an accessible model and open `/model` when the catalog is ready.",
+                                    "Local endpoint configured at `{}`. Fetching models now; Jcode will switch to an accessible model and open `/model` when the catalog is ready. If the model list looks stale, run `/refresh-model-list`.",
                                     endpoint.as_deref().unwrap_or(resolved.api_base.as_str()),
                                 )
                             }
                         } else if key_name == "OPENROUTER_API_KEY" {
-                            "You can now use `/model` to switch to OpenRouter models.".to_string()
+                            "You can now use `/model` to switch to OpenRouter models. If the model list looks stale, run `/refresh-model-list`.".to_string()
                         } else {
                             format!(
-                                "Restart with `--provider {}` to use this backend in a new session.",
+                                "Use `--provider {}` to use this backend. If the model list looks stale, run `/refresh-model-list`.",
                                 provider.to_lowercase().replace(' ', "-")
                             )
                         };
@@ -1793,11 +1809,30 @@ impl App {
                 let result = provider.refresh_model_catalog().await;
                 match result {
                     Ok(summary) => {
-                        let models = provider.available_models_display();
-                        let selected = models
+                        let routes = provider.model_routes();
+                        let selected = routes
                             .iter()
-                            .find(|model| crate::provider::is_listable_model_name(model))
-                            .cloned();
+                            .find(|route| {
+                                route.available
+                                    && route.provider == provider_label
+                                    && route.api_method.starts_with("openai-compatible")
+                                    && crate::provider::is_listable_model_name(&route.model)
+                            })
+                            .or_else(|| {
+                                routes.iter().find(|route| {
+                                    route.available
+                                        && route.api_method.starts_with("openai-compatible")
+                                        && crate::provider::is_listable_model_name(&route.model)
+                                })
+                            })
+                            .or_else(|| {
+                                routes.iter().find(|route| {
+                                    route.available
+                                        && route.provider == provider_label
+                                        && crate::provider::is_listable_model_name(&route.model)
+                                })
+                            })
+                            .map(|route| route.model.clone());
 
                         if let Some(model) = selected {
                             match provider.set_model(&model) {
@@ -1808,7 +1843,7 @@ impl App {
                                             session_id,
                                             model: model.clone(),
                                             message: format!(
-                                                "**{} is ready.**\n\nFetched model catalog: +{} models, +{} routes, ~{} changed.\nSwitched to `{}`. The model picker is open so you can choose another accessible model.",
+                                                "**{} is ready.**\n\nFetched model catalog: +{} models, +{} routes, ~{} changed.\nSwitched to `{}`. The model picker is open so you can choose another accessible model.\n\nIf the model list ever looks stale, run `/refresh-model-list`.",
                                                 provider_label,
                                                 summary.models_added,
                                                 summary.routes_added,
@@ -1826,7 +1861,7 @@ impl App {
                                                 provider: provider_label,
                                                 success: false,
                                                 message: format!(
-                                                    "Fetched models, but failed to switch to `{}`: {}",
+                                                    "Fetched models, but failed to switch to `{}`: {}\n\nYou can run `/refresh-model-list` to retry model discovery.",
                                                     model, error
                                                 ),
                                             },
@@ -1837,11 +1872,13 @@ impl App {
                         } else {
                             crate::bus::Bus::global().publish(crate::bus::BusEvent::LoginCompleted(
                                 crate::bus::LoginCompleted {
-                                    provider: provider_label,
+                                    provider: provider_label.clone(),
                                     success: false,
                                     message:
-                                        "Fetched the model catalog, but it contained no selectable models."
-                                            .to_string(),
+                                        format!(
+                                            "Fetched the model catalog, but it contained no selectable {} models. Run `/refresh-model-list` to retry model discovery, then `jcode auth status` and `jcode auth doctor` for a structured diagnosis.",
+                                            provider_label
+                                        ),
                                 },
                             ));
                         }
@@ -1852,7 +1889,7 @@ impl App {
                                 provider: provider_label,
                                 success: false,
                                 message: format!(
-                                    "Saved the API key, but failed to refresh the model catalog:\n\n{}",
+                                    "Saved the API key, but failed to refresh the model catalog:\n\n{}\n\nRun `/refresh-model-list` to retry model discovery after checking the provider settings.",
                                     error
                                 ),
                             },
