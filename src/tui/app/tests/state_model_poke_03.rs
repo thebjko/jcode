@@ -499,6 +499,48 @@ fn test_local_model_picker_render_shows_antigravity_models_exactly_as_user_sees_
 }
 
 #[test]
+fn test_login_smoke_model_picker_renders_unstacked_provider_rows() {
+    let mut app = create_login_smoke_model_app();
+    let text = render_model_picker_text(&mut app, 110, 18);
+
+    assert!(
+        text.contains("ITEM") && text.contains("PROVIDER") && text.contains("METHOD"),
+        "rendered /model view should include user-visible picker columns, got:\n{}",
+        text
+    );
+    assert!(
+        text.contains("gpt-5.4")
+            && text.contains("OpenAI")
+            && text.contains("oauth")
+            && text.contains("api key"),
+        "OpenAI OAuth and API-key routes should be separately visible, got:\n{}",
+        text
+    );
+    assert!(
+        text.contains("glm-51-nvfp4")
+            && text.contains("Comtegra GPU Cloud")
+            && text.contains("new"),
+        "Comtegra login route should be visible and marked new, got:\n{}",
+        text
+    );
+    assert!(
+        text.contains("claude-opus-4.6") && text.contains("Copilot"),
+        "Copilot route should be visible, got:\n{}",
+        text
+    );
+    assert!(
+        text.contains("moonshotai/kimi-k2.6") && text.contains("openrouter"),
+        "OpenRouter route should be visible, got:\n{}",
+        text
+    );
+    assert!(
+        !text.contains("(2)"),
+        "provider routes should not be hidden behind stacked option counts, got:\n{}",
+        text
+    );
+}
+
+#[test]
 fn test_login_picker_preview_stays_open_and_updates_filter() {
     let mut app = create_test_app();
 

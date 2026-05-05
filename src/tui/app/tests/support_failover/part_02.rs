@@ -352,6 +352,93 @@ fn render_model_picker_text(app: &mut App, width: u16, height: u16) -> String {
 }
 
 #[derive(Clone)]
+struct LoginSmokeModelProvider;
+
+#[async_trait::async_trait]
+impl Provider for LoginSmokeModelProvider {
+    async fn complete(
+        &self,
+        _messages: &[Message],
+        _tools: &[crate::message::ToolDefinition],
+        _system: &str,
+        _resume_session_id: Option<&str>,
+    ) -> Result<crate::provider::EventStream> {
+        unimplemented!("LoginSmokeModelProvider")
+    }
+
+    fn name(&self) -> &str {
+        "login-smoke"
+    }
+
+    fn model(&self) -> String {
+        "gpt-5.4".to_string()
+    }
+
+    fn model_routes(&self) -> Vec<crate::provider::ModelRoute> {
+        vec![
+            crate::provider::ModelRoute {
+                model: "gpt-5.4".to_string(),
+                provider: "OpenAI".to_string(),
+                api_method: "openai-oauth".to_string(),
+                available: true,
+                detail: String::new(),
+                cheapness: None,
+            },
+            crate::provider::ModelRoute {
+                model: "gpt-5.4".to_string(),
+                provider: "OpenAI".to_string(),
+                api_method: "openai-api-key".to_string(),
+                available: true,
+                detail: String::new(),
+                cheapness: None,
+            },
+            crate::provider::ModelRoute {
+                model: "glm-51-nvfp4".to_string(),
+                provider: "Comtegra GPU Cloud".to_string(),
+                api_method: "openai-compatible:comtegra".to_string(),
+                available: true,
+                detail: "recently added · https://llm.comtegra.cloud/v1".to_string(),
+                cheapness: None,
+            },
+            crate::provider::ModelRoute {
+                model: "claude-opus-4.6".to_string(),
+                provider: "Copilot".to_string(),
+                api_method: "copilot".to_string(),
+                available: true,
+                detail: String::new(),
+                cheapness: None,
+            },
+            crate::provider::ModelRoute {
+                model: "moonshotai/kimi-k2.6".to_string(),
+                provider: "auto".to_string(),
+                api_method: "openrouter".to_string(),
+                available: true,
+                detail: String::new(),
+                cheapness: None,
+            },
+        ]
+    }
+
+    fn fork(&self) -> Arc<dyn Provider> {
+        Arc::new(self.clone())
+    }
+}
+
+fn create_login_smoke_model_app() -> App {
+    ensure_test_jcode_home_if_unset();
+    clear_persisted_test_ui_state();
+    crate::tui::ui::clear_test_render_state_for_tests();
+
+    let provider: Arc<dyn Provider> = Arc::new(LoginSmokeModelProvider);
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let registry = rt.block_on(crate::tool::Registry::new(provider.clone()));
+    let mut app = App::new(provider, registry);
+    app.queue_mode = false;
+    app.diff_mode = crate::config::DiffDisplayMode::Inline;
+    app
+}
+
+#[derive(Clone)]
 struct FailingModelSwitchProvider;
 
 #[async_trait::async_trait]
