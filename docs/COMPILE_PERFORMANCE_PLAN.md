@@ -376,6 +376,12 @@ Start with the highest-leverage cache boundaries:
   type crate rather than the root crate facade.
 - Validation: `cargo check -p jcode-message-types --quiet`, `cargo test -p jcode-message-types --quiet`,
   and `cargo check -p jcode --quiet` pass.
+- 2026-05-05: moved pure message helpers for fresh-user-turn detection, stable message hashing,
+  tool ID sanitization, and the missing-tool-output constant into `jcode-message-types`. Root keeps
+  secret redaction and generated-image visual context because those still depend on regex/env/fs/base64
+  integration details.
+- Validation: `cargo check -p jcode-message-types --quiet`, focused root message helper tests, and
+  `cargo check -p jcode --quiet` pass.
 
 - 2026-03-30: moved the workspace-map subsystem into the new `crates/jcode-tui-workspace` crate.
 - Boundary decision: move **workspace map data/model + widget rendering** first, while keeping the surrounding
