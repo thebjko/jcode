@@ -354,6 +354,11 @@ Start with the highest-leverage cache boundaries:
 - Validation: `cargo test -p jcode-provider-core --quiet`, focused root provider selection/failover
   tests, and `cargo check -p jcode --quiet` pass.
 
+- 2026-05-05: moved the stable provider-facing `ToolDefinition` contract from `src/message.rs` into
+  `jcode-message-types` and re-exported it from the root message facade. This is a prerequisite for
+  shrinking the provider trait and tool registry surfaces away from root-crate-only message types.
+- Validation: `cargo test -p jcode-message-types --quiet` and `cargo check -p jcode --quiet` pass.
+
 - 2026-03-30: moved the workspace-map subsystem into the new `crates/jcode-tui-workspace` crate.
 - Boundary decision: move **workspace map data/model + widget rendering** first, while keeping the surrounding
   `info_widget`, app state, and higher-level TUI composition in the main crate.

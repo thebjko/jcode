@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::sync::OnceLock;
 
-pub use jcode_message_types::{InputShellResult, ToolCall};
+pub use jcode_message_types::{InputShellResult, ToolCall, ToolDefinition};
 
 mod notifications;
 
@@ -516,58 +516,6 @@ pub fn redact_secrets(text: &str) -> String {
     }
 
     redacted
-}
-
-/// Tool definition for the API
-#[derive(Debug, Clone, Serialize)]
-pub struct ToolDefinition {
-    pub name: String,
-    // Prompt-visible text sent to the model by provider adapters.
-    // Approximate prompt cost: description.len() / 4. Use
-    // ToolDefinition::description_token_estimate() when reviewing tool bloat.
-    pub description: String,
-    pub input_schema: serde_json::Value,
-}
-
-impl ToolDefinition {
-    /// Serialized size of the full tool definition payload sent to providers.
-    pub fn prompt_chars(&self) -> usize {
-        serde_json::json!({
-            "name": self.name,
-            "description": self.description,
-            "input_schema": self.input_schema,
-        })
-        .to_string()
-        .len()
-    }
-
-    /// Approximate prompt-token cost of this tool's top-level description.
-    ///
-    /// This uses jcode's standard chars/4 heuristic, matching other token
-    /// budget estimates in the codebase.
-    pub fn description_token_estimate(&self) -> usize {
-        crate::util::estimate_tokens(&self.description)
-    }
-
-    /// Approximate prompt-token cost of the full tool definition payload.
-    pub fn prompt_token_estimate(&self) -> usize {
-        crate::util::estimate_tokens(
-            &serde_json::json!({
-                "name": self.name,
-                "description": self.description,
-                "input_schema": self.input_schema,
-            })
-            .to_string(),
-        )
-    }
-
-    pub fn aggregate_prompt_chars(defs: &[ToolDefinition]) -> usize {
-        defs.iter().map(Self::prompt_chars).sum()
-    }
-
-    pub fn aggregate_prompt_token_estimate(defs: &[ToolDefinition]) -> usize {
-        defs.iter().map(Self::prompt_token_estimate).sum()
-    }
 }
 
 pub const GENERATED_IMAGE_TOOL_NAME: &str = "image_generation";
