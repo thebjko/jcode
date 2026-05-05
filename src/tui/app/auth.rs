@@ -1559,6 +1559,7 @@ impl App {
                             {
                                 crate::env::set_var("JCODE_OPENROUTER_MODEL", default_model);
                             }
+                            self.start_openai_compatible_post_login_activation(provider.clone());
                         }
 
                         let effective_default_model = resolved_openai_compatible
@@ -1576,15 +1577,11 @@ impl App {
                             )
                         } else if let Some(resolved) = resolved_openai_compatible.as_ref() {
                             if resolved.requires_api_key {
-                                format!(
-                                    "Restart with `--provider {}` to use this backend in a new session.",
-                                    provider.to_lowercase().replace(' ', "-")
-                                )
+                                "Fetching models now. Jcode will switch to an accessible model and open `/model` when the catalog is ready.".to_string()
                             } else {
                                 format!(
-                                    "Local endpoint configured at `{}`. Restart with `--provider {}` to use this backend in a new session.",
+                                    "Local endpoint configured at `{}`. Fetching models now; Jcode will switch to an accessible model and open `/model` when the catalog is ready.",
                                     endpoint.as_deref().unwrap_or(resolved.api_base.as_str()),
-                                    provider.to_lowercase().replace(' ', "-")
                                 )
                             }
                         } else if key_name == "OPENROUTER_API_KEY" {
@@ -1775,6 +1772,94 @@ impl App {
             });
         } else {
             provider.on_auth_changed();
+        }
+    }
+
+    fn start_openai_compatible_post_login_activation(&mut self, provider_label: String) {
+        self.set_status_notice(format!("{}: fetching models...", provider_label));
+        self.invalidate_model_picker_cache();
+        self.open_model_picker();
+
+        // Make the newly saved OpenAI-compatible credentials usable in this
+        // session immediately. The normal LoginCompleted path also calls this,
+        // but doing it here lets the refresh task see the hot-added provider
+        // without requiring a restart or a second user action.
+        self.provider.on_auth_changed();
+
+        let provider = Arc::clone(&self.provider);
+        let session_id = self.session.id.clone();
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                let result = provider.refresh_model_catalog().await;
+                match result {
+                    Ok(summary) => {
+                        let models = provider.available_models_display();
+                        let selected = models
+                            .iter()
+                            .find(|model| crate::provider::is_listable_model_name(model))
+                            .cloned();
+
+                        if let Some(model) = selected {
+                            match provider.set_model(&model) {
+                                Ok(()) => {
+                                    crate::bus::Bus::global().publish_models_updated();
+                                    crate::bus::Bus::global().publish(
+                                        crate::bus::BusEvent::ProviderModelActivated {
+                                            session_id,
+                                            model: model.clone(),
+                                            message: format!(
+                                                "**{} is ready.**\n\nFetched model catalog: +{} models, +{} routes, ~{} changed.\nSwitched to `{}`. The model picker is open so you can choose another accessible model.",
+                                                provider_label,
+                                                summary.models_added,
+                                                summary.routes_added,
+                                                summary.routes_changed,
+                                                model
+                                            ),
+                                            open_picker: true,
+                                        },
+                                    );
+                                }
+                                Err(error) => {
+                                    crate::bus::Bus::global().publish(
+                                        crate::bus::BusEvent::LoginCompleted(
+                                            crate::bus::LoginCompleted {
+                                                provider: provider_label,
+                                                success: false,
+                                                message: format!(
+                                                    "Fetched models, but failed to switch to `{}`: {}",
+                                                    model, error
+                                                ),
+                                            },
+                                        ),
+                                    );
+                                }
+                            }
+                        } else {
+                            crate::bus::Bus::global().publish(crate::bus::BusEvent::LoginCompleted(
+                                crate::bus::LoginCompleted {
+                                    provider: provider_label,
+                                    success: false,
+                                    message:
+                                        "Fetched the model catalog, but it contained no selectable models."
+                                            .to_string(),
+                                },
+                            ));
+                        }
+                    }
+                    Err(error) => {
+                        crate::bus::Bus::global().publish(crate::bus::BusEvent::LoginCompleted(
+                            crate::bus::LoginCompleted {
+                                provider: provider_label,
+                                success: false,
+                                message: format!(
+                                    "Saved the API key, but failed to refresh the model catalog:\n\n{}",
+                                    error
+                                ),
+                            },
+                        ));
+                    }
+                }
+            });
         }
     }
 

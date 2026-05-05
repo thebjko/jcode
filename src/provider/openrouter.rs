@@ -422,12 +422,24 @@ async fn fetch_models_from_api(
         apply_kimi_coding_agent_headers(auth.apply(client.get(&url)).await?, &api_base, None)
             .send()
             .await
-            .with_context(|| format!("Failed to fetch models from {}", api_base))?;
+            .with_context(|| {
+                format!(
+                    "Failed to send OpenAI-compatible model catalog request\n  endpoint: {}\n  auth: {}\nHint: check network connectivity, DNS/TLS, and that the base URL includes the API version (usually /v1).",
+                    url,
+                    auth.label()
+                )
+            })?;
 
     if !response.status().is_success() {
         let status = response.status();
         let body = crate::util::http_error_body(response, "HTTP error").await;
-        anyhow::bail!("Model catalog API error ({}): {}", status, body);
+        anyhow::bail!(
+            "OpenAI-compatible model catalog request failed\n  endpoint: {}\n  auth: {}\n  status: {}\n  response: {}\nHint: verify the base URL includes the API version (usually /v1), the key is valid for this endpoint, and the provider supports GET /models.",
+            url,
+            auth.label(),
+            status,
+            body
+        );
     }
 
     #[derive(Deserialize)]
@@ -435,10 +447,18 @@ async fn fetch_models_from_api(
         data: Vec<ModelInfo>,
     }
 
-    let models_response: ModelsResponse = response
-        .json()
+    let raw_body = response
+        .text()
         .await
-        .context("Failed to parse models response")?;
+        .with_context(|| format!("Failed to read model catalog response body from {}", url))?;
+    let models_response: ModelsResponse = serde_json::from_str(&raw_body).with_context(|| {
+        format!(
+            "Failed to parse OpenAI-compatible model catalog response\n  endpoint: {}\n  auth: {}\n  expected: JSON object with a `data` array of model objects containing at least `id`\n  response: {}",
+            url,
+            auth.label(),
+            crate::util::truncate_str(&raw_body.trim().replace('\n', "\\n"), 1200)
+        )
+    })?;
 
     save_disk_cache(&models_response.data);
 

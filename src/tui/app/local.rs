@@ -162,6 +162,29 @@ pub(super) fn handle_bus_event(
             app.invalidate_model_picker_cache();
             true
         }
+        Ok(BusEvent::ProviderModelActivated {
+            session_id,
+            model,
+            message,
+            open_picker,
+        }) => {
+            if session_id != app.session.id {
+                return false;
+            }
+            app.provider_session_id = None;
+            app.session.provider_session_id = None;
+            app.upstream_provider = None;
+            app.invalidate_model_picker_cache();
+            app.update_context_limit_for_model(&model);
+            app.session.model = Some(model.clone());
+            let _ = app.session.save();
+            app.push_display_message(crate::tui::DisplayMessage::system(message));
+            app.set_status_notice(format!("Model → {}", model));
+            if open_picker {
+                app.open_model_picker();
+            }
+            true
+        }
         Ok(BusEvent::UpdateStatus(status)) => {
             app.handle_update_status(status);
             true

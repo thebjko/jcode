@@ -286,6 +286,13 @@ pub enum BusEvent {
     CompactionFinished,
     /// Provider's available models list may have changed
     ModelsUpdated,
+    /// A background provider setup task selected a model for this session.
+    ProviderModelActivated {
+        session_id: String,
+        model: String,
+        message: String,
+        open_picker: bool,
+    },
     /// Side panel pages were updated for a session
     SidePanelUpdated(SidePanelUpdated),
     /// Deferred Mermaid rendering completed and cached content may now be visible
