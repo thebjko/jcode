@@ -371,6 +371,10 @@ Start with the highest-leverage cache boundaries:
   implementations and `MultiProvider` composition. This is the main provider seam needed before a
   future `jcode-provider` runtime crate can be introduced safely.
 - Validation: `cargo check -p jcode-provider-core --quiet` and `cargo check -p jcode --quiet` pass.
+- Warm-only touched-file benchmark on `src/provider/mod.rs` after the provider-core seam: first
+  self-dev build was a noisy artifact-producing **140.739s**, then the immediate rerun measured
+  **12.101s** warm `cargo check` and **27.433s** warm self-dev build. Treat the rerun as the
+  comparable steady-state datapoint.
 
 - 2026-05-05: moved the stable provider-facing `ToolDefinition` contract from `src/message.rs` into
   `jcode-message-types` and re-exported it from the root message facade. This is a prerequisite for
