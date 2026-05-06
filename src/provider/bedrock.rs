@@ -8,6 +8,7 @@ use crate::message::{
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use aws_config::BehaviorVersion;
+use aws_credential_types::Credentials;
 use aws_sdk_bedrock::Client as BedrockControlClient;
 use aws_sdk_bedrockruntime::Client as BedrockRuntimeClient;
 use aws_sdk_bedrockruntime::types::{
@@ -102,9 +103,61 @@ impl BedrockProvider {
         if let Ok(profile) =
             std::env::var("JCODE_BEDROCK_PROFILE").or_else(|_| std::env::var("AWS_PROFILE"))
         {
+            if let Some(credentials) = Self::credentials_from_aws_login_profile(&profile).await {
+                loader = loader.credentials_provider(credentials);
+            }
             loader = loader.profile_name(profile);
         }
         loader.load().await
+    }
+
+    async fn credentials_from_aws_login_profile(profile: &str) -> Option<Credentials> {
+        if std::env::var_os("AWS_ACCESS_KEY_ID").is_some()
+            || std::env::var_os("AWS_SECRET_ACCESS_KEY").is_some()
+            || std::env::var_os("AWS_BEARER_TOKEN_BEDROCK").is_some()
+        {
+            return None;
+        }
+
+        let output = tokio::process::Command::new("aws")
+            .args([
+                "configure",
+                "export-credentials",
+                "--profile",
+                profile,
+                "--format",
+                "env-no-export",
+            ])
+            .output()
+            .await
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+
+        let stdout = String::from_utf8(output.stdout).ok()?;
+        let mut access_key_id = None;
+        let mut secret_access_key = None;
+        let mut session_token = None;
+        for line in stdout.lines() {
+            let Some((key, value)) = line.split_once('=') else {
+                continue;
+            };
+            match key.trim() {
+                "AWS_ACCESS_KEY_ID" => access_key_id = Some(value.trim().to_string()),
+                "AWS_SECRET_ACCESS_KEY" => secret_access_key = Some(value.trim().to_string()),
+                "AWS_SESSION_TOKEN" => session_token = Some(value.trim().to_string()),
+                _ => {}
+            }
+        }
+
+        Some(Credentials::new(
+            access_key_id?,
+            secret_access_key?,
+            session_token,
+            None,
+            "aws-cli-export-credentials",
+        ))
     }
 
     async fn runtime_client() -> BedrockRuntimeClient {
