@@ -539,7 +539,10 @@ fn desktop_arrow_word_navigation_maps_common_modifiers() {
 
 #[test]
 fn single_session_header_exposes_desktop_binary_and_version() {
-    let app = SingleSessionApp::new(None);
+    let mut app = SingleSessionApp::new(None);
+    app.apply_session_event(session_launch::DesktopSessionEvent::SessionStarted {
+        session_id: "session_header".to_string(),
+    });
     let key = single_session_text_key(&app, PhysicalSize::new(900, 700));
     let build_version = option_env!("JCODE_DESKTOP_VERSION").unwrap_or(env!("CARGO_PKG_VERSION"));
 
@@ -552,8 +555,21 @@ fn single_session_header_exposes_desktop_binary_and_version() {
 }
 
 #[test]
-fn single_session_text_buffers_include_header_version_area() {
+fn fresh_single_session_startup_hides_top_left_chrome() {
     let app = SingleSessionApp::new(None);
+    let key = single_session_text_key(&app, PhysicalSize::new(900, 700));
+
+    assert_eq!(key.title, "");
+    assert_eq!(key.version, "");
+    assert_visual_text_contains(&key, "Start with a prompt");
+}
+
+#[test]
+fn single_session_text_buffers_include_header_version_area() {
+    let mut app = SingleSessionApp::new(None);
+    app.apply_session_event(session_launch::DesktopSessionEvent::SessionStarted {
+        session_id: "session_header_buffers".to_string(),
+    });
     let size = PhysicalSize::new(900, 700);
     let mut font_system = FontSystem::new();
     let buffers = single_session_text_buffers(&app, size, &mut font_system);

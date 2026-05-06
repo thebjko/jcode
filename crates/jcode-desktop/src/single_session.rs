@@ -1061,7 +1061,7 @@ impl SingleSessionApp {
         }
     }
 
-    fn is_empty_fresh_session(&self) -> bool {
+    pub(crate) fn is_empty_fresh_session(&self) -> bool {
         self.session.is_none()
             && self.live_session_id.is_none()
             && self.messages.is_empty()

@@ -494,10 +494,19 @@ pub(crate) fn single_session_text_key_for_tick(
     size: PhysicalSize<u32>,
     tick: u64,
 ) -> SingleSessionTextKey {
+    let hide_startup_chrome = app.is_empty_fresh_session();
     SingleSessionTextKey {
         size: (size.width, size.height),
-        title: app.header_title(),
-        version: desktop_header_version_label(),
+        title: if hide_startup_chrome {
+            String::new()
+        } else {
+            app.header_title()
+        },
+        version: if hide_startup_chrome {
+            String::new()
+        } else {
+            desktop_header_version_label()
+        },
         activity_active: app.has_activity_indicator(),
         body: single_session_visible_styled_body_for_tick(app, size, tick),
         draft: visualize_composer_whitespace(&app.composer_text()),
