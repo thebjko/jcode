@@ -164,10 +164,12 @@ fn matrix_tui_login_selection_supports_numbers_and_names() {
         resolve_login_selection("bedrock", &providers).map(|provider| provider.id),
         Some("bedrock")
     );
-    assert!(providers
-        .iter()
-        .take(6)
-        .any(|provider| provider.id == "bedrock"));
+    assert!(
+        providers
+            .iter()
+            .take(6)
+            .any(|provider| provider.id == "bedrock")
+    );
     assert!(resolve_login_selection("google", &providers).is_none());
 }
 

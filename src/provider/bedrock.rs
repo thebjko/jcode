@@ -494,6 +494,27 @@ impl BedrockProvider {
         value
     }
 
+    pub fn is_bedrock_model_id(model: &str) -> bool {
+        let trimmed = model.trim();
+        if trimmed.is_empty() {
+            return false;
+        }
+        if trimmed.starts_with("arn:aws:bedrock:") {
+            return true;
+        }
+
+        let id = Self::normalize_model_id(trimmed).to_ascii_lowercase();
+        id.starts_with("anthropic.")
+            || id.starts_with("amazon.")
+            || id.starts_with("cohere.")
+            || id.starts_with("ai21.")
+            || id.starts_with("meta.")
+            || id.starts_with("mistral.")
+            || id.starts_with("stability.")
+            || id.starts_with("writer.")
+            || id.starts_with("deepseek.")
+    }
+
     fn model_info(model: &str) -> BedrockModelInfo {
         let id = Self::normalize_model_id(model).to_ascii_lowercase();
         if id.contains("claude-opus-4") || id.contains("claude-sonnet-4") {
@@ -944,6 +965,12 @@ mod tests {
             crate::env::set_var(key, value);
             Self { key, previous }
         }
+
+        fn remove(key: &'static str) -> Self {
+            let previous = std::env::var_os(key);
+            crate::env::remove_var(key);
+            Self { key, previous }
+        }
     }
 
     impl Drop for EnvVarGuard {
@@ -959,15 +986,26 @@ mod tests {
     #[test]
     fn detects_env_credentials_requires_region_and_credential_hint() {
         let _guard = crate::storage::lock_test_env();
-        crate::env::remove_var("JCODE_BEDROCK_ENABLE");
-        crate::env::remove_var("AWS_PROFILE");
-        crate::env::remove_var("JCODE_BEDROCK_PROFILE");
-        crate::env::set_var("JCODE_BEDROCK_REGION", "us-east-1");
+        let temp = tempfile::tempdir().unwrap();
+        let _xdg = EnvVarGuard::set("XDG_CONFIG_HOME", temp.path().as_os_str());
+        let _removed = [
+            "JCODE_BEDROCK_ENABLE",
+            API_KEY_ENV,
+            REGION_ENV,
+            "AWS_REGION",
+            "AWS_DEFAULT_REGION",
+            "AWS_PROFILE",
+            "JCODE_BEDROCK_PROFILE",
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_SHARED_CREDENTIALS_FILE",
+            "AWS_CONFIG_FILE",
+        ]
+        .map(EnvVarGuard::remove);
+        crate::env::set_var(REGION_ENV, "us-east-1");
         assert!(!BedrockProvider::has_credentials());
         crate::env::set_var("AWS_PROFILE", "test");
         assert!(BedrockProvider::has_credentials());
-        crate::env::remove_var("JCODE_BEDROCK_REGION");
-        crate::env::remove_var("AWS_PROFILE");
     }
 
     #[test]

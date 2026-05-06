@@ -882,6 +882,10 @@ mod tests {
             Some("unavailable · credentials expired")
         );
         assert_eq!(
+            route_detail_display_text("no matching configured provider route", true).as_deref(),
+            Some("unavailable · no matching configured provider route")
+        );
+        assert_eq!(
             route_detail_display_text("", true).as_deref(),
             Some("unavailable")
         );

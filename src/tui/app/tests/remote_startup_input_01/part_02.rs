@@ -211,6 +211,58 @@ fn test_model_picker_remote_comtegra_model_uses_comtegra_route_not_copilot() {
 }
 
 #[test]
+fn test_model_picker_remote_bedrock_model_has_bedrock_route_when_configured() {
+    let _guard = crate::storage::lock_test_env();
+    let prev_home = std::env::var("JCODE_HOME").ok();
+    let prev_key = std::env::var(crate::provider::bedrock::API_KEY_ENV).ok();
+    let prev_region = std::env::var(crate::provider::bedrock::REGION_ENV).ok();
+    let temp = tempfile::tempdir().expect("tempdir");
+    crate::env::set_var("JCODE_HOME", temp.path().display().to_string());
+    crate::env::set_var(crate::provider::bedrock::API_KEY_ENV, "test-bedrock-key");
+    crate::env::set_var(crate::provider::bedrock::REGION_ENV, "us-east-2");
+    crate::auth::AuthStatus::invalidate_cache();
+
+    let mut app = create_test_app();
+    app.is_remote = true;
+    app.remote_available_entries = vec!["us.amazon.nova-micro-v1:0".to_string()];
+
+    app.open_model_picker();
+
+    match prev_home {
+        Some(value) => crate::env::set_var("JCODE_HOME", value),
+        None => crate::env::remove_var("JCODE_HOME"),
+    }
+    match prev_key {
+        Some(value) => crate::env::set_var(crate::provider::bedrock::API_KEY_ENV, value),
+        None => crate::env::remove_var(crate::provider::bedrock::API_KEY_ENV),
+    }
+    match prev_region {
+        Some(value) => crate::env::set_var(crate::provider::bedrock::REGION_ENV, value),
+        None => crate::env::remove_var(crate::provider::bedrock::REGION_ENV),
+    }
+    crate::auth::AuthStatus::invalidate_cache();
+
+    let picker = app
+        .inline_interactive_state
+        .as_ref()
+        .expect("model picker should be open");
+    let nova_entry = picker
+        .entries
+        .iter()
+        .find(|m| m.name == "us.amazon.nova-micro-v1:0")
+        .expect("Bedrock Nova model should be in picker");
+
+    assert!(
+        nova_entry
+            .options
+            .iter()
+            .any(|r| { r.provider == "AWS Bedrock" && r.api_method == "bedrock" && r.available }),
+        "Bedrock route should be available with credentials, got: {:?}",
+        nova_entry.options
+    );
+}
+
+#[test]
 fn test_model_picker_preserves_recommendation_priority_order() {
     let mut app = create_test_app();
     configure_test_remote_models_with_openai_recommendations(&mut app);
@@ -272,12 +324,18 @@ fn test_model_picker_preserves_recommendation_priority_order() {
         "claude-opus-4-7 should rank ahead of unrecommended gpt-5.4-pro, got {:?}",
         model_names
     );
-    assert!(picker.entries[gpt55].recommended, "gpt-5.5 should be recommended");
+    assert!(
+        picker.entries[gpt55].recommended,
+        "gpt-5.5 should be recommended"
+    );
     assert!(
         picker.entries[claude_opus].recommended,
         "claude-opus-4-7 should be recommended"
     );
-    assert!(!picker.entries[gpt54].recommended, "gpt-5.4 should not be recommended");
+    assert!(
+        !picker.entries[gpt54].recommended,
+        "gpt-5.4 should not be recommended"
+    );
     assert!(
         !picker.entries[gpt54_pro].recommended,
         "gpt-5.4-pro should not be recommended"

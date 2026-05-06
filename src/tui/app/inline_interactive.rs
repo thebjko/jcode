@@ -178,6 +178,18 @@ impl App {
                 )
             } else {
                 match crate::provider::provider_for_model(&model) {
+                    _ if crate::provider::bedrock::BedrockProvider::is_bedrock_model_id(&model) => {
+                        (
+                            "AWS Bedrock".to_string(),
+                            "bedrock".to_string(),
+                            auth.bedrock != crate::auth::AuthState::NotConfigured,
+                            if auth.bedrock == crate::auth::AuthState::NotConfigured {
+                                "no Bedrock credentials or region; run /login bedrock".to_string()
+                            } else {
+                                String::new()
+                            },
+                        )
+                    }
                     Some("claude") => (
                         "Anthropic".to_string(),
                         "claude-oauth".to_string(),
@@ -1011,13 +1023,31 @@ impl App {
                 added_any = true;
             }
 
+            if crate::provider::bedrock::BedrockProvider::is_bedrock_model_id(model) {
+                let available = auth.bedrock != crate::auth::AuthState::NotConfigured
+                    || crate::provider::bedrock::BedrockProvider::has_credentials();
+                routes.push(crate::provider::ModelRoute {
+                    model: model.clone(),
+                    provider: "AWS Bedrock".to_string(),
+                    api_method: "bedrock".to_string(),
+                    available,
+                    detail: if available {
+                        String::new()
+                    } else {
+                        "no Bedrock credentials or region; run /login bedrock".to_string()
+                    },
+                    cheapness: None,
+                });
+                added_any = true;
+            }
+
             if !added_any {
                 routes.push(crate::provider::ModelRoute {
                     model: model.clone(),
                     provider: "unknown".to_string(),
                     api_method: "unknown".to_string(),
                     available: false,
-                    detail: String::new(),
+                    detail: "no matching configured provider route".to_string(),
                     cheapness: None,
                 });
             }

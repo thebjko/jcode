@@ -1005,16 +1005,15 @@ impl Provider for MultiProvider {
             if let Some(bedrock) = self.bedrock_provider() {
                 routes.extend(bedrock.model_routes());
             } else if bedrock::BedrockProvider::has_credentials() {
-                for model in bedrock::BedrockProvider::new().available_models_display() {
-                    routes.push(ModelRoute {
-                        model,
-                        provider: "AWS Bedrock".to_string(),
-                        api_method: "bedrock".to_string(),
-                        available: false,
-                        detail: "provider not initialized".to_string(),
-                        cheapness: None,
-                    });
-                }
+                let bedrock = bedrock::BedrockProvider::new();
+                routes.extend(bedrock.model_routes().into_iter().map(|mut route| {
+                    if route.detail.trim().is_empty() {
+                        route.detail =
+                            "credentials configured; provider will initialize on selection"
+                                .to_string();
+                    }
+                    route
+                }));
             }
         }
 
@@ -1326,6 +1325,17 @@ impl Provider for MultiProvider {
                 .unwrap_or_else(|poisoned| poisoned.into_inner()) =
                 Some(Arc::new(cursor::CursorCliProvider::new()));
         }
+
+        let already_has_bedrock = self.bedrock_provider().is_some();
+        if !already_has_bedrock && bedrock::BedrockProvider::has_credentials() {
+            crate::logging::info("Hot-initialized AWS Bedrock provider after login");
+            *self
+                .bedrock
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                Some(Arc::new(bedrock::BedrockProvider::new()));
+        }
+
         if let Some(anthropic) = self.anthropic_provider() {
             Self::spawn_post_auth_model_refresh(anthropic, "Anthropic");
         }
@@ -1346,6 +1356,9 @@ impl Provider for MultiProvider {
         }
         if let Some(openrouter) = self.openrouter_provider() {
             Self::spawn_post_auth_model_refresh(openrouter, "OpenRouter");
+        }
+        if let Some(bedrock) = self.bedrock_provider() {
+            Self::spawn_post_auth_model_refresh(bedrock, "AWS Bedrock");
         }
     }
 
