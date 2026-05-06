@@ -1000,6 +1000,24 @@ impl Provider for MultiProvider {
             }
         }
 
+        // AWS Bedrock models and inference profiles
+        {
+            if let Some(bedrock) = self.bedrock_provider() {
+                routes.extend(bedrock.model_routes());
+            } else if bedrock::BedrockProvider::has_credentials() {
+                for model in bedrock::BedrockProvider::new().available_models_display() {
+                    routes.push(ModelRoute {
+                        model,
+                        provider: "AWS Bedrock".to_string(),
+                        api_method: "bedrock".to_string(),
+                        available: false,
+                        detail: "provider not initialized".to_string(),
+                        cheapness: None,
+                    });
+                }
+            }
+        }
+
         // OpenRouter models (with per-provider endpoints)
         let has_openrouter = self.openrouter_provider().is_some();
         if let Some(openrouter) = self.openrouter_provider() {
@@ -1181,6 +1199,12 @@ impl Provider for MultiProvider {
                 cursor.prefetch_models().await?;
             }
         }
+        {
+            let bedrock = self.bedrock_provider();
+            if let Some(bedrock) = bedrock {
+                bedrock.prefetch_models().await?;
+            }
+        }
         Ok(())
     }
 
@@ -1360,7 +1384,10 @@ impl Provider for MultiProvider {
                 .cursor_provider()
                 .map(|o| o.handles_tools_internally())
                 .unwrap_or(false),
-            ActiveProvider::Bedrock => false,
+            ActiveProvider::Bedrock => self
+                .bedrock_provider()
+                .map(|o| o.supports_compaction())
+                .unwrap_or(false),
             ActiveProvider::OpenRouter => false, // jcode executes tools
         }
     }
@@ -1513,7 +1540,10 @@ impl Provider for MultiProvider {
                 .cursor_provider()
                 .map(|o| o.supports_compaction())
                 .unwrap_or(false),
-            ActiveProvider::Bedrock => false,
+            ActiveProvider::Bedrock => self
+                .bedrock_provider()
+                .map(|o| o.uses_jcode_compaction())
+                .unwrap_or(false),
             ActiveProvider::OpenRouter => self
                 .openrouter_provider()
                 .map(|o| o.supports_compaction())
@@ -1720,7 +1750,10 @@ impl Provider for MultiProvider {
                 .cursor_provider()
                 .map(|o| o.context_window())
                 .unwrap_or(DEFAULT_CONTEXT_LIMIT),
-            ActiveProvider::Bedrock => DEFAULT_CONTEXT_LIMIT,
+            ActiveProvider::Bedrock => self
+                .bedrock_provider()
+                .map(|o| o.context_window())
+                .unwrap_or(DEFAULT_CONTEXT_LIMIT),
             ActiveProvider::OpenRouter => self
                 .openrouter_provider()
                 .map(|o| o.context_window())
