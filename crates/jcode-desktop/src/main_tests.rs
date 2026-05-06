@@ -678,7 +678,7 @@ fn fresh_single_session_startup_hides_top_left_chrome() {
     let key = single_session_text_key(&app, PhysicalSize::new(900, 700));
 
     assert_eq!(key.title, "");
-    assert!(key.version.starts_with("jcode "));
+    assert_eq!(key.version, "");
     assert_visual_text_contains(&key, "Hello there");
     assert!(key.welcome_hint.is_empty());
 }

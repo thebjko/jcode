@@ -644,13 +644,23 @@ fn push_single_session_composer_card(
     app: &SingleSessionApp,
     size: PhysicalSize<u32>,
 ) {
-    if app.is_welcome_chrome_visible() {
+    let welcome_input_reveal = if app.is_welcome_handoff_visible() {
+        0.0
+    } else if app.is_welcome_chrome_visible() {
+        app.welcome_input_reveal_progress()
+    } else {
+        1.0
+    };
+    if welcome_input_reveal <= 0.0 {
         return;
     }
 
     let draft_top = single_session_draft_top_for_app(app, size);
     let typography = single_session_typography();
-    let line_y = draft_top + typography.code_size * typography.code_line_height + 7.0;
+    let line_y = draft_top
+        + typography.code_size * typography.code_line_height
+        + 7.0
+        + (1.0 - welcome_input_reveal) * 8.0;
     push_rect(
         vertices,
         Rect {
@@ -659,7 +669,7 @@ fn push_single_session_composer_card(
             width: (size.width as f32 - PANEL_TITLE_LEFT_PADDING * 2.0).max(1.0),
             height: 1.5,
         },
-        COMPOSER_LINE_COLOR,
+        alpha_scaled(COMPOSER_LINE_COLOR, welcome_input_reveal),
         size,
     );
 }
@@ -1196,6 +1206,8 @@ pub(crate) fn single_session_text_key_for_tick(
     let fresh_welcome_visible = app.is_fresh_welcome_visible();
     let welcome_handoff_visible = app.is_welcome_handoff_visible();
     let welcome_chrome_visible = fresh_welcome_visible || welcome_handoff_visible;
+    let welcome_input_visible =
+        !welcome_chrome_visible || app.welcome_input_reveal_progress() >= 0.5;
     let body = single_session_visible_styled_body_for_tick(app, size, tick);
     let (welcome_hero, welcome_hint, body) = if fresh_welcome_visible {
         split_welcome_hero_lines(body)
@@ -1211,7 +1223,11 @@ pub(crate) fn single_session_text_key_for_tick(
             app.header_title()
         },
         version: if welcome_chrome_visible {
-            fresh_welcome_version_label()
+            if welcome_input_visible {
+                fresh_welcome_version_label()
+            } else {
+                String::new()
+            }
         } else {
             desktop_header_version_label()
         },
@@ -1220,7 +1236,11 @@ pub(crate) fn single_session_text_key_for_tick(
         activity_active: app.has_activity_indicator(),
         welcome_handoff_visible,
         body,
-        draft: visualize_composer_whitespace(&app.composer_text()),
+        draft: if welcome_input_visible {
+            visualize_composer_whitespace(&app.composer_text())
+        } else {
+            String::new()
+        },
         status: if welcome_chrome_visible {
             String::new()
         } else {

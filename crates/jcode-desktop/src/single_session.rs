@@ -590,6 +590,15 @@ impl SingleSessionApp {
         linear * linear * (3.0 - 2.0 * linear)
     }
 
+    pub(crate) fn welcome_input_reveal_progress(&self) -> f32 {
+        if !self.is_fresh_welcome_visible() {
+            return 1.0;
+        }
+        let elapsed = self.welcome_started_at.elapsed().as_secs_f32();
+        let linear = ((elapsed - 1.86) / 0.34).clamp(0.0, 1.0);
+        linear * linear * (3.0 - 2.0 * linear)
+    }
+
     fn current_session_id(&self) -> Option<&str> {
         self.live_session_id.as_deref().or_else(|| {
             self.session
