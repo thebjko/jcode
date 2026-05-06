@@ -346,11 +346,10 @@ pub(super) fn parse_openai_response_event(
                 .as_ref()
                 .and_then(extract_stop_reason_from_response)
                 .or_else(|| Some("incomplete".to_string()));
-            if let Some(response) = event.response {
-                enqueue_response_output_items(&response, saw_text_delta, pending);
-                if let Some(usage_event) = extract_usage_from_response(&response) {
-                    pending.push_back(usage_event);
-                }
+            if let Some(response) = event.response
+                && let Some(usage_event) = extract_usage_from_response(&response)
+            {
+                pending.push_back(usage_event);
             }
             pending.push_back(StreamEvent::MessageEnd { stop_reason });
             return pending.pop_front();
@@ -360,11 +359,10 @@ pub(super) fn parse_openai_response_event(
                 .response
                 .as_ref()
                 .and_then(extract_stop_reason_from_response);
-            if let Some(response) = event.response {
-                enqueue_response_output_items(&response, saw_text_delta, pending);
-                if let Some(usage_event) = extract_usage_from_response(&response) {
-                    pending.push_back(usage_event);
-                }
+            if let Some(response) = event.response
+                && let Some(usage_event) = extract_usage_from_response(&response)
+            {
+                pending.push_back(usage_event);
             }
             pending.push_back(StreamEvent::MessageEnd { stop_reason });
             return pending.pop_front();
@@ -385,26 +383,6 @@ pub(super) fn parse_openai_response_event(
     }
 
     None
-}
-
-fn enqueue_response_output_items(
-    response: &Value,
-    saw_text_delta: &mut bool,
-    pending: &mut VecDeque<StreamEvent>,
-) {
-    if extract_last_assistant_message_phase(response).as_deref() == Some("commentary") {
-        return;
-    }
-
-    let Some(output) = response.get("output").and_then(|value| value.as_array()) else {
-        return;
-    };
-
-    for item in output {
-        if let Some(event) = handle_openai_output_item(item.clone(), saw_text_delta, pending) {
-            pending.push_back(event);
-        }
-    }
 }
 
 fn extract_last_assistant_message_phase(response: &Value) -> Option<String> {
@@ -517,11 +495,7 @@ pub(super) fn handle_openai_output_item(
                     }
                 }
             }
-            let event = stream_text_or_recovered_tool_call(&text, pending);
-            if event.is_some() {
-                *saw_text_delta = true;
-            }
-            return event;
+            return stream_text_or_recovered_tool_call(&text, pending);
         }
         "reasoning" => {
             if let Some(summary_arr) = item.get("summary").and_then(|v| v.as_array()) {

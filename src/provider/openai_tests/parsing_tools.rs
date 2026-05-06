@@ -71,66 +71,6 @@ fn test_parse_openai_response_completed_commentary_phase_sets_stop_reason() {
 }
 
 #[test]
-fn test_parse_openai_response_completed_emits_final_output_text() {
-    let data = r#"{"type":"response.completed","response":{"status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"JCODE_PROMPT_OK"}]}],"usage":{"input_tokens":12,"output_tokens":3}}}"#;
-    let mut saw_text_delta = false;
-    let mut streaming_tool_calls = HashMap::new();
-    let mut completed_tool_items = HashSet::new();
-    let mut pending = VecDeque::new();
-
-    let event = parse_openai_response_event(
-        data,
-        &mut saw_text_delta,
-        &mut streaming_tool_calls,
-        &mut completed_tool_items,
-        &mut pending,
-    )
-    .expect("expected text event");
-
-    match event {
-        StreamEvent::TextDelta(text) => assert_eq!(text, "JCODE_PROMPT_OK"),
-        other => panic!("expected TextDelta, got {:?}", other),
-    }
-    assert!(saw_text_delta);
-    assert!(matches!(
-        pending.pop_front(),
-        Some(StreamEvent::TokenUsage {
-            input_tokens: Some(12),
-            output_tokens: Some(3),
-            ..
-        })
-    ));
-    assert!(matches!(
-        pending.pop_front(),
-        Some(StreamEvent::MessageEnd { stop_reason: None })
-    ));
-}
-
-#[test]
-fn test_parse_openai_response_completed_does_not_duplicate_after_text_delta() {
-    let data = r#"{"type":"response.completed","response":{"status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"duplicate"}]}]}}"#;
-    let mut saw_text_delta = true;
-    let mut streaming_tool_calls = HashMap::new();
-    let mut completed_tool_items = HashSet::new();
-    let mut pending = VecDeque::new();
-
-    let event = parse_openai_response_event(
-        data,
-        &mut saw_text_delta,
-        &mut streaming_tool_calls,
-        &mut completed_tool_items,
-        &mut pending,
-    )
-    .expect("expected message end");
-
-    match event {
-        StreamEvent::MessageEnd { stop_reason } => assert!(stop_reason.is_none()),
-        other => panic!("expected MessageEnd, got {:?}", other),
-    }
-    assert!(pending.is_empty());
-}
-
-#[test]
 fn test_parse_openai_response_incomplete_emits_message_end_with_reason() {
     let data = r#"{"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"content_filter"}}}"#;
     let mut saw_text_delta = false;
