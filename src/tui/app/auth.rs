@@ -1823,6 +1823,46 @@ impl App {
                                     );
                                 }
                             }
+                        } else if let Some(default_model) = crate::provider_catalog::openai_compatible_profiles()
+                            .iter()
+                            .copied()
+                            .find(|profile| {
+                                let resolved = crate::provider_catalog::resolve_openai_compatible_profile(*profile);
+                                resolved.display_name == provider_label
+                            })
+                            .and_then(|profile| crate::provider_catalog::resolve_openai_compatible_profile(profile).default_model)
+                        {
+                            match provider.set_model(&default_model) {
+                                Ok(()) => {
+                                    crate::bus::Bus::global().publish_models_updated();
+                                    crate::bus::Bus::global().publish(
+                                        crate::bus::BusEvent::ProviderModelActivated {
+                                            session_id,
+                                            model: default_model.clone(),
+                                            message: format!(
+                                                "**{} is ready.**\n\nThe live model catalog did not produce a selectable route yet, so Jcode selected the documented default `{}`. Run `/refresh-model-list` later to retry live discovery.",
+                                                provider_label,
+                                                default_model
+                                            ),
+                                            open_picker: true,
+                                        },
+                                    );
+                                }
+                                Err(error) => {
+                                    crate::bus::Bus::global().publish(crate::bus::BusEvent::LoginCompleted(
+                                        crate::bus::LoginCompleted {
+                                            provider: provider_label.clone(),
+                                            success: false,
+                                            message: format!(
+                                                "Fetched the model catalog, but it contained no selectable {} models and failed to switch to the documented default `{}`: {}\n\nRun `/refresh-model-list` to retry model discovery, then `jcode auth status` and `jcode auth doctor` for a structured diagnosis.",
+                                                provider_label,
+                                                default_model,
+                                                error
+                                            ),
+                                        },
+                                    ));
+                                }
+                            }
                         } else {
                             crate::bus::Bus::global().publish(crate::bus::BusEvent::LoginCompleted(
                                 crate::bus::LoginCompleted {

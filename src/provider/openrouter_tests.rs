@@ -138,6 +138,17 @@ fn named_openai_compatible_provider_exposes_static_models_as_routes() {
 }
 
 #[test]
+fn minimax_profile_exposes_static_models_before_catalog_refresh() {
+    let models = crate::provider_catalog::openai_compatible_profile_static_models(
+        jcode_provider_metadata::MINIMAX_PROFILE,
+    );
+
+    assert!(models.iter().any(|model| model == "MiniMax-M2.7"));
+    assert!(models.iter().any(|model| model == "MiniMax-M2.7-highspeed"));
+    assert!(models.iter().any(|model| model == "MiniMax-M2"));
+}
+
+#[test]
 fn comtegra_profile_uses_endpoint_default_max_tokens() {
     let _lock = ENV_LOCK.lock().unwrap();
     let _override = EnvVarGuard::remove("JCODE_OPENROUTER_MAX_TOKENS");

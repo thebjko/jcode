@@ -204,6 +204,18 @@ pub fn openai_compatible_profile_static_models(profile: OpenAiCompatibleProfile)
         "kimi" => {
             push("kimi-for-coding");
         }
+        // MiniMax's `/models` endpoint is authenticated and live, but post-login
+        // model activation should not depend on the catalog refresh completing
+        // before the picker/routes are rebuilt. Keep the documented text models
+        // selectable immediately after saving a key.
+        "minimax" => {
+            push("MiniMax-M2.7-highspeed");
+            push("MiniMax-M2.5");
+            push("MiniMax-M2.5-highspeed");
+            push("MiniMax-M2.1");
+            push("MiniMax-M2.1-highspeed");
+            push("MiniMax-M2");
+        }
         _ => {}
     }
 
