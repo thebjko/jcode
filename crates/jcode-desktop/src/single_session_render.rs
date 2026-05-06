@@ -732,7 +732,7 @@ pub(crate) fn single_session_text_buffers_from_key(
             key.welcome_hero.trim(),
             hero_font_size,
             hero_font_size * 1.08,
-            size.width as f32 * 0.86,
+            size.width as f32 * 0.64,
             hero_font_size * 1.25,
         ),
         single_session_styled_text_buffer(
@@ -1028,7 +1028,7 @@ pub(crate) fn single_session_text_areas(
     let bottom = size.height.saturating_sub(PANEL_TITLE_TOP_PADDING as u32) as i32;
     let draft_top = single_session_draft_top(size);
     let version_left = (size.width as f32 * 0.42).max(left + 220.0);
-    let welcome_width = size.width as f32 * 0.86;
+    let welcome_width = size.width as f32 * 0.64;
     let welcome_left = ((size.width as f32 - welcome_width) * 0.5).max(left);
     let welcome_font_size = welcome_hero_font_size("Hello there", size);
     let welcome_top = PANEL_BODY_TOP_PADDING + (draft_top - PANEL_BODY_TOP_PADDING) * 0.30;
