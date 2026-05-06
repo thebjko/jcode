@@ -1648,7 +1648,11 @@ impl<'window> Canvas<'window> {
                 contents: bytemuck::cast_slice(&vertices),
                 usage: wgpu::BufferUsages::VERTEX,
             });
-        let text_areas = single_session_text_areas(&text_buffers, self.size);
+        let text_areas = if let DesktopApp::SingleSession(single_session) = app {
+            single_session_text_areas_for_app(single_session, text_buffers, self.size)
+        } else {
+            single_session_text_areas(text_buffers, self.size)
+        };
         if !text_areas.is_empty() {
             if let Err(error) = self.text_renderer.prepare(
                 &self.device,

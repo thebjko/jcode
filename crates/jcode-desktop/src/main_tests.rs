@@ -1666,14 +1666,34 @@ fn long_single_session_transcript_exposes_scrollbar_metrics() {
 fn glyphon_caret_position_uses_shaped_draft_buffer() {
     let mut app = SingleSessionApp::new(None);
     app.handle_key(KeyInput::Character("hello".to_string()));
+    let size = PhysicalSize::new(640, 480);
     let mut font_system = FontSystem::new();
-    let buffers = single_session_text_buffers(&app, PhysicalSize::new(640, 480), &mut font_system);
+    let buffers = single_session_text_buffers(&app, size, &mut font_system);
 
-    let caret = glyphon_draft_caret_position(&app, &buffers[2], PhysicalSize::new(640, 480))
+    let caret = glyphon_draft_caret_position(&app, &buffers[2], size)
         .expect("caret position should be available from glyphon layout runs");
 
     assert!(caret.x > PANEL_TITLE_LEFT_PADDING);
-    assert!(caret.y >= single_session_draft_top(PhysicalSize::new(640, 480)));
+    assert!(caret.y >= single_session_draft_top_for_app(&app, size));
+}
+
+#[test]
+fn fresh_welcome_input_line_sits_under_hero_while_drafting() {
+    let size = PhysicalSize::new(1000, 720);
+    let mut app = SingleSessionApp::new(None);
+    let mut font_system = FontSystem::new();
+    let buffers = single_session_text_buffers(&app, size, &mut font_system);
+    let areas = single_session_text_areas_for_app(&app, &buffers, size);
+    let draft_top = fresh_welcome_draft_top(size);
+
+    assert!(draft_top < single_session_draft_top(size) - 120.0);
+    assert_eq!(areas.last().expect("draft text area").top, draft_top);
+
+    app.handle_key(KeyInput::Character("hello".to_string()));
+    let key = single_session_text_key(&app, size);
+    assert!(app.is_fresh_welcome_visible());
+    assert!(key.welcome_hero.contains("Hello there"));
+    assert_eq!(single_session_draft_top_for_app(&app, size), draft_top);
 }
 
 #[test]

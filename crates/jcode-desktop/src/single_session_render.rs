@@ -3,6 +3,7 @@ use super::*;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SingleSessionTextKey {
     pub(crate) size: (u32, u32),
+    pub(crate) fresh_welcome_visible: bool,
     pub(crate) title: String,
     pub(crate) version: String,
     pub(crate) welcome_hero: String,
@@ -54,12 +55,12 @@ pub(crate) fn build_single_session_vertices(
         size,
     );
 
-    if app.is_empty_fresh_session() {
+    if app.is_fresh_welcome_visible() {
         push_fresh_welcome_ambient(&mut vertices, size, spinner_tick);
         push_handwritten_welcome_hero(&mut vertices, size, app.welcome_reveal_progress());
     }
 
-    push_single_session_composer_card(&mut vertices, size);
+    push_single_session_composer_card(&mut vertices, app, size);
     if app.has_activity_indicator() {
         push_native_activity_spinner(&mut vertices, size, spinner_tick);
     }
@@ -116,16 +117,14 @@ pub(crate) fn push_handwritten_welcome_hero(
         return;
     }
 
-    let draft_top = single_session_draft_top(size);
-    let target_width = size.width as f32 * 0.52;
+    let (bounds_min, bounds_max) = handwritten_welcome_bounds(size);
     let (source_min, source_max) = stroke_paths_bounds(&paths);
     let source_width = (source_max[0] - source_min[0]).max(1.0);
-    let scale = target_width / source_width;
-    let source_left = source_min[0];
-    let source_top = source_min[1];
-    let left = (size.width as f32 - target_width) * 0.5;
-    let top = PANEL_BODY_TOP_PADDING + (draft_top - PANEL_BODY_TOP_PADDING) * 0.31;
-    let origin = [left - source_left * scale, top - source_top * scale];
+    let scale = (bounds_max[0] - bounds_min[0]) / source_width;
+    let origin = [
+        bounds_min[0] - source_min[0] * scale,
+        bounds_min[1] - source_min[1] * scale,
+    ];
     let thickness = (scale * 0.075).clamp(3.6, 8.5);
     let mut remaining = total_length * reveal_progress.clamp(0.0, 1.0);
     let mut lead = None;
@@ -165,6 +164,22 @@ pub(crate) fn push_handwritten_welcome_hero(
             size,
         );
     }
+}
+
+fn handwritten_welcome_bounds(size: PhysicalSize<u32>) -> ([f32; 2], [f32; 2]) {
+    let paths = handwritten_welcome_paths();
+    let (source_min, source_max) = stroke_paths_bounds(&paths);
+    let source_width = (source_max[0] - source_min[0]).max(1.0);
+    let source_height = (source_max[1] - source_min[1]).max(1.0);
+    let normal_draft_top = single_session_draft_top(size);
+    let target_width = size.width as f32 * 0.52;
+    let scale = target_width / source_width;
+    let left = (size.width as f32 - target_width) * 0.5;
+    let top = PANEL_BODY_TOP_PADDING + (normal_draft_top - PANEL_BODY_TOP_PADDING) * 0.31;
+    (
+        [left, top],
+        [left + target_width, top + source_height * scale],
+    )
 }
 
 fn handwritten_welcome_paths() -> Vec<Vec<[f32; 2]>> {
@@ -389,6 +404,7 @@ fn append_cubic(
     p3: [f32; 2],
     steps: usize,
 ) {
+    let steps = steps.saturating_mul(3).max(1);
     for step in 1..=steps {
         let t = step as f32 / steps as f32;
         let mt = 1.0 - t;
@@ -448,6 +464,26 @@ fn push_stroke_segment(
     color: [f32; 4],
     size: PhysicalSize<u32>,
 ) {
+    let soft_color = alpha_scaled(color, 0.16);
+    push_stroke_segment_quad(vertices, a, b, thickness + 3.0, soft_color, size);
+    push_stroke_dot(vertices, b, thickness * 0.78, soft_color, size);
+
+    let feather_color = alpha_scaled(color, 0.28);
+    push_stroke_segment_quad(vertices, a, b, thickness + 1.4, feather_color, size);
+    push_stroke_dot(vertices, b, thickness * 0.64, feather_color, size);
+
+    push_stroke_segment_quad(vertices, a, b, thickness, color, size);
+    push_stroke_dot(vertices, b, thickness * 0.52, color, size);
+}
+
+fn push_stroke_segment_quad(
+    vertices: &mut Vec<Vertex>,
+    a: [f32; 2],
+    b: [f32; 2],
+    thickness: f32,
+    color: [f32; 4],
+    size: PhysicalSize<u32>,
+) {
     let length = distance(a, b);
     if length <= 0.01 {
         return;
@@ -470,7 +506,6 @@ fn push_stroke_segment(
         color,
         size,
     );
-    push_stroke_dot(vertices, b, thickness * 0.52, color, size);
 }
 
 fn push_stroke_dot(
@@ -480,7 +515,7 @@ fn push_stroke_dot(
     color: [f32; 4],
     size: PhysicalSize<u32>,
 ) {
-    let segments = 14;
+    let segments = 28;
     for segment in 0..segments {
         let start = segment as f32 / segments as f32 * std::f32::consts::TAU;
         let end = (segment + 1) as f32 / segments as f32 * std::f32::consts::TAU;
@@ -596,8 +631,17 @@ fn transparent(mut color: [f32; 4]) -> [f32; 4] {
     color
 }
 
-fn push_single_session_composer_card(vertices: &mut Vec<Vertex>, size: PhysicalSize<u32>) {
-    let draft_top = single_session_draft_top(size);
+fn alpha_scaled(mut color: [f32; 4], scale: f32) -> [f32; 4] {
+    color[3] = (color[3] * scale).clamp(0.0, 1.0);
+    color
+}
+
+fn push_single_session_composer_card(
+    vertices: &mut Vec<Vertex>,
+    app: &SingleSessionApp,
+    size: PhysicalSize<u32>,
+) {
+    let draft_top = single_session_draft_top_for_app(app, size);
     let typography = single_session_typography();
     let line_y = draft_top + typography.code_size * typography.code_line_height + 7.0;
     push_rect(
@@ -846,7 +890,7 @@ pub(crate) fn single_session_body_scroll_metrics(
     size: PhysicalSize<u32>,
     tick: u64,
 ) -> Option<SingleSessionBodyScrollMetrics> {
-    if app.is_empty_fresh_session() {
+    if app.is_fresh_welcome_visible() {
         return None;
     }
     let typography = single_session_typography();
@@ -1007,7 +1051,7 @@ pub(crate) fn glyphon_draft_caret_position(
         if run.line_i != target_line {
             continue;
         }
-        let y = single_session_draft_top(size) + run.line_top;
+        let y = single_session_draft_top_for_app(app, size) + run.line_top;
         let height = typography.code_size * 1.12;
         if run.glyphs.is_empty() {
             return Some(CaretPosition {
@@ -1052,7 +1096,7 @@ fn approximate_draft_caret_position(
 ) -> CaretPosition {
     let typography = single_session_typography();
     let line_height = typography.code_size * typography.code_line_height;
-    let draft_top = single_session_draft_top(size);
+    let draft_top = single_session_draft_top_for_app(app, size);
     let (cursor_line, cursor_column) = app.draft_cursor_line_col();
     let char_width = typography.code_size * 0.58;
     let prompt_column = if cursor_line == 0 {
@@ -1073,6 +1117,36 @@ fn approximate_draft_caret_position(
 
 pub(crate) fn single_session_draft_top(size: PhysicalSize<u32>) -> f32 {
     (size.height as f32 - SINGLE_SESSION_DRAFT_TOP_OFFSET).max(112.0)
+}
+
+pub(crate) fn single_session_draft_top_for_app(
+    app: &SingleSessionApp,
+    size: PhysicalSize<u32>,
+) -> f32 {
+    single_session_draft_top_for_fresh_state(size, app.is_fresh_welcome_visible())
+}
+
+pub(crate) fn single_session_draft_top_for_fresh_state(
+    size: PhysicalSize<u32>,
+    fresh_welcome_visible: bool,
+) -> f32 {
+    if fresh_welcome_visible {
+        fresh_welcome_draft_top(size)
+    } else {
+        single_session_draft_top(size)
+    }
+}
+
+pub(crate) fn fresh_welcome_draft_top(size: PhysicalSize<u32>) -> f32 {
+    let hero_bottom = handwritten_welcome_bounds(size).1[1];
+    let typography = single_session_typography();
+    let min_gap = typography.code_size * 0.80;
+    let line_height = typography.code_size * typography.code_line_height;
+    let target_line_y = hero_bottom + min_gap + line_height;
+    let draft_top = target_line_y - line_height - 7.0;
+    draft_top
+        .min(single_session_draft_top(size))
+        .max(hero_bottom + 10.0)
 }
 
 #[cfg(test)]
@@ -1098,7 +1172,7 @@ pub(crate) fn single_session_text_key_for_tick(
     size: PhysicalSize<u32>,
     tick: u64,
 ) -> SingleSessionTextKey {
-    let hide_startup_chrome = app.is_empty_fresh_session();
+    let hide_startup_chrome = app.is_fresh_welcome_visible();
     let body = single_session_visible_styled_body_for_tick(app, size, tick);
     let (welcome_hero, welcome_hint, body) = if hide_startup_chrome {
         split_welcome_hero_lines(body)
@@ -1107,6 +1181,7 @@ pub(crate) fn single_session_text_key_for_tick(
     };
     SingleSessionTextKey {
         size: (size.width, size.height),
+        fresh_welcome_visible: hide_startup_chrome,
         title: if hide_startup_chrome {
             String::new()
         } else {
@@ -1149,9 +1224,9 @@ pub(crate) fn single_session_text_buffers_from_key(
     let typography = single_session_typography();
     let content_width = (size.width as f32 - PANEL_TITLE_LEFT_PADDING * 2.0).max(1.0);
 
-    let prompt_height =
-        (size.height as f32 - single_session_draft_top(size) - SINGLE_SESSION_STATUS_GAP - 18.0)
-            .max(typography.code_size * typography.code_line_height * 2.0);
+    let draft_top = single_session_draft_top_for_fresh_state(size, key.fresh_welcome_visible);
+    let prompt_height = (size.height as f32 - draft_top - SINGLE_SESSION_STATUS_GAP - 18.0)
+        .max(typography.code_size * typography.code_line_height * 2.0);
     let hero_font_size = welcome_hero_font_size(&key.welcome_hero, size);
 
     vec![
@@ -1242,7 +1317,7 @@ pub(crate) fn single_session_visible_styled_body_for_tick(
         (single_session_body_bottom(size) - PANEL_BODY_TOP_PADDING).max(line_height);
     let visible_lines = ((available_height / line_height).floor() as usize).max(1);
     let mut lines = app.body_styled_lines_for_tick(tick);
-    if app.is_empty_fresh_session() {
+    if app.is_fresh_welcome_visible() {
         lines = center_fresh_startup_lines(lines, size, visible_lines);
     }
     if lines.len() <= visible_lines {
@@ -1482,6 +1557,22 @@ pub(crate) fn single_session_text_areas(
     buffers: &[Buffer],
     size: PhysicalSize<u32>,
 ) -> Vec<TextArea<'_>> {
+    single_session_text_areas_for_fresh_state(buffers, size, false)
+}
+
+pub(crate) fn single_session_text_areas_for_app<'a>(
+    app: &SingleSessionApp,
+    buffers: &'a [Buffer],
+    size: PhysicalSize<u32>,
+) -> Vec<TextArea<'a>> {
+    single_session_text_areas_for_fresh_state(buffers, size, app.is_fresh_welcome_visible())
+}
+
+pub(crate) fn single_session_text_areas_for_fresh_state(
+    buffers: &[Buffer],
+    size: PhysicalSize<u32>,
+    fresh_welcome_visible: bool,
+) -> Vec<TextArea<'_>> {
     if buffers.len() < 5 {
         return Vec::new();
     }
@@ -1489,7 +1580,7 @@ pub(crate) fn single_session_text_areas(
     let left = PANEL_TITLE_LEFT_PADDING;
     let right = size.width.saturating_sub(PANEL_TITLE_LEFT_PADDING as u32) as i32;
     let bottom = size.height.saturating_sub(PANEL_TITLE_TOP_PADDING as u32) as i32;
-    let draft_top = single_session_draft_top(size);
+    let draft_top = single_session_draft_top_for_fresh_state(size, fresh_welcome_visible);
     let version_left = (size.width as f32 * 0.42).max(left + 220.0);
 
     vec![

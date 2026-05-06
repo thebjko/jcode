@@ -575,7 +575,7 @@ impl SingleSessionApp {
     }
 
     pub(crate) fn welcome_reveal_progress(&self) -> f32 {
-        if !self.is_empty_fresh_session() {
+        if !self.is_fresh_welcome_visible() {
             return 1.0;
         }
         let elapsed = self.welcome_started_at.elapsed().as_secs_f32();
@@ -1054,7 +1054,7 @@ impl SingleSessionApp {
             return lines;
         }
 
-        if self.is_empty_fresh_session() {
+        if self.is_fresh_welcome_visible() {
             return welcome_styled_lines(&self.welcome_name, 0);
         }
 
@@ -1068,21 +1068,20 @@ impl SingleSessionApp {
     }
 
     pub(crate) fn body_styled_lines_for_tick(&self, tick: u64) -> Vec<SingleSessionStyledLine> {
-        if self.is_empty_fresh_session() {
+        if self.is_fresh_welcome_visible() {
             welcome_styled_lines(&self.welcome_name, tick)
         } else {
             self.body_styled_lines()
         }
     }
 
-    pub(crate) fn is_empty_fresh_session(&self) -> bool {
+    pub(crate) fn is_fresh_welcome_visible(&self) -> bool {
         self.session.is_none()
             && self.live_session_id.is_none()
             && self.messages.is_empty()
             && self.streaming_response.is_empty()
             && self.status.is_none()
             && self.error.is_none()
-            && self.draft.is_empty()
             && self.pending_images.is_empty()
             && !self.show_help
             && !self.model_picker.open
