@@ -637,7 +637,8 @@ fn fresh_single_session_startup_hides_top_left_chrome() {
 
     assert_eq!(key.title, "");
     assert_eq!(key.version, "");
-    assert_visual_text_contains(&key, "Start with a prompt");
+    assert_visual_text_contains(&key, "Hello there");
+    assert!(key.welcome_hint.is_empty());
 }
 
 #[test]
@@ -650,8 +651,22 @@ fn single_session_text_buffers_include_header_version_area() {
     let mut font_system = FontSystem::new();
     let buffers = single_session_text_buffers(&app, size, &mut font_system);
 
-    assert_eq!(buffers.len(), 5);
-    assert_eq!(single_session_text_areas(&buffers, size).len(), 5);
+    assert_eq!(buffers.len(), 6);
+    assert_eq!(single_session_text_areas(&buffers, size).len(), 6);
+}
+
+#[test]
+fn fresh_welcome_hero_is_centered_from_shaped_glyph_width() {
+    let app = SingleSessionApp::new(None);
+    let size = PhysicalSize::new(1000, 720);
+    let mut font_system = FontSystem::new();
+    let buffers = single_session_text_buffers(&app, size, &mut font_system);
+    let text_areas = single_session_text_areas(&buffers, size);
+    let hero_width = single_session_buffer_visual_width(&buffers[5]);
+    let expected_left = (size.width as f32 - hero_width) * 0.5;
+
+    assert!(hero_width > size.width as f32 * 0.45);
+    assert!((text_areas[5].left - expected_left).abs() < 1.0);
 }
 
 #[test]
@@ -1675,9 +1690,8 @@ fn fresh_single_session_shows_animated_welcome_screen() {
         first.welcome_hero
     );
     assert!(first.body.is_empty());
-    assert_visual_text_contains(&first, "Start with a prompt");
-    assert_visual_text_contains(&first, "Ctrl+P opens recent sessions");
-    assert_ne!(first.welcome_hint, later.welcome_hint);
+    assert!(first.welcome_hint.is_empty());
+    assert_eq!(first.welcome_hero, later.welcome_hero);
 }
 
 #[test]

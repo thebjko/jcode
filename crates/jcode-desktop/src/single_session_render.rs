@@ -736,13 +736,12 @@ fn split_welcome_hero_lines(
     Vec<SingleSessionStyledLine>,
     Vec<SingleSessionStyledLine>,
 ) {
-    let mut iter = lines.into_iter();
-    let hero = iter
+    let hero = lines
+        .into_iter()
         .find(|line| !line.text.trim().is_empty())
         .map(|line| line.text)
         .unwrap_or_default();
-    let hint = iter.collect();
-    (hero, hint, Vec::new())
+    (hero, Vec::new(), Vec::new())
 }
 
 pub(crate) fn single_session_text_buffers_from_key(
@@ -806,14 +805,6 @@ pub(crate) fn single_session_text_buffers_from_key(
             hero_font_size * 1.08,
             size.width as f32 * 0.64,
             hero_font_size * 1.25,
-        ),
-        single_session_styled_text_buffer(
-            font_system,
-            &key.welcome_hint,
-            typography.body_size,
-            typography.body_size * typography.body_line_height,
-            content_width,
-            96.0,
         ),
     ]
 }
@@ -1094,7 +1085,7 @@ pub(crate) fn single_session_text_areas(
     buffers: &[Buffer],
     size: PhysicalSize<u32>,
 ) -> Vec<TextArea<'_>> {
-    if buffers.len() < 7 {
+    if buffers.len() < 6 {
         return Vec::new();
     }
 
@@ -1103,11 +1094,9 @@ pub(crate) fn single_session_text_areas(
     let bottom = size.height.saturating_sub(PANEL_TITLE_TOP_PADDING as u32) as i32;
     let draft_top = single_session_draft_top(size);
     let version_left = (size.width as f32 * 0.42).max(left + 220.0);
-    let welcome_width = size.width as f32 * 0.64;
+    let welcome_width = single_session_buffer_visual_width(&buffers[5]).max(1.0);
     let welcome_left = ((size.width as f32 - welcome_width) * 0.5).max(left);
-    let welcome_font_size = welcome_hero_font_size("Hello there", size);
     let welcome_top = PANEL_BODY_TOP_PADDING + (draft_top - PANEL_BODY_TOP_PADDING) * 0.30;
-    let welcome_hint_top = welcome_top + welcome_font_size * 1.36;
 
     vec![
         TextArea {
@@ -1188,20 +1177,22 @@ pub(crate) fn single_session_text_areas(
             },
             default_color: text_color(ASSISTANT_HEADING_TEXT_COLOR),
         },
-        TextArea {
-            buffer: &buffers[6],
-            left,
-            top: welcome_hint_top,
-            scale: 1.0,
-            bounds: TextBounds {
-                left: 0,
-                top: 0,
-                right,
-                bottom: draft_top as i32,
-            },
-            default_color: text_color(STATUS_TEXT_ACCENT_COLOR),
-        },
     ]
+}
+
+pub(crate) fn single_session_buffer_visual_width(buffer: &Buffer) -> f32 {
+    let mut min_x: Option<f32> = None;
+    let mut max_x: Option<f32> = None;
+    for run in buffer.layout_runs() {
+        for glyph in run.glyphs {
+            min_x = Some(min_x.map_or(glyph.x, |x| x.min(glyph.x)));
+            max_x = Some(max_x.map_or(glyph.x + glyph.w, |x| x.max(glyph.x + glyph.w)));
+        }
+    }
+    match (min_x, max_x) {
+        (Some(min_x), Some(max_x)) => (max_x - min_x).max(0.0),
+        _ => 0.0,
+    }
 }
 
 fn visualize_composer_whitespace(text: &str) -> String {
