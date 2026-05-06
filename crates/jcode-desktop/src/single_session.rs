@@ -71,6 +71,7 @@ pub(crate) struct SingleSessionApp {
     pub(crate) stdin_response: Option<StdinResponseState>,
     welcome_name: Option<String>,
     welcome_started_at: std::time::Instant,
+    recovery_session_count: usize,
     queued_drafts: Vec<(String, Vec<(String, String)>)>,
     selection_anchor: Option<SelectionPoint>,
     selection_focus: Option<SelectionPoint>,
@@ -490,6 +491,7 @@ impl SingleSessionApp {
             stdin_response: None,
             welcome_name: desktop_welcome_name(),
             welcome_started_at: std::time::Instant::now(),
+            recovery_session_count: 0,
             queued_drafts: Vec::new(),
             selection_anchor: None,
             selection_focus: None,
@@ -504,6 +506,10 @@ impl SingleSessionApp {
             self.live_session_id = Some(session.session_id.clone());
         }
         self.detail_scroll = 0;
+    }
+
+    pub(crate) fn set_recovery_session_count(&mut self, count: usize) {
+        self.recovery_session_count = count;
     }
 
     pub(crate) fn reset_fresh_session(&mut self) {
@@ -525,6 +531,7 @@ impl SingleSessionApp {
         self.stdin_response = None;
         self.welcome_name = desktop_welcome_name();
         self.welcome_started_at = std::time::Instant::now();
+        self.recovery_session_count = 0;
         self.queued_drafts.clear();
         self.clear_selection();
         self.input_undo_stack.clear();
@@ -698,6 +705,9 @@ impl SingleSessionApp {
                 self.show_help = !self.show_help;
                 self.scroll_body_to_bottom();
                 KeyOutcome::Redraw
+            }
+            KeyInput::RefreshSessions if self.recovery_session_count > 0 => {
+                KeyOutcome::RestoreCrashedSessions
             }
             KeyInput::RefreshSessions => KeyOutcome::Redraw,
             KeyInput::CancelGeneration => {
@@ -1055,7 +1065,7 @@ impl SingleSessionApp {
         }
 
         if self.is_fresh_welcome_visible() {
-            return welcome_styled_lines(&self.welcome_name, 0);
+            return welcome_styled_lines(&self.welcome_name, 0, self.recovery_session_count);
         }
 
         if let Some(status) = &self.status
@@ -1069,7 +1079,7 @@ impl SingleSessionApp {
 
     pub(crate) fn body_styled_lines_for_tick(&self, tick: u64) -> Vec<SingleSessionStyledLine> {
         if self.is_fresh_welcome_visible() {
-            welcome_styled_lines(&self.welcome_name, tick)
+            welcome_styled_lines(&self.welcome_name, tick, self.recovery_session_count)
         } else {
             self.body_styled_lines()
         }
@@ -1087,6 +1097,28 @@ impl SingleSessionApp {
             && !self.model_picker.open
             && !self.session_switcher.open
             && self.stdin_response.is_none()
+    }
+
+    pub(crate) fn is_welcome_chrome_visible(&self) -> bool {
+        self.is_fresh_welcome_visible() || self.is_welcome_handoff_visible()
+    }
+
+    pub(crate) fn is_welcome_handoff_visible(&self) -> bool {
+        self.session.is_none()
+            && self.draft.is_empty()
+            && !self.show_help
+            && !self.model_picker.open
+            && !self.session_switcher.open
+            && self.stdin_response.is_none()
+            && self
+                .messages
+                .first()
+                .is_some_and(|message| message.role.is_user())
+            && self
+                .messages
+                .iter()
+                .skip(1)
+                .all(|message| !message.role.is_user())
     }
 
     pub(crate) fn apply_session_event(&mut self, event: DesktopSessionEvent) {
@@ -1700,6 +1732,7 @@ fn blank_styled_line() -> SingleSessionStyledLine {
 pub(crate) fn welcome_styled_lines(
     name: &Option<String>,
     tick: u64,
+    recovery_session_count: usize,
 ) -> Vec<SingleSessionStyledLine> {
     let greeting = name
         .as_deref()
@@ -1719,7 +1752,7 @@ pub(crate) fn welcome_styled_lines(
         _ => "...",
     };
 
-    vec![
+    let mut lines = vec![
         styled_line(greeting, SingleSessionLineStyle::AssistantHeading),
         blank_styled_line(),
         styled_line(
@@ -1727,7 +1760,19 @@ pub(crate) fn welcome_styled_lines(
             SingleSessionLineStyle::Status,
         ),
         styled_line("Ctrl+P opens recent sessions", SingleSessionLineStyle::Meta),
-    ]
+    ];
+
+    if recovery_session_count > 0 {
+        lines.push(blank_styled_line());
+        lines.push(styled_line(
+            format!(
+                "Found {recovery_session_count} crashed session(s). Press Ctrl+R to open them in new windows."
+            ),
+            SingleSessionLineStyle::Status,
+        ));
+    }
+
+    lines
 }
 
 #[cfg(any(target_os = "macos", windows))]

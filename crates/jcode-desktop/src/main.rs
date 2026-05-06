@@ -218,6 +218,9 @@ async fn run() -> Result<()> {
     } else {
         fresh_single_session_app()
     };
+    if let DesktopApp::SingleSession(single_session) = &mut app {
+        single_session.set_recovery_session_count(load_crashed_session_cards_for_desktop().len());
+    }
     window.set_title(&app.status_title());
     let mut canvas = Canvas::new(window).await?;
     let mut modifiers = ModifiersState::empty();
@@ -472,6 +475,32 @@ async fn run() -> Result<()> {
                             window.set_title(&app.status_title());
                             window.request_redraw();
                         }
+                        KeyOutcome::RestoreCrashedSessions => {
+                            let crashed = load_crashed_session_cards_for_desktop();
+                            if crashed.is_empty() {
+                                apply_single_session_error(
+                                    &mut app,
+                                    anyhow::anyhow!("no crashed sessions found"),
+                                );
+                            } else {
+                                for card in &crashed {
+                                    if let Err(error) = session_launch::launch_validated_resume_session(
+                                        &card.session_id,
+                                        &card.title,
+                                    ) {
+                                        eprintln!(
+                                            "jcode-desktop: failed to restore crashed session {}: {error:#}",
+                                            card.session_id
+                                        );
+                                    }
+                                }
+                                if let DesktopApp::SingleSession(single_session) = &mut app {
+                                    single_session.set_recovery_session_count(0);
+                                }
+                            }
+                            window.set_title(&app.status_title());
+                            window.request_redraw();
+                        }
                         KeyOutcome::SetModel(model) => {
                             if let Err(error) = session_launch::spawn_set_model(
                                 model,
@@ -593,6 +622,16 @@ fn load_session_cards_for_desktop() -> Vec<workspace::SessionCard> {
         Ok(cards) => cards,
         Err(error) => {
             eprintln!("jcode-desktop: failed to load session metadata: {error:#}");
+            Vec::new()
+        }
+    }
+}
+
+fn load_crashed_session_cards_for_desktop() -> Vec<workspace::SessionCard> {
+    match session_data::load_crashed_session_cards() {
+        Ok(cards) => cards,
+        Err(error) => {
+            eprintln!("jcode-desktop: failed to load crashed session metadata: {error:#}");
             Vec::new()
         }
     }

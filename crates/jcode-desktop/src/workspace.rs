@@ -121,6 +121,7 @@ pub enum KeyOutcome {
     CutDraftToClipboard(String),
     LoadModelCatalog,
     LoadSessionSwitcher,
+    RestoreCrashedSessions,
     SetModel(String),
     CycleModel(i8),
     SendStdinResponse {

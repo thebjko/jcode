@@ -9,6 +9,7 @@ pub(crate) struct SingleSessionTextKey {
     pub(crate) welcome_hero: String,
     pub(crate) welcome_hint: Vec<SingleSessionStyledLine>,
     pub(crate) activity_active: bool,
+    pub(crate) welcome_handoff_visible: bool,
     pub(crate) body: Vec<SingleSessionStyledLine>,
     pub(crate) draft: String,
     pub(crate) status: String,
@@ -55,8 +56,10 @@ pub(crate) fn build_single_session_vertices(
         size,
     );
 
-    if app.is_fresh_welcome_visible() {
+    if app.is_welcome_chrome_visible() && app.draft.is_empty() {
         push_fresh_welcome_ambient(&mut vertices, size, spinner_tick);
+    }
+    if app.is_welcome_chrome_visible() {
         push_handwritten_welcome_hero(&mut vertices, size, app.welcome_reveal_progress());
     }
 
@@ -641,7 +644,7 @@ fn push_single_session_composer_card(
     app: &SingleSessionApp,
     size: PhysicalSize<u32>,
 ) {
-    if app.is_fresh_welcome_visible() {
+    if app.is_welcome_chrome_visible() {
         return;
     }
 
@@ -743,6 +746,7 @@ fn push_single_session_transcript_cards(
     let line_height = typography.body_size * typography.body_line_height;
     let visible_lines = single_session_visible_styled_body(app, size);
     let width = (size.width as f32 - PANEL_TITLE_LEFT_PADDING * 2.0 + 12.0).max(1.0);
+    let body_top = single_session_body_top_for_app(app, size);
 
     for run in single_session_transcript_card_runs(&visible_lines) {
         let Some(color) = single_session_line_card_color(run.style) else {
@@ -752,7 +756,7 @@ fn push_single_session_transcript_cards(
             vertices,
             Rect {
                 x: PANEL_TITLE_LEFT_PADDING - 6.0,
-                y: PANEL_BODY_TOP_PADDING + run.line as f32 * line_height + 3.0,
+                y: body_top + run.line as f32 * line_height + 3.0,
                 width,
                 height: (run.line_count as f32 * line_height - 6.0).max(1.0),
             },
@@ -807,6 +811,7 @@ pub(crate) fn single_session_streaming_shimmer(
 
     let typography = single_session_typography();
     let line_height = typography.body_size * typography.body_line_height;
+    let body_top = single_session_body_top_for_app(app, size);
     let text_columns = visible_lines[line_index].text.chars().count().max(8) as f32;
     let text_width = (text_columns * single_session_body_char_width())
         .min((size.width as f32 - PANEL_TITLE_LEFT_PADDING * 2.0).max(1.0));
@@ -815,7 +820,7 @@ pub(crate) fn single_session_streaming_shimmer(
     let phase = (tick % 48) as f32 / 48.0;
     let travel = lane_width + shimmer_width;
     let head_x = PANEL_TITLE_LEFT_PADDING - shimmer_width + phase * travel;
-    let y = PANEL_BODY_TOP_PADDING + line_index as f32 * line_height + line_height * 0.12;
+    let y = body_top + line_index as f32 * line_height + line_height * 0.12;
     let height = line_height * 0.76;
 
     let soft_rect = Rect {
@@ -899,8 +904,17 @@ pub(crate) fn single_session_body_scroll_metrics(
     }
     let typography = single_session_typography();
     let line_height = typography.body_size * typography.body_line_height;
-    let available_height =
-        (single_session_body_bottom(size) - PANEL_BODY_TOP_PADDING).max(line_height);
+    let body_top = if app.is_welcome_handoff_visible() {
+        fresh_welcome_draft_top(size)
+    } else {
+        PANEL_BODY_TOP_PADDING
+    };
+    let body_bottom = if app.is_welcome_handoff_visible() {
+        size.height as f32 - PANEL_TITLE_TOP_PADDING
+    } else {
+        single_session_body_bottom(size)
+    };
+    let available_height = (body_bottom - body_top).max(line_height);
     let visible_lines = ((available_height / line_height).floor() as usize).max(1);
     let total_lines = app.body_styled_lines_for_tick(tick).len();
     let max_scroll_lines = total_lines.saturating_sub(visible_lines);
@@ -991,6 +1005,7 @@ fn push_single_session_selection(
     let line_height = typography.body_size * typography.body_line_height;
     let char_width = single_session_body_char_width();
     let visible_lines = single_session_visible_body(app, size);
+    let body_top = single_session_body_top_for_app(app, size);
     for segment in app.selection_segments(&visible_lines) {
         let selected_columns = segment
             .end_column
@@ -1000,7 +1015,7 @@ fn push_single_session_selection(
             vertices,
             Rect {
                 x: PANEL_TITLE_LEFT_PADDING - 2.0 + segment.start_column as f32 * char_width,
-                y: PANEL_BODY_TOP_PADDING + segment.line as f32 * line_height,
+                y: body_top + segment.line as f32 * line_height,
                 width: selected_columns as f32 * char_width + 4.0,
                 height: line_height,
             },
@@ -1016,6 +1031,10 @@ pub(crate) fn push_single_session_caret(
     size: PhysicalSize<u32>,
     draft_buffer: Option<&Buffer>,
 ) {
+    if app.is_welcome_handoff_visible() {
+        return;
+    }
+
     let caret = draft_buffer
         .and_then(|buffer| glyphon_draft_caret_position(app, buffer, size))
         .unwrap_or_else(|| approximate_draft_caret_position(app, size));
@@ -1127,7 +1146,7 @@ pub(crate) fn single_session_draft_top_for_app(
     app: &SingleSessionApp,
     size: PhysicalSize<u32>,
 ) -> f32 {
-    single_session_draft_top_for_fresh_state(size, app.is_fresh_welcome_visible())
+    single_session_draft_top_for_fresh_state(size, app.is_welcome_chrome_visible())
 }
 
 pub(crate) fn single_session_draft_top_for_fresh_state(
@@ -1174,22 +1193,24 @@ pub(crate) fn single_session_text_key_for_tick(
     size: PhysicalSize<u32>,
     tick: u64,
 ) -> SingleSessionTextKey {
-    let hide_startup_chrome = app.is_fresh_welcome_visible();
+    let fresh_welcome_visible = app.is_fresh_welcome_visible();
+    let welcome_handoff_visible = app.is_welcome_handoff_visible();
+    let welcome_chrome_visible = fresh_welcome_visible || welcome_handoff_visible;
     let body = single_session_visible_styled_body_for_tick(app, size, tick);
-    let (welcome_hero, welcome_hint, body) = if hide_startup_chrome {
+    let (welcome_hero, welcome_hint, body) = if fresh_welcome_visible {
         split_welcome_hero_lines(body)
     } else {
         (String::new(), Vec::new(), body)
     };
     SingleSessionTextKey {
         size: (size.width, size.height),
-        fresh_welcome_visible: hide_startup_chrome,
-        title: if hide_startup_chrome {
+        fresh_welcome_visible: welcome_chrome_visible,
+        title: if welcome_chrome_visible {
             String::new()
         } else {
             app.header_title()
         },
-        version: if hide_startup_chrome {
+        version: if welcome_chrome_visible {
             fresh_welcome_version_label()
         } else {
             desktop_header_version_label()
@@ -1197,9 +1218,10 @@ pub(crate) fn single_session_text_key_for_tick(
         welcome_hero,
         welcome_hint,
         activity_active: app.has_activity_indicator(),
+        welcome_handoff_visible,
         body,
         draft: visualize_composer_whitespace(&app.composer_text()),
-        status: if hide_startup_chrome {
+        status: if welcome_chrome_visible {
             String::new()
         } else {
             app.composer_status_line_for_tick(tick)
@@ -1324,8 +1346,17 @@ pub(crate) fn single_session_visible_styled_body_for_tick(
 ) -> Vec<SingleSessionStyledLine> {
     let typography = single_session_typography();
     let line_height = typography.body_size * typography.body_line_height;
-    let available_height =
-        (single_session_body_bottom(size) - PANEL_BODY_TOP_PADDING).max(line_height);
+    let body_top = if app.is_welcome_handoff_visible() {
+        fresh_welcome_draft_top(size)
+    } else {
+        PANEL_BODY_TOP_PADDING
+    };
+    let body_bottom = if app.is_welcome_handoff_visible() {
+        size.height as f32 - PANEL_TITLE_TOP_PADDING
+    } else {
+        single_session_body_bottom(size)
+    };
+    let available_height = (body_bottom - body_top).max(line_height);
     let visible_lines = ((available_height / line_height).floor() as usize).max(1);
     let mut lines = app.body_styled_lines_for_tick(tick);
     if app.is_fresh_welcome_visible() {
@@ -1407,6 +1438,14 @@ pub(crate) fn single_session_body_column_at_x(x: f32, line: &str) -> usize {
 pub(crate) fn single_session_body_char_width() -> f32 {
     let typography = single_session_typography();
     typography.body_size * 0.58
+}
+
+fn single_session_body_top_for_app(app: &SingleSessionApp, size: PhysicalSize<u32>) -> f32 {
+    if app.is_welcome_handoff_visible() {
+        fresh_welcome_draft_top(size)
+    } else {
+        PANEL_BODY_TOP_PADDING
+    }
 }
 
 pub(crate) fn single_session_body_bottom(size: PhysicalSize<u32>) -> f32 {
@@ -1576,13 +1615,27 @@ pub(crate) fn single_session_text_areas_for_app<'a>(
     buffers: &'a [Buffer],
     size: PhysicalSize<u32>,
 ) -> Vec<TextArea<'a>> {
-    single_session_text_areas_for_fresh_state(buffers, size, app.is_fresh_welcome_visible())
+    single_session_text_areas_for_state(
+        buffers,
+        size,
+        app.is_welcome_chrome_visible(),
+        app.is_welcome_handoff_visible(),
+    )
 }
 
 pub(crate) fn single_session_text_areas_for_fresh_state(
     buffers: &[Buffer],
     size: PhysicalSize<u32>,
     fresh_welcome_visible: bool,
+) -> Vec<TextArea<'_>> {
+    single_session_text_areas_for_state(buffers, size, fresh_welcome_visible, false)
+}
+
+pub(crate) fn single_session_text_areas_for_state(
+    buffers: &[Buffer],
+    size: PhysicalSize<u32>,
+    welcome_chrome_visible: bool,
+    welcome_handoff_visible: bool,
 ) -> Vec<TextArea<'_>> {
     if buffers.len() < 5 {
         return Vec::new();
@@ -1591,25 +1644,35 @@ pub(crate) fn single_session_text_areas_for_fresh_state(
     let left = PANEL_TITLE_LEFT_PADDING;
     let right = size.width.saturating_sub(PANEL_TITLE_LEFT_PADDING as u32) as i32;
     let bottom = size.height.saturating_sub(PANEL_TITLE_TOP_PADDING as u32) as i32;
-    let draft_top = single_session_draft_top_for_fresh_state(size, fresh_welcome_visible);
+    let draft_top = single_session_draft_top_for_fresh_state(size, welcome_chrome_visible);
+    let body_top = if welcome_handoff_visible {
+        draft_top
+    } else {
+        PANEL_BODY_TOP_PADDING
+    };
+    let body_bottom = if welcome_handoff_visible {
+        bottom
+    } else {
+        single_session_body_bottom(size) as i32
+    };
     let version_label = fresh_welcome_version_label();
     let version_font_size = fresh_welcome_version_font_size();
-    let version_left = if fresh_welcome_visible {
+    let version_left = if welcome_chrome_visible {
         fresh_welcome_version_left(&version_label, size, version_font_size)
     } else {
         (size.width as f32 * 0.42).max(left + 220.0)
     };
-    let version_top = if fresh_welcome_visible {
+    let version_top = if welcome_chrome_visible {
         fresh_welcome_version_top(size)
     } else {
         PANEL_TITLE_TOP_PADDING + 3.0
     };
-    let version_bounds_top = if fresh_welcome_visible {
+    let version_bounds_top = if welcome_chrome_visible {
         version_top as i32
     } else {
         0
     };
-    let version_bounds_bottom = if fresh_welcome_visible {
+    let version_bounds_bottom = if welcome_chrome_visible {
         (version_top + version_font_size * 1.4) as i32
     } else {
         64
@@ -1645,19 +1708,19 @@ pub(crate) fn single_session_text_areas_for_fresh_state(
         TextArea {
             buffer: &buffers[1],
             left,
-            top: PANEL_BODY_TOP_PADDING,
+            top: body_top,
             scale: 1.0,
             bounds: TextBounds {
                 left: 0,
-                top: 0,
+                top: body_top as i32,
                 right,
-                bottom: single_session_body_bottom(size) as i32,
+                bottom: body_bottom,
             },
             default_color: text_color(ASSISTANT_TEXT_COLOR),
         },
     ];
 
-    if !fresh_welcome_visible {
+    if !welcome_chrome_visible {
         areas.push(TextArea {
             buffer: &buffers[3],
             left,
@@ -1673,19 +1736,21 @@ pub(crate) fn single_session_text_areas_for_fresh_state(
         });
     }
 
-    areas.push(TextArea {
-        buffer: &buffers[2],
-        left,
-        top: draft_top,
-        scale: 1.0,
-        bounds: TextBounds {
-            left: 0,
-            top: draft_top as i32,
-            right,
-            bottom,
-        },
-        default_color: text_color(PANEL_SECTION_COLOR),
-    });
+    if !welcome_handoff_visible {
+        areas.push(TextArea {
+            buffer: &buffers[2],
+            left,
+            top: draft_top,
+            scale: 1.0,
+            bounds: TextBounds {
+                left: 0,
+                top: draft_top as i32,
+                right,
+                bottom,
+            },
+            default_color: text_color(PANEL_SECTION_COLOR),
+        });
+    }
 
     areas
 }

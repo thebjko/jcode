@@ -238,6 +238,41 @@ fn fresh_single_session_uses_animated_welcome_ambient() {
 }
 
 #[test]
+fn fresh_single_session_offers_crashed_recovery_without_auto_opening() {
+    let mut app = SingleSessionApp::new(None);
+    app.set_recovery_session_count(3);
+
+    let lines = app.body_styled_lines();
+    let body = lines
+        .iter()
+        .map(|line| line.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(body.contains("Found 3 crashed session(s)"));
+    assert!(body.contains("Press Ctrl+R"));
+    assert_eq!(
+        app.handle_key(KeyInput::RefreshSessions),
+        KeyOutcome::RestoreCrashedSessions
+    );
+}
+
+#[test]
+fn fresh_single_session_without_crashes_keeps_refresh_as_redraw() {
+    let mut app = SingleSessionApp::new(None);
+
+    assert_eq!(
+        app.handle_key(KeyInput::RefreshSessions),
+        KeyOutcome::Redraw
+    );
+    assert!(
+        !app.body_styled_lines()
+            .iter()
+            .any(|line| line.text.contains("crashed session"))
+    );
+}
+
+#[test]
 fn single_session_active_work_uses_native_spinner_geometry() {
     let mut app = SingleSessionApp::new(None);
     let idle = build_single_session_vertices(&app, PhysicalSize::new(900, 700), 0.0, 0);
@@ -1711,6 +1746,43 @@ fn fresh_welcome_input_line_sits_under_hero_while_drafting() {
 }
 
 #[test]
+fn fresh_submit_keeps_first_prompt_at_welcome_input_position() {
+    let size = PhysicalSize::new(1000, 720);
+    let mut app = SingleSessionApp::new(None);
+    app.handle_key(KeyInput::Character("hello desktop".to_string()));
+    assert!(matches!(
+        app.handle_key(KeyInput::SubmitDraft),
+        KeyOutcome::StartFreshSession { .. }
+    ));
+
+    assert!(app.is_welcome_handoff_visible());
+    let mut font_system = FontSystem::new();
+    let buffers = single_session_text_buffers(&app, size, &mut font_system);
+    let areas = single_session_text_areas_for_app(&app, &buffers, size);
+    let draft_top = fresh_welcome_draft_top(size);
+    let key = single_session_text_key(&app, size);
+    let mut vertices = build_single_session_vertices(&app, size, 0.0, 0);
+    push_single_session_caret(&mut vertices, &app, size, buffers.get(2));
+
+    assert_eq!(key.title, "");
+    assert_eq!(key.status, "");
+    assert!(
+        key.body
+            .iter()
+            .any(|line| line.text.contains("hello desktop"))
+    );
+    assert_eq!(
+        areas.len(),
+        3,
+        "handoff should omit status and draft text areas"
+    );
+    assert_eq!(areas[2].top, draft_top);
+    assert!(vertices_have_color(&vertices, WELCOME_AURORA_BLUE));
+    assert!(!vertices_have_color(&vertices, COMPOSER_LINE_COLOR));
+    assert!(!vertices_have_color(&vertices, SINGLE_SESSION_CARET_COLOR));
+}
+
+#[test]
 fn single_session_without_session_is_native_fresh_draft() {
     let mut app = SingleSessionApp::new(None);
 
@@ -1756,9 +1828,9 @@ fn welcome_name_is_optional_and_sanitized() {
     assert_eq!(sanitize_welcome_name("unknown"), None);
     assert_eq!(sanitize_welcome_name("   "), None);
 
-    let named = welcome_styled_lines(&Some("Jeremy".to_string()), 0);
+    let named = welcome_styled_lines(&Some("Jeremy".to_string()), 0, 0);
     assert_eq!(named[0].text, "Welcome, Jeremy");
-    let generic = welcome_styled_lines(&None, 0);
+    let generic = welcome_styled_lines(&None, 0, 0);
     assert_eq!(generic[0].text, "Hello there");
 }
 
