@@ -141,15 +141,22 @@ pub(crate) fn push_handwritten_welcome_hero(
         push_lyon_stroked_path(
             vertices,
             path,
-            thickness + 3.0,
-            alpha_scaled(WELCOME_HANDWRITING_COLOR, 0.16),
+            thickness + 5.0,
+            alpha_scaled(WELCOME_HANDWRITING_COLOR, 0.08),
             size,
         );
         push_lyon_stroked_path(
             vertices,
             path,
-            thickness + 1.4,
-            alpha_scaled(WELCOME_HANDWRITING_COLOR, 0.28),
+            thickness + 2.6,
+            alpha_scaled(WELCOME_HANDWRITING_COLOR, 0.18),
+            size,
+        );
+        push_lyon_stroked_path(
+            vertices,
+            path,
+            thickness + 0.9,
+            alpha_scaled(WELCOME_HANDWRITING_COLOR, 0.38),
             size,
         );
         push_lyon_stroked_path(vertices, path, thickness, WELCOME_HANDWRITING_COLOR, size);
@@ -452,7 +459,7 @@ fn append_cubic(
     p3: [f32; 2],
     steps: usize,
 ) {
-    let steps = steps.saturating_mul(3).max(1);
+    let steps = steps.saturating_mul(8).max(1);
     for step in 1..=steps {
         let t = step as f32 / steps as f32;
         let mt = 1.0 - t;
@@ -528,8 +535,8 @@ fn push_lyon_stroked_path(
         .with_start_cap(LineCap::Round)
         .with_end_cap(LineCap::Round)
         .with_line_join(LineJoin::Round)
-        .with_tolerance(0.04);
-    let mut buffers: VertexBuffers<[f32; 2], u16> = VertexBuffers::new();
+        .with_tolerance(0.006);
+    let mut buffers: VertexBuffers<[f32; 2], u32> = VertexBuffers::new();
     if StrokeTessellator::new()
         .tessellate_path(
             &path,
