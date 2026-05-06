@@ -191,8 +191,8 @@ fn single_session_vertices_include_a_draft_caret() {
         build_single_session_vertices(&app, PhysicalSize::new(640, 480), 0.0, 0);
     push_single_session_caret(&mut typed_vertices, &app, PhysicalSize::new(640, 480), None);
 
-    assert!(vertices_have_color(&empty_vertices, WELCOME_ORBIT_COLOR));
-    assert!(!vertices_have_color(&typed_vertices, WELCOME_ORBIT_COLOR));
+    assert!(vertices_have_color(&empty_vertices, WELCOME_AURORA_BLUE));
+    assert!(!vertices_have_color(&typed_vertices, WELCOME_AURORA_BLUE));
     assert!(
         typed_vertices
             .iter()
@@ -219,15 +219,15 @@ fn fresh_single_session_uses_animated_welcome_ambient() {
     let tick_zero = build_single_session_vertices(&app, size, 0.0, 0);
     let tick_later = build_single_session_vertices(&app, size, 0.0, 18);
 
-    assert!(vertices_have_color(&tick_zero, WELCOME_ORBIT_COLOR));
+    assert!(vertices_have_color(&tick_zero, WELCOME_AURORA_BLUE));
     assert_ne!(
-        positions_for_color(&tick_zero, WELCOME_ORBIT_COLOR),
-        positions_for_color(&tick_later, WELCOME_ORBIT_COLOR)
+        positions_for_color(&tick_zero, WELCOME_AURORA_BLUE),
+        positions_for_color(&tick_later, WELCOME_AURORA_BLUE)
     );
 
     app.handle_key(KeyInput::Character("hello".to_string()));
     let typed = build_single_session_vertices(&app, size, 0.0, 18);
-    assert!(!vertices_have_color(&typed, WELCOME_ORBIT_COLOR));
+    assert!(!vertices_have_color(&typed, WELCOME_AURORA_BLUE));
 }
 
 #[test]

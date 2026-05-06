@@ -68,121 +68,101 @@ pub(crate) fn build_single_session_vertices(
 }
 
 fn push_fresh_welcome_ambient(vertices: &mut Vec<Vertex>, size: PhysicalSize<u32>, tick: u64) {
-    let width = size.width as f32;
     let draft_top = single_session_draft_top(size);
     let usable_height = (draft_top - PANEL_BODY_TOP_PADDING).max(180.0);
-    let center = [width * 0.5, PANEL_BODY_TOP_PADDING + usable_height * 0.44];
     let t = tick as f32 * 0.055;
-    let base_radius = width.min(usable_height).max(260.0);
 
-    push_soft_disc(
+    push_aurora_ribbon(
         vertices,
-        [
-            center[0] + t.sin() * 34.0,
-            center[1] - usable_height * 0.08 + (t * 0.73).cos() * 22.0,
-        ],
-        base_radius * (0.45 + 0.035 * (t * 0.61).sin()),
+        size,
+        PANEL_BODY_TOP_PADDING + usable_height * 0.18 + (t * 0.60).sin() * 18.0,
+        usable_height * 0.30,
+        t * 0.85,
         WELCOME_AURORA_BLUE,
-        size,
-    );
-    push_soft_disc(
-        vertices,
-        [
-            center[0] - width * 0.18 + (t * 0.49).cos() * 42.0,
-            center[1] + usable_height * 0.02 + (t * 0.67).sin() * 26.0,
-        ],
-        base_radius * (0.38 + 0.03 * (t * 0.77).cos()),
         WELCOME_AURORA_VIOLET,
-        size,
     );
-    push_soft_disc(
+    push_aurora_ribbon(
         vertices,
-        [
-            center[0] + width * 0.20 + (t * 0.52).sin() * 40.0,
-            center[1] + usable_height * 0.10 + (t * 0.58).cos() * 28.0,
-        ],
-        base_radius * (0.34 + 0.028 * (t * 0.83).sin()),
+        size,
+        PANEL_BODY_TOP_PADDING + usable_height * 0.39 + (t * 0.47).cos() * 24.0,
+        usable_height * 0.34,
+        t * -0.72 + 1.8,
         WELCOME_AURORA_MINT,
-        size,
+        WELCOME_AURORA_BLUE,
     );
-    push_soft_disc(
+    push_aurora_ribbon(
         vertices,
-        [
-            center[0] + width * 0.04 + (t * 0.45).cos() * 30.0,
-            center[1] - usable_height * 0.20 + (t * 0.54).sin() * 20.0,
-        ],
-        base_radius * 0.28,
+        size,
+        PANEL_BODY_TOP_PADDING + usable_height * 0.58 + (t * 0.52).sin() * 16.0,
+        usable_height * 0.24,
+        t * 0.64 + 3.2,
         WELCOME_AURORA_WARM,
-        size,
-    );
-
-    for index in 0..3 {
-        let phase = t * (0.34 + index as f32 * 0.08) + index as f32 * 1.7;
-        let radius = base_radius * (0.26 + index as f32 * 0.075) + phase.sin() * 8.0;
-        let mut color = WELCOME_ORBIT_COLOR;
-        color[3] *= 1.0 - index as f32 * 0.18;
-        push_orbit_ring(
-            vertices,
-            center,
-            radius,
-            1.0 + index as f32 * 0.45,
-            phase,
-            color,
-            size,
-        );
-    }
-}
-
-fn push_soft_disc(
-    vertices: &mut Vec<Vertex>,
-    center: [f32; 2],
-    radius: f32,
-    color: [f32; 4],
-    size: PhysicalSize<u32>,
-) {
-    let mut core = color;
-    core[3] *= 0.58;
-    push_radial_gradient_disc(vertices, center, radius * 0.54, core, color, 72, size);
-    push_radial_gradient_disc(
-        vertices,
-        center,
-        radius,
-        color,
-        transparent(color),
-        96,
-        size,
+        WELCOME_AURORA_MINT,
     );
 }
 
-fn push_radial_gradient_disc(
+fn push_aurora_ribbon(
     vertices: &mut Vec<Vertex>,
-    center: [f32; 2],
-    radius: f32,
-    center_color: [f32; 4],
-    edge_color: [f32; 4],
-    segments: usize,
     size: PhysicalSize<u32>,
+    center_y: f32,
+    height: f32,
+    phase: f32,
+    left_color: [f32; 4],
+    right_color: [f32; 4],
 ) {
+    let width = size.width as f32;
+    let segments = 18;
     for segment in 0..segments {
-        let start = segment as f32 / segments as f32 * std::f32::consts::TAU;
-        let end = (segment + 1) as f32 / segments as f32 * std::f32::consts::TAU;
-        push_gradient_triangle(
-            vertices,
-            center,
-            [
-                center[0] + radius * start.cos(),
-                center[1] + radius * start.sin(),
-            ],
-            [
-                center[0] + radius * end.cos(),
-                center[1] + radius * end.sin(),
-            ],
-            center_color,
-            edge_color,
-            edge_color,
-            size,
+        let a = segment as f32 / segments as f32;
+        let b = (segment + 1) as f32 / segments as f32;
+        let x0 = -width * 0.08 + a * width * 1.16;
+        let x1 = -width * 0.08 + b * width * 1.16;
+        let wave0 = (a * std::f32::consts::TAU * 1.35 + phase).sin() * height * 0.23
+            + (a * std::f32::consts::TAU * 2.10 + phase * 0.7).cos() * height * 0.10;
+        let wave1 = (b * std::f32::consts::TAU * 1.35 + phase).sin() * height * 0.23
+            + (b * std::f32::consts::TAU * 2.10 + phase * 0.7).cos() * height * 0.10;
+        let color0 = mix_color(left_color, right_color, a);
+        let color1 = mix_color(left_color, right_color, b);
+        let edge0 = transparent(color0);
+        let edge1 = transparent(color1);
+        let top0 = [x0, center_y + wave0 - height * 0.55];
+        let mid0 = [x0, center_y + wave0];
+        let bot0 = [x0, center_y + wave0 + height * 0.55];
+        let top1 = [x1, center_y + wave1 - height * 0.55];
+        let mid1 = [x1, center_y + wave1];
+        let bot1 = [x1, center_y + wave1 + height * 0.55];
+        push_gradient_quad(
+            vertices, top0, mid0, mid1, top1, edge0, color0, color1, edge1, size,
+        );
+        push_gradient_quad(
+            vertices, mid0, bot0, bot1, mid1, color0, edge0, edge1, color1, size,
         );
     }
+}
+
+fn push_gradient_quad(
+    vertices: &mut Vec<Vertex>,
+    a: [f32; 2],
+    b: [f32; 2],
+    c: [f32; 2],
+    d: [f32; 2],
+    a_color: [f32; 4],
+    b_color: [f32; 4],
+    c_color: [f32; 4],
+    d_color: [f32; 4],
+    size: PhysicalSize<u32>,
+) {
+    push_gradient_triangle(vertices, a, b, c, a_color, b_color, c_color, size);
+    push_gradient_triangle(vertices, a, c, d, a_color, c_color, d_color, size);
+}
+
+fn mix_color(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
+    [
+        a[0] + (b[0] - a[0]) * t,
+        a[1] + (b[1] - a[1]) * t,
+        a[2] + (b[2] - a[2]) * t,
+        a[3] + (b[3] - a[3]) * t,
+    ]
 }
 
 fn push_gradient_triangle(
@@ -214,28 +194,6 @@ fn push_gradient_triangle(
 fn transparent(mut color: [f32; 4]) -> [f32; 4] {
     color[3] = 0.0;
     color
-}
-
-fn push_orbit_ring(
-    vertices: &mut Vec<Vertex>,
-    center: [f32; 2],
-    radius: f32,
-    thickness: f32,
-    phase: f32,
-    color: [f32; 4],
-    size: PhysicalSize<u32>,
-) {
-    let segments = 96;
-    for segment in 0..segments {
-        if segment % 4 == 3 {
-            continue;
-        }
-        let angle = segment as f32 / segments as f32 * std::f32::consts::TAU + phase;
-        let next = (segment + 1) as f32 / segments as f32 * std::f32::consts::TAU + phase;
-        push_spinner_segment(
-            vertices, center, radius, thickness, angle, next, color, size,
-        );
-    }
 }
 
 fn push_single_session_composer_card(vertices: &mut Vec<Vertex>, size: PhysicalSize<u32>) {
