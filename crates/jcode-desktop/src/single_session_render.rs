@@ -597,7 +597,10 @@ pub(crate) fn single_session_visible_styled_body_for_tick(
     let available_height =
         (single_session_draft_top(size) - PANEL_BODY_TOP_PADDING - 12.0).max(line_height);
     let visible_lines = ((available_height / line_height).floor() as usize).max(1);
-    let lines = app.body_styled_lines_for_tick(tick);
+    let mut lines = app.body_styled_lines_for_tick(tick);
+    if app.is_empty_fresh_session() {
+        lines = center_fresh_startup_lines(lines, size, visible_lines);
+    }
     if lines.len() <= visible_lines {
         return lines;
     }
@@ -607,6 +610,36 @@ pub(crate) fn single_session_visible_styled_body_for_tick(
     let end = lines.len().saturating_sub(scroll);
     let start = end.saturating_sub(visible_lines);
     lines[start..end].to_vec()
+}
+
+fn center_fresh_startup_lines(
+    lines: Vec<SingleSessionStyledLine>,
+    size: PhysicalSize<u32>,
+    visible_lines: usize,
+) -> Vec<SingleSessionStyledLine> {
+    let top_padding = visible_lines.saturating_sub(lines.len()) / 3;
+    let indent = fresh_startup_indent(size);
+    let mut centered = Vec::with_capacity(top_padding + lines.len());
+    centered.extend((0..top_padding).map(|_| SingleSessionStyledLine {
+        text: String::new(),
+        style: SingleSessionLineStyle::Blank,
+    }));
+    centered.extend(lines.into_iter().map(|mut line| {
+        if !line.text.is_empty() {
+            line.text = format!("{indent}{}", line.text);
+        }
+        line
+    }));
+    centered
+}
+
+fn fresh_startup_indent(size: PhysicalSize<u32>) -> String {
+    let typography = single_session_typography();
+    let approximate_char_width = typography.body_size * 0.58;
+    let content_width = (size.width as f32 - PANEL_TITLE_LEFT_PADDING * 2.0).max(1.0);
+    let columns = (content_width / approximate_char_width).floor().max(0.0) as usize;
+    let target_text_width = 36;
+    " ".repeat(columns.saturating_sub(target_text_width) / 2)
 }
 
 pub(crate) fn single_session_body_line_at_y(size: PhysicalSize<u32>, y: f32) -> Option<usize> {
