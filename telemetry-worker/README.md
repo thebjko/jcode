@@ -138,4 +138,3 @@ wrangler d1 execute jcode-telemetry --command "SELECT AVG(first_assistant_respon
 - large `lifecycle_ids_without_install` counts
 - a single telemetry ID dominating session totals (dev/test skew)
 - zeroed transport totals after transport-aware releases (missing migration)
-- zeroed `input_tokens_30d`/`output_tokens_30d` or cache columns in `npm run health` after token-aware releases (provider usage parsing or token migration issue)

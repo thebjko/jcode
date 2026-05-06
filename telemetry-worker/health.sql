@@ -66,52 +66,8 @@ meaningful AS (
         OR feature_selfdev_used > 0
         OR feature_background_used > 0
         OR feature_subagent_used > 0
-          )
-    ),
-token_usage AS (
-        SELECT
-            COUNT(*) AS token_sessions_30d,
-            SUM(input_tokens) AS input_tokens_30d,
-            SUM(output_tokens) AS output_tokens_30d,
-            SUM(cache_read_input_tokens) AS cache_read_input_tokens_30d,
-            SUM(cache_creation_input_tokens) AS cache_creation_input_tokens_30d,
-            SUM(total_tokens) AS total_tokens_30d,
-            ROUND(AVG(input_tokens), 1) AS avg_input_tokens_per_session_30d,
-            ROUND(AVG(output_tokens), 1) AS avg_output_tokens_per_session_30d,
-            ROUND(AVG(cache_read_input_tokens), 1) AS avg_cache_read_tokens_per_session_30d,
-            ROUND(AVG(cache_creation_input_tokens), 1) AS avg_cache_creation_tokens_per_session_30d,
-            ROUND(
-                CAST(SUM(cache_read_input_tokens) AS REAL)
-                / NULLIF(SUM(input_tokens) + SUM(cache_read_input_tokens) + SUM(cache_creation_input_tokens), 0),
-                3
-            ) AS cache_read_share_30d,
-            ROUND(
-                CAST(SUM(cache_read_input_tokens + cache_creation_input_tokens) AS REAL)
-                / NULLIF(SUM(input_tokens + output_tokens + cache_read_input_tokens + cache_creation_input_tokens), 0),
-                3
-            ) AS cache_token_share_30d
-        FROM events
-        INDEXED BY idx_events_event_created_telemetry
-        WHERE event IN ('session_end', 'session_crash')
-          AND created_at > datetime('now', '-30 days')
-    ),
-turn_token_usage AS (
-        SELECT
-            COUNT(*) AS token_turns_30d,
-            SUM(input_tokens) AS turn_input_tokens_30d,
-            SUM(output_tokens) AS turn_output_tokens_30d,
-            SUM(cache_read_input_tokens) AS turn_cache_read_input_tokens_30d,
-            SUM(cache_creation_input_tokens) AS turn_cache_creation_input_tokens_30d,
-            SUM(total_tokens) AS turn_total_tokens_30d,
-            ROUND(AVG(input_tokens), 1) AS avg_input_tokens_per_turn_30d,
-            ROUND(AVG(output_tokens), 1) AS avg_output_tokens_per_turn_30d,
-            ROUND(AVG(cache_read_input_tokens), 1) AS avg_cache_read_tokens_per_turn_30d,
-            ROUND(AVG(cache_creation_input_tokens), 1) AS avg_cache_creation_tokens_per_turn_30d
-        FROM events
-        INDEXED BY idx_events_event_created_telemetry
-        WHERE event = 'turn_end'
-          AND created_at > datetime('now', '-30 days')
-    ),
+      )
+),
 outliers AS (
     SELECT
         MAX(session_events) AS max_session_events_one_id,
@@ -135,30 +91,8 @@ SELECT
     lifecycle_ids_without_install,
     meaningful_sessions,
     meaningful_users_30d,
-    token_sessions_30d,
-    input_tokens_30d,
-    output_tokens_30d,
-    cache_read_input_tokens_30d,
-    cache_creation_input_tokens_30d,
-    total_tokens_30d,
-    avg_input_tokens_per_session_30d,
-    avg_output_tokens_per_session_30d,
-    avg_cache_read_tokens_per_session_30d,
-    avg_cache_creation_tokens_per_session_30d,
-    cache_read_share_30d,
-    cache_token_share_30d,
-    token_turns_30d,
-    turn_input_tokens_30d,
-    turn_output_tokens_30d,
-    turn_cache_read_input_tokens_30d,
-    turn_cache_creation_input_tokens_30d,
-    turn_total_tokens_30d,
-    avg_input_tokens_per_turn_30d,
-    avg_output_tokens_per_turn_30d,
-    avg_cache_read_tokens_per_turn_30d,
-    avg_cache_creation_tokens_per_turn_30d,
     max_session_events_one_id,
     top5_session_events,
     total_session_events,
     ROUND(CAST(session_ends + session_crashes AS REAL) / NULLIF(session_starts, 0), 3) AS lifecycle_completion_ratio
-FROM event_counts, identity_counts, meaningful, token_usage, turn_token_usage, outliers;
+FROM event_counts, identity_counts, meaningful, outliers;
