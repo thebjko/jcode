@@ -1068,6 +1068,8 @@ impl SingleSessionApp {
             && self.streaming_response.is_empty()
             && self.status.is_none()
             && self.error.is_none()
+            && self.draft.is_empty()
+            && self.pending_images.is_empty()
             && !self.show_help
             && !self.model_picker.open
             && !self.session_switcher.open

@@ -52,6 +52,10 @@ pub(crate) fn build_single_session_vertices(
         size,
     );
 
+    if app.is_empty_fresh_session() {
+        push_fresh_welcome_ambient(&mut vertices, size, spinner_tick);
+    }
+
     push_single_session_composer_card(&mut vertices, size);
     if app.has_activity_indicator() {
         push_native_activity_spinner(&mut vertices, size, spinner_tick);
@@ -61,6 +65,137 @@ pub(crate) fn build_single_session_vertices(
     push_single_session_selection(&mut vertices, app, size);
 
     vertices
+}
+
+fn push_fresh_welcome_ambient(vertices: &mut Vec<Vertex>, size: PhysicalSize<u32>, tick: u64) {
+    let width = size.width as f32;
+    let draft_top = single_session_draft_top(size);
+    let usable_height = (draft_top - PANEL_BODY_TOP_PADDING).max(180.0);
+    let center = [width * 0.5, PANEL_BODY_TOP_PADDING + usable_height * 0.44];
+    let t = tick as f32 * 0.055;
+    let base_radius = width.min(usable_height).max(260.0);
+
+    push_soft_disc(
+        vertices,
+        [
+            center[0] + t.sin() * 34.0,
+            center[1] - usable_height * 0.08 + (t * 0.73).cos() * 22.0,
+        ],
+        base_radius * (0.45 + 0.035 * (t * 0.61).sin()),
+        WELCOME_AURORA_BLUE,
+        size,
+    );
+    push_soft_disc(
+        vertices,
+        [
+            center[0] - width * 0.18 + (t * 0.49).cos() * 42.0,
+            center[1] + usable_height * 0.02 + (t * 0.67).sin() * 26.0,
+        ],
+        base_radius * (0.38 + 0.03 * (t * 0.77).cos()),
+        WELCOME_AURORA_VIOLET,
+        size,
+    );
+    push_soft_disc(
+        vertices,
+        [
+            center[0] + width * 0.20 + (t * 0.52).sin() * 40.0,
+            center[1] + usable_height * 0.10 + (t * 0.58).cos() * 28.0,
+        ],
+        base_radius * (0.34 + 0.028 * (t * 0.83).sin()),
+        WELCOME_AURORA_MINT,
+        size,
+    );
+    push_soft_disc(
+        vertices,
+        [
+            center[0] + width * 0.04 + (t * 0.45).cos() * 30.0,
+            center[1] - usable_height * 0.20 + (t * 0.54).sin() * 20.0,
+        ],
+        base_radius * 0.28,
+        WELCOME_AURORA_WARM,
+        size,
+    );
+
+    for index in 0..3 {
+        let phase = t * (0.34 + index as f32 * 0.08) + index as f32 * 1.7;
+        let radius = base_radius * (0.26 + index as f32 * 0.075) + phase.sin() * 8.0;
+        let mut color = WELCOME_ORBIT_COLOR;
+        color[3] *= 1.0 - index as f32 * 0.18;
+        push_orbit_ring(
+            vertices,
+            center,
+            radius,
+            1.0 + index as f32 * 0.45,
+            phase,
+            color,
+            size,
+        );
+    }
+}
+
+fn push_soft_disc(
+    vertices: &mut Vec<Vertex>,
+    center: [f32; 2],
+    radius: f32,
+    color: [f32; 4],
+    size: PhysicalSize<u32>,
+) {
+    for layer in (1..=5).rev() {
+        let scale = layer as f32 / 5.0;
+        let mut layer_color = color;
+        layer_color[3] *= (1.0 - scale * 0.82).max(0.035);
+        push_disc(vertices, center, radius * scale, layer_color, 56, size);
+    }
+}
+
+fn push_disc(
+    vertices: &mut Vec<Vertex>,
+    center: [f32; 2],
+    radius: f32,
+    color: [f32; 4],
+    segments: usize,
+    size: PhysicalSize<u32>,
+) {
+    for segment in 0..segments {
+        let start = segment as f32 / segments as f32 * std::f32::consts::TAU;
+        let end = (segment + 1) as f32 / segments as f32 * std::f32::consts::TAU;
+        push_pixel_triangle(
+            vertices,
+            center,
+            [
+                center[0] + radius * start.cos(),
+                center[1] + radius * start.sin(),
+            ],
+            [
+                center[0] + radius * end.cos(),
+                center[1] + radius * end.sin(),
+            ],
+            color,
+            size,
+        );
+    }
+}
+
+fn push_orbit_ring(
+    vertices: &mut Vec<Vertex>,
+    center: [f32; 2],
+    radius: f32,
+    thickness: f32,
+    phase: f32,
+    color: [f32; 4],
+    size: PhysicalSize<u32>,
+) {
+    let segments = 96;
+    for segment in 0..segments {
+        if segment % 4 == 3 {
+            continue;
+        }
+        let angle = segment as f32 / segments as f32 * std::f32::consts::TAU + phase;
+        let next = (segment + 1) as f32 / segments as f32 * std::f32::consts::TAU + phase;
+        push_spinner_segment(
+            vertices, center, radius, thickness, angle, next, color, size,
+        );
+    }
 }
 
 fn push_single_session_composer_card(vertices: &mut Vec<Vertex>, size: PhysicalSize<u32>) {
