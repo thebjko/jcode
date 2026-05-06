@@ -78,7 +78,8 @@ impl BedrockProvider {
         let has_region = std::env::var_os("JCODE_BEDROCK_REGION").is_some()
             || std::env::var_os("AWS_REGION").is_some()
             || std::env::var_os("AWS_DEFAULT_REGION").is_some();
-        let has_credential_hint = std::env::var_os("AWS_ACCESS_KEY_ID").is_some()
+        let has_credential_hint = std::env::var_os("AWS_BEARER_TOKEN_BEDROCK").is_some()
+            || std::env::var_os("AWS_ACCESS_KEY_ID").is_some()
             || std::env::var_os("AWS_PROFILE").is_some()
             || std::env::var_os("JCODE_BEDROCK_PROFILE").is_some()
             || std::env::var_os("AWS_WEB_IDENTITY_TOKEN_FILE").is_some()
@@ -188,7 +189,7 @@ impl BedrockProvider {
             || lower.contains("could not load credentials")
             || lower.contains("credentials") && lower.contains("not loaded")
         {
-            "AWS credentials were not found. Set AWS_PROFILE, AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY, or run `aws sso login`."
+            "AWS credentials were not found. Set AWS_BEARER_TOKEN_BEDROCK, AWS_PROFILE, AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY, or run `aws sso login`."
         } else if lower.contains("expired") || lower.contains("sso") && lower.contains("token") {
             "AWS SSO/session credentials look expired. Run `aws sso login --profile <profile>` and retry."
         } else if lower.contains("accessdenied")
