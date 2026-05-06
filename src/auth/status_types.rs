@@ -15,6 +15,8 @@ pub struct AuthStatus {
     pub openrouter: AuthState,
     /// Azure OpenAI provider - via Entra ID or API key
     pub azure: AuthState,
+    /// AWS Bedrock provider - via Bedrock API key or AWS credentials
+    pub bedrock: AuthState,
     /// OpenAI provider - via OAuth or API key
     pub openai: AuthState,
     /// OpenAI has OAuth credentials

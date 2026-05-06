@@ -146,6 +146,7 @@ impl AuthStatus {
             || self.openai == AuthState::Available
             || self.openrouter == AuthState::Available
             || self.azure == AuthState::Available
+            || self.bedrock == AuthState::Available
             || self.copilot == AuthState::Available
             || self.antigravity == AuthState::Available
             || self.gemini == AuthState::Available
@@ -174,6 +175,7 @@ impl AuthStatus {
             LoginProviderAuthStateKey::Anthropic => self.anthropic.state,
             LoginProviderAuthStateKey::OpenAi => self.openai,
             LoginProviderAuthStateKey::Azure => self.azure,
+            LoginProviderAuthStateKey::Bedrock => self.bedrock,
             LoginProviderAuthStateKey::OpenRouterLike => self.openrouter,
             LoginProviderAuthStateKey::Copilot => self.copilot,
             LoginProviderAuthStateKey::Antigravity => self.antigravity,
@@ -215,6 +217,13 @@ impl AuthStatus {
             }
             crate::provider_catalog::LoginProviderTarget::Azure => {
                 if crate::auth::azure::has_configuration() {
+                    AuthState::Available
+                } else {
+                    AuthState::NotConfigured
+                }
+            }
+            crate::provider_catalog::LoginProviderTarget::Bedrock => {
+                if crate::provider::bedrock::BedrockProvider::has_credentials() {
                     AuthState::Available
                 } else {
                     AuthState::NotConfigured
@@ -274,6 +283,19 @@ impl AuthStatus {
             crate::provider_catalog::LoginProviderTarget::Azure => {
                 if self.state_for_provider(provider) == AuthState::Available {
                     crate::auth::azure::method_detail()
+                } else {
+                    "not configured".to_string()
+                }
+            }
+            crate::provider_catalog::LoginProviderTarget::Bedrock => {
+                if self.state_for_provider(provider) == AuthState::Available {
+                    if crate::provider::bedrock::BedrockProvider::configured_bearer_token()
+                        .is_some()
+                    {
+                        "Bedrock API key (`AWS_BEARER_TOKEN_BEDROCK`)".to_string()
+                    } else {
+                        "AWS credential chain".to_string()
+                    }
                 } else {
                     "not configured".to_string()
                 }
@@ -460,6 +482,26 @@ impl AuthStatus {
                     AuthValidationMethod::ConfigurationCheck,
                 )
             }
+            crate::provider_catalog::LoginProviderTarget::Bedrock => {
+                let (source, detail) = summarize_sources(vec![
+                    env_source(crate::provider::bedrock::API_KEY_ENV),
+                    config_source(
+                        crate::provider::bedrock::API_KEY_ENV,
+                        crate::provider::bedrock::ENV_FILE,
+                        "~/.config/jcode/bedrock.env",
+                    ),
+                    env_source("AWS_PROFILE"),
+                    env_source("JCODE_BEDROCK_PROFILE"),
+                    env_source("AWS_ACCESS_KEY_ID"),
+                ]);
+                (
+                    source,
+                    detail,
+                    AuthExpiryConfidence::Unknown,
+                    AuthRefreshSupport::ExternalManaged,
+                    AuthValidationMethod::PresenceCheck,
+                )
+            }
             crate::provider_catalog::LoginProviderTarget::OpenAiCompatible(profile) => {
                 let resolved = crate::provider_catalog::resolve_openai_compatible_profile(profile);
                 let (source, detail) = summarize_sources(vec![
@@ -547,6 +589,14 @@ impl AuthStatus {
         status.azure_uses_entra = crate::auth::azure::uses_entra_id();
         if crate::auth::azure::has_configuration() {
             status.azure = AuthState::Available;
+        }
+
+        if crate::provider::bedrock::BedrockProvider::has_credentials() {
+            status.bedrock = AuthState::Available;
+        }
+
+        if crate::provider::bedrock::BedrockProvider::has_credentials() {
+            status.bedrock = AuthState::Available;
         }
 
         // Check OpenAI (Codex OAuth or API key)
@@ -927,6 +977,7 @@ fn assessment_for_key(
         }
         LoginProviderAuthStateKey::Jcode
         | LoginProviderAuthStateKey::Azure
+        | LoginProviderAuthStateKey::Bedrock
         | LoginProviderAuthStateKey::OpenRouterLike
         | LoginProviderAuthStateKey::ExternalImport => (
             AuthCredentialSource::None,

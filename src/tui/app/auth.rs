@@ -210,6 +210,16 @@ impl App {
             crate::provider_catalog::LoginProviderTarget::OpenRouter => {
                 self.start_openrouter_login()
             }
+            crate::provider_catalog::LoginProviderTarget::Bedrock => {
+                crate::telemetry::record_auth_surface_blocked(
+                    provider.id,
+                    provider.auth_kind.label(),
+                );
+                self.push_display_message(DisplayMessage::error(
+                    "AWS Bedrock login is currently CLI-only. Run `jcode login --provider bedrock`."
+                        .to_string(),
+                ));
+            }
             crate::provider_catalog::LoginProviderTarget::Azure => {
                 crate::telemetry::record_auth_surface_blocked(
                     provider.id,

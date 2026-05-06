@@ -29,6 +29,9 @@ use tokio_stream::wrappers::ReceiverStream;
 
 const DEFAULT_MODEL: &str = "anthropic.claude-3-5-sonnet-20241022-v2:0";
 const DEFAULT_MAX_OUTPUT_TOKENS: usize = 4096;
+pub const ENV_FILE: &str = "bedrock.env";
+pub const API_KEY_ENV: &str = "AWS_BEARER_TOKEN_BEDROCK";
+pub const REGION_ENV: &str = "JCODE_BEDROCK_REGION";
 
 #[derive(Debug, Clone)]
 struct BedrockModelInfo {
@@ -76,10 +79,8 @@ impl BedrockProvider {
             return true;
         }
 
-        let has_region = std::env::var_os("JCODE_BEDROCK_REGION").is_some()
-            || std::env::var_os("AWS_REGION").is_some()
-            || std::env::var_os("AWS_DEFAULT_REGION").is_some();
-        let has_credential_hint = std::env::var_os("AWS_BEARER_TOKEN_BEDROCK").is_some()
+        let has_region = Self::configured_region().is_some();
+        let has_credential_hint = Self::configured_bearer_token().is_some()
             || std::env::var_os("AWS_ACCESS_KEY_ID").is_some()
             || std::env::var_os("AWS_PROFILE").is_some()
             || std::env::var_os("JCODE_BEDROCK_PROFILE").is_some()
@@ -94,10 +95,10 @@ impl BedrockProvider {
 
     async fn sdk_config() -> aws_types::SdkConfig {
         let mut loader = aws_config::defaults(BehaviorVersion::latest());
-        if let Ok(region) = std::env::var("JCODE_BEDROCK_REGION")
-            .or_else(|_| std::env::var("AWS_REGION"))
-            .or_else(|_| std::env::var("AWS_DEFAULT_REGION"))
-        {
+        if let Some(token) = Self::configured_bearer_token() {
+            crate::env::set_var(API_KEY_ENV, token);
+        }
+        if let Some(region) = Self::configured_region() {
             loader = loader.region(aws_types::region::Region::new(region));
         }
         if let Ok(profile) =
@@ -189,12 +190,21 @@ impl BedrockProvider {
     }
 
     fn configured_region() -> Option<String> {
-        std::env::var("JCODE_BEDROCK_REGION")
-            .or_else(|_| std::env::var("AWS_REGION"))
-            .or_else(|_| std::env::var("AWS_DEFAULT_REGION"))
+        Self::env_or_config(REGION_ENV)
+            .or_else(|| Self::env_or_config("AWS_REGION"))
+            .or_else(|| Self::env_or_config("AWS_DEFAULT_REGION"))
+    }
+
+    pub fn configured_bearer_token() -> Option<String> {
+        crate::provider_catalog::load_api_key_from_env_or_config(API_KEY_ENV, ENV_FILE)
+    }
+
+    fn env_or_config(name: &str) -> Option<String> {
+        std::env::var(name)
             .ok()
             .map(|v| v.trim().to_string())
             .filter(|v| !v.is_empty())
+            .or_else(|| crate::provider_catalog::load_env_value_from_env_or_config(name, ENV_FILE))
     }
 
     fn persisted_catalog_path() -> Result<std::path::PathBuf> {
@@ -921,6 +931,30 @@ impl Provider for BedrockProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::{OsStr, OsString};
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: impl AsRef<OsStr>) -> Self {
+            let previous = std::env::var_os(key);
+            crate::env::set_var(key, value);
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(value) = self.previous.as_ref() {
+                crate::env::set_var(self.key, value);
+            } else {
+                crate::env::remove_var(self.key);
+            }
+        }
+    }
 
     #[test]
     fn detects_env_credentials_requires_region_and_credential_hint() {
@@ -942,6 +976,53 @@ mod tests {
         crate::env::set_var("JCODE_BEDROCK_ENABLE", "1");
         assert!(BedrockProvider::has_credentials());
         crate::env::remove_var("JCODE_BEDROCK_ENABLE");
+    }
+
+    #[test]
+    fn detects_bedrock_login_env_file_credentials() {
+        let _guard = crate::storage::lock_test_env();
+        let temp = tempfile::tempdir().unwrap();
+        let _xdg = EnvVarGuard::set("XDG_CONFIG_HOME", temp.path().as_os_str());
+        for key in [
+            "JCODE_BEDROCK_ENABLE",
+            API_KEY_ENV,
+            REGION_ENV,
+            "AWS_REGION",
+            "AWS_DEFAULT_REGION",
+            "AWS_PROFILE",
+            "JCODE_BEDROCK_PROFILE",
+            "AWS_ACCESS_KEY_ID",
+        ] {
+            crate::env::remove_var(key);
+        }
+
+        assert!(!BedrockProvider::has_credentials());
+        crate::provider_catalog::save_env_value_to_env_file(
+            API_KEY_ENV,
+            ENV_FILE,
+            Some("test-key"),
+        )
+        .unwrap();
+        crate::env::remove_var(API_KEY_ENV);
+        assert!(!BedrockProvider::has_credentials());
+
+        crate::provider_catalog::save_env_value_to_env_file(
+            REGION_ENV,
+            ENV_FILE,
+            Some("us-east-2"),
+        )
+        .unwrap();
+        crate::env::remove_var(REGION_ENV);
+
+        assert_eq!(
+            BedrockProvider::configured_bearer_token().as_deref(),
+            Some("test-key")
+        );
+        assert_eq!(
+            BedrockProvider::configured_region().as_deref(),
+            Some("us-east-2")
+        );
+        assert!(BedrockProvider::has_credentials());
     }
 
     #[test]
