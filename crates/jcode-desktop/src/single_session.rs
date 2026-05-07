@@ -70,7 +70,6 @@ pub(crate) struct SingleSessionApp {
     pub(crate) session_switcher: SessionSwitcherState,
     pub(crate) stdin_response: Option<StdinResponseState>,
     welcome_name: Option<String>,
-    welcome_started_at: std::time::Instant,
     recovery_session_count: usize,
     queued_drafts: Vec<(String, Vec<(String, String)>)>,
     selection_anchor: Option<SelectionPoint>,
@@ -490,7 +489,6 @@ impl SingleSessionApp {
             session_switcher: SessionSwitcherState::default(),
             stdin_response: None,
             welcome_name: desktop_welcome_name(),
-            welcome_started_at: std::time::Instant::now(),
             recovery_session_count: 0,
             queued_drafts: Vec::new(),
             selection_anchor: None,
@@ -530,7 +528,6 @@ impl SingleSessionApp {
         self.session_switcher = SessionSwitcherState::default();
         self.stdin_response = None;
         self.welcome_name = desktop_welcome_name();
-        self.welcome_started_at = std::time::Instant::now();
         self.recovery_session_count = 0;
         self.queued_drafts.clear();
         self.clear_selection();
@@ -579,24 +576,6 @@ impl SingleSessionApp {
 
     pub(crate) fn has_frame_animation(&self) -> bool {
         true
-    }
-
-    pub(crate) fn welcome_reveal_progress(&self) -> f32 {
-        if !self.is_fresh_welcome_visible() {
-            return 1.0;
-        }
-        let elapsed = self.welcome_started_at.elapsed().as_secs_f32();
-        let linear = ((elapsed - 0.18) / 1.65).clamp(0.0, 1.0);
-        linear * linear * (3.0 - 2.0 * linear)
-    }
-
-    pub(crate) fn welcome_input_reveal_progress(&self) -> f32 {
-        if !self.is_fresh_welcome_visible() {
-            return 1.0;
-        }
-        let elapsed = self.welcome_started_at.elapsed().as_secs_f32();
-        let linear = ((elapsed - 1.86) / 0.34).clamp(0.0, 1.0);
-        linear * linear * (3.0 - 2.0 * linear)
     }
 
     fn current_session_id(&self) -> Option<&str> {
@@ -1047,7 +1026,7 @@ impl SingleSessionApp {
         }
         if !self.messages.is_empty() || !self.streaming_response.is_empty() || self.error.is_some()
         {
-            let mut lines = Vec::new();
+            let mut lines = welcome_history_styled_lines(&self.welcome_name);
             let mut user_turn = 1;
             for message in &self.messages {
                 if !lines.is_empty() {
@@ -1106,28 +1085,6 @@ impl SingleSessionApp {
             && !self.model_picker.open
             && !self.session_switcher.open
             && self.stdin_response.is_none()
-    }
-
-    pub(crate) fn is_welcome_chrome_visible(&self) -> bool {
-        self.is_fresh_welcome_visible() || self.is_welcome_handoff_visible()
-    }
-
-    pub(crate) fn is_welcome_handoff_visible(&self) -> bool {
-        self.session.is_none()
-            && self.draft.is_empty()
-            && !self.show_help
-            && !self.model_picker.open
-            && !self.session_switcher.open
-            && self.stdin_response.is_none()
-            && self
-                .messages
-                .first()
-                .is_some_and(|message| message.role.is_user())
-            && self
-                .messages
-                .iter()
-                .skip(1)
-                .all(|message| !message.role.is_user())
     }
 
     pub(crate) fn apply_session_event(&mut self, event: DesktopSessionEvent) {
@@ -1743,10 +1700,7 @@ pub(crate) fn welcome_styled_lines(
     tick: u64,
     recovery_session_count: usize,
 ) -> Vec<SingleSessionStyledLine> {
-    let greeting = name
-        .as_deref()
-        .map(|name| format!("Welcome, {name}"))
-        .unwrap_or_else(|| "Hello there".to_string());
+    let greeting = welcome_greeting_text(name);
     let prompts = [
         "Start with a prompt",
         "Ask anything",
@@ -1782,6 +1736,19 @@ pub(crate) fn welcome_styled_lines(
     }
 
     lines
+}
+
+fn welcome_history_styled_lines(name: &Option<String>) -> Vec<SingleSessionStyledLine> {
+    vec![styled_line(
+        welcome_greeting_text(name),
+        SingleSessionLineStyle::AssistantHeading,
+    )]
+}
+
+fn welcome_greeting_text(name: &Option<String>) -> String {
+    name.as_deref()
+        .map(|name| format!("Welcome, {name}"))
+        .unwrap_or_else(|| "Hello there".to_string())
 }
 
 #[cfg(any(target_os = "macos", windows))]

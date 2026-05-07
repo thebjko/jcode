@@ -67,14 +67,6 @@ pub(crate) fn build_single_session_vertices_with_scroll(
         size,
     );
 
-    if app.is_welcome_chrome_visible() && app.draft.is_empty() {
-        push_fresh_welcome_ambient(&mut vertices, size, spinner_tick);
-    }
-    if app.is_welcome_chrome_visible() {
-        push_handwritten_welcome_hero(&mut vertices, size, app.welcome_reveal_progress());
-    }
-
-    push_single_session_composer_card(&mut vertices, app, size);
     if app.has_activity_indicator() {
         push_native_activity_spinner(&mut vertices, size, spinner_tick);
     }
@@ -96,605 +88,6 @@ pub(crate) fn build_single_session_vertices_with_scroll(
     push_single_session_scrollbar(&mut vertices, app, size, spinner_tick, smooth_scroll_lines);
 
     vertices
-}
-
-fn push_fresh_welcome_ambient(vertices: &mut Vec<Vertex>, size: PhysicalSize<u32>, tick: u64) {
-    let draft_top = single_session_draft_top(size);
-    let usable_height = (draft_top - PANEL_BODY_TOP_PADDING).max(180.0);
-    let t = tick as f32 * 0.055;
-
-    push_aurora_ribbon(
-        vertices,
-        size,
-        PANEL_BODY_TOP_PADDING + usable_height * 0.18 + (t * 0.60).sin() * 18.0,
-        usable_height * 0.30,
-        t * 0.85,
-        WELCOME_AURORA_BLUE,
-        WELCOME_AURORA_VIOLET,
-    );
-    push_aurora_ribbon(
-        vertices,
-        size,
-        PANEL_BODY_TOP_PADDING + usable_height * 0.39 + (t * 0.47).cos() * 24.0,
-        usable_height * 0.34,
-        t * -0.72 + 1.8,
-        WELCOME_AURORA_MINT,
-        WELCOME_AURORA_BLUE,
-    );
-    push_aurora_ribbon(
-        vertices,
-        size,
-        PANEL_BODY_TOP_PADDING + usable_height * 0.58 + (t * 0.52).sin() * 16.0,
-        usable_height * 0.24,
-        t * 0.64 + 3.2,
-        WELCOME_AURORA_WARM,
-        WELCOME_AURORA_MINT,
-    );
-}
-
-pub(crate) fn push_handwritten_welcome_hero(
-    vertices: &mut Vec<Vertex>,
-    size: PhysicalSize<u32>,
-    reveal_progress: f32,
-) {
-    let paths = handwritten_welcome_paths();
-    let total_length = stroke_paths_length(&paths);
-    if total_length <= 0.0 {
-        return;
-    }
-
-    let (bounds_min, bounds_max) = handwritten_welcome_bounds(size);
-    let (source_min, source_max) = stroke_paths_bounds(&paths);
-    let source_width = (source_max[0] - source_min[0]).max(1.0);
-    let scale = (bounds_max[0] - bounds_min[0]) / source_width;
-    let origin = [
-        bounds_min[0] - source_min[0] * scale,
-        bounds_min[1] - source_min[1] * scale,
-    ];
-    let thickness = (scale * 0.075).clamp(3.6, 8.5);
-    let mut remaining = total_length * reveal_progress.clamp(0.0, 1.0);
-    let mut lead = None;
-
-    for path in &paths {
-        for pair in path.windows(2) {
-            let a = pair[0];
-            let b = pair[1];
-            let segment_length = distance(a, b);
-            if segment_length <= 0.001 {
-                continue;
-            }
-            if remaining <= 0.0 {
-                break;
-            }
-            let draw_fraction = (remaining / segment_length).clamp(0.0, 1.0);
-            let end = lerp_point(a, b, draw_fraction);
-            let pa = transform_handwriting_point(a, origin, scale);
-            let pb = transform_handwriting_point(end, origin, scale);
-            push_stroke_segment(vertices, pa, pb, thickness, WELCOME_HANDWRITING_COLOR, size);
-            lead = Some(pb);
-            remaining -= segment_length;
-            if draw_fraction < 1.0 {
-                break;
-            }
-        }
-    }
-
-    if let Some(point) = lead
-        && (0.01..0.995).contains(&reveal_progress)
-    {
-        push_stroke_dot(
-            vertices,
-            point,
-            thickness * 1.65,
-            WELCOME_HANDWRITING_HIGHLIGHT_COLOR,
-            size,
-        );
-    }
-}
-
-pub(crate) fn handwritten_welcome_bounds(size: PhysicalSize<u32>) -> ([f32; 2], [f32; 2]) {
-    let paths = handwritten_welcome_paths();
-    let (source_min, source_max) = stroke_paths_bounds(&paths);
-    let source_width = (source_max[0] - source_min[0]).max(1.0);
-    let source_height = (source_max[1] - source_min[1]).max(1.0);
-    let normal_draft_top = single_session_draft_top(size);
-    let target_width = size.width as f32 * 0.52;
-    let scale = target_width / source_width;
-    let left = (size.width as f32 - target_width) * 0.5;
-    let top = PANEL_BODY_TOP_PADDING + (normal_draft_top - PANEL_BODY_TOP_PADDING) * 0.31;
-    (
-        [left, top],
-        [left + target_width, top + source_height * scale],
-    )
-}
-
-fn handwritten_welcome_paths() -> Vec<Vec<[f32; 2]>> {
-    let mut paths = Vec::new();
-    let mut word = Vec::new();
-    append_hello_path(&mut word, 0.0);
-    paths.push(word);
-
-    let mut there = Vec::new();
-    append_there_path(&mut there, 5.55);
-    paths.push(there);
-
-    paths.push(vec![[5.80, 0.42], [6.50, 0.35]]);
-    paths
-}
-
-fn append_hello_path(path: &mut Vec<[f32; 2]>, x: f32) {
-    path.push([x + 0.05, 1.05]);
-    append_cubic(
-        path,
-        [x + 0.05, 1.05],
-        [x + 0.12, 0.64],
-        [x + 0.10, 0.15],
-        [x + 0.34, -0.08],
-        10,
-    );
-    append_cubic(
-        path,
-        [x + 0.34, -0.08],
-        [x + 0.66, 0.14],
-        [x + 0.20, 0.88],
-        [x + 0.26, 1.06],
-        14,
-    );
-    append_cubic(
-        path,
-        [x + 0.26, 1.06],
-        [x + 0.38, 0.58],
-        [x + 0.82, 0.52],
-        [x + 1.02, 1.02],
-        12,
-    );
-    append_cubic(
-        path,
-        [x + 1.02, 1.02],
-        [x + 1.20, 0.58],
-        [x + 1.72, 0.45],
-        [x + 1.58, 0.86],
-        12,
-    );
-    append_cubic(
-        path,
-        [x + 1.58, 0.86],
-        [x + 1.42, 1.18],
-        [x + 2.02, 1.18],
-        [x + 2.22, 0.92],
-        12,
-    );
-    append_cubic(
-        path,
-        [x + 2.22, 0.92],
-        [x + 2.62, 0.45],
-        [x + 2.78, -0.10],
-        [x + 2.96, -0.06],
-        12,
-    );
-    append_cubic(
-        path,
-        [x + 2.96, -0.06],
-        [x + 3.22, 0.02],
-        [x + 2.76, 0.78],
-        [x + 3.07, 1.02],
-        12,
-    );
-    append_cubic(
-        path,
-        [x + 3.07, 1.02],
-        [x + 3.48, 0.56],
-        [x + 3.60, -0.08],
-        [x + 3.82, -0.04],
-        12,
-    );
-    append_cubic(
-        path,
-        [x + 3.82, -0.04],
-        [x + 4.04, 0.04],
-        [x + 3.66, 0.72],
-        [x + 3.90, 1.00],
-        12,
-    );
-    append_cubic(
-        path,
-        [x + 3.90, 1.00],
-        [x + 4.22, 0.38],
-        [x + 5.00, 0.44],
-        [x + 4.88, 0.86],
-        16,
-    );
-    append_cubic(
-        path,
-        [x + 4.88, 0.86],
-        [x + 4.74, 1.28],
-        [x + 4.02, 1.15],
-        [x + 4.15, 0.72],
-        16,
-    );
-    append_cubic(
-        path,
-        [x + 4.15, 0.72],
-        [x + 4.38, 0.28],
-        [x + 4.96, 0.92],
-        [x + 5.20, 0.82],
-        12,
-    );
-}
-
-fn append_there_path(path: &mut Vec<[f32; 2]>, x: f32) {
-    path.push([x + 0.38, 0.08]);
-    append_cubic(
-        path,
-        [x + 0.38, 0.08],
-        [x + 0.24, 0.52],
-        [x + 0.22, 0.92],
-        [x + 0.40, 1.06],
-        12,
-    );
-    append_cubic(
-        path,
-        [x + 0.40, 1.06],
-        [x + 0.66, 1.22],
-        [x + 0.98, 0.92],
-        [x + 1.05, 0.82],
-        10,
-    );
-    append_cubic(
-        path,
-        [x + 1.05, 0.82],
-        [x + 1.12, 0.44],
-        [x + 1.14, 0.04],
-        [x + 1.36, -0.05],
-        12,
-    );
-    append_cubic(
-        path,
-        [x + 1.36, -0.05],
-        [x + 1.72, 0.16],
-        [x + 1.26, 0.78],
-        [x + 1.38, 1.04],
-        14,
-    );
-    append_cubic(
-        path,
-        [x + 1.38, 1.04],
-        [x + 1.58, 0.62],
-        [x + 2.00, 0.50],
-        [x + 2.18, 1.02],
-        12,
-    );
-    append_cubic(
-        path,
-        [x + 2.18, 1.02],
-        [x + 2.38, 0.56],
-        [x + 2.90, 0.45],
-        [x + 2.76, 0.86],
-        12,
-    );
-    append_cubic(
-        path,
-        [x + 2.76, 0.86],
-        [x + 2.60, 1.18],
-        [x + 3.20, 1.18],
-        [x + 3.40, 0.92],
-        12,
-    );
-    append_cubic(
-        path,
-        [x + 3.40, 0.92],
-        [x + 3.54, 0.54],
-        [x + 3.86, 0.54],
-        [x + 4.00, 0.80],
-        10,
-    );
-    append_cubic(
-        path,
-        [x + 4.00, 0.80],
-        [x + 4.10, 0.52],
-        [x + 4.24, 0.48],
-        [x + 4.40, 0.62],
-        8,
-    );
-    append_cubic(
-        path,
-        [x + 4.40, 0.62],
-        [x + 4.22, 0.80],
-        [x + 4.14, 1.14],
-        [x + 4.50, 1.04],
-        10,
-    );
-    append_cubic(
-        path,
-        [x + 4.50, 1.04],
-        [x + 4.82, 0.56],
-        [x + 5.34, 0.45],
-        [x + 5.20, 0.86],
-        12,
-    );
-    append_cubic(
-        path,
-        [x + 5.20, 0.86],
-        [x + 5.04, 1.18],
-        [x + 5.66, 1.16],
-        [x + 5.92, 0.88],
-        12,
-    );
-}
-
-fn append_cubic(
-    path: &mut Vec<[f32; 2]>,
-    p0: [f32; 2],
-    p1: [f32; 2],
-    p2: [f32; 2],
-    p3: [f32; 2],
-    steps: usize,
-) {
-    let steps = steps.saturating_mul(3).max(1);
-    for step in 1..=steps {
-        let t = step as f32 / steps as f32;
-        let mt = 1.0 - t;
-        path.push([
-            mt.powi(3) * p0[0]
-                + 3.0 * mt.powi(2) * t * p1[0]
-                + 3.0 * mt * t.powi(2) * p2[0]
-                + t.powi(3) * p3[0],
-            mt.powi(3) * p0[1]
-                + 3.0 * mt.powi(2) * t * p1[1]
-                + 3.0 * mt * t.powi(2) * p2[1]
-                + t.powi(3) * p3[1],
-        ]);
-    }
-}
-
-fn stroke_paths_length(paths: &[Vec<[f32; 2]>]) -> f32 {
-    paths
-        .iter()
-        .flat_map(|path| path.windows(2).map(|pair| distance(pair[0], pair[1])))
-        .sum()
-}
-
-fn stroke_paths_bounds(paths: &[Vec<[f32; 2]>]) -> ([f32; 2], [f32; 2]) {
-    let mut min = [f32::INFINITY, f32::INFINITY];
-    let mut max = [f32::NEG_INFINITY, f32::NEG_INFINITY];
-    for point in paths.iter().flatten() {
-        min[0] = min[0].min(point[0]);
-        min[1] = min[1].min(point[1]);
-        max[0] = max[0].max(point[0]);
-        max[1] = max[1].max(point[1]);
-    }
-    if !min[0].is_finite() || !max[0].is_finite() {
-        ([0.0, 0.0], [1.0, 1.0])
-    } else {
-        (min, max)
-    }
-}
-
-fn distance(a: [f32; 2], b: [f32; 2]) -> f32 {
-    ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt()
-}
-
-fn lerp_point(a: [f32; 2], b: [f32; 2], t: f32) -> [f32; 2] {
-    [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]
-}
-
-fn transform_handwriting_point(point: [f32; 2], origin: [f32; 2], scale: f32) -> [f32; 2] {
-    [origin[0] + point[0] * scale, origin[1] + point[1] * scale]
-}
-
-fn push_stroke_segment(
-    vertices: &mut Vec<Vertex>,
-    a: [f32; 2],
-    b: [f32; 2],
-    thickness: f32,
-    color: [f32; 4],
-    size: PhysicalSize<u32>,
-) {
-    let soft_color = alpha_scaled(color, 0.16);
-    push_stroke_segment_quad(vertices, a, b, thickness + 3.0, soft_color, size);
-    push_stroke_dot(vertices, b, thickness * 0.78, soft_color, size);
-
-    let feather_color = alpha_scaled(color, 0.28);
-    push_stroke_segment_quad(vertices, a, b, thickness + 1.4, feather_color, size);
-    push_stroke_dot(vertices, b, thickness * 0.64, feather_color, size);
-
-    push_stroke_segment_quad(vertices, a, b, thickness, color, size);
-    push_stroke_dot(vertices, b, thickness * 0.52, color, size);
-}
-
-fn push_stroke_segment_quad(
-    vertices: &mut Vec<Vertex>,
-    a: [f32; 2],
-    b: [f32; 2],
-    thickness: f32,
-    color: [f32; 4],
-    size: PhysicalSize<u32>,
-) {
-    let length = distance(a, b);
-    if length <= 0.01 {
-        return;
-    }
-    let nx = -(b[1] - a[1]) / length * thickness * 0.5;
-    let ny = (b[0] - a[0]) / length * thickness * 0.5;
-    push_pixel_triangle(
-        vertices,
-        [a[0] + nx, a[1] + ny],
-        [a[0] - nx, a[1] - ny],
-        [b[0] - nx, b[1] - ny],
-        color,
-        size,
-    );
-    push_pixel_triangle(
-        vertices,
-        [a[0] + nx, a[1] + ny],
-        [b[0] - nx, b[1] - ny],
-        [b[0] + nx, b[1] + ny],
-        color,
-        size,
-    );
-}
-
-fn push_stroke_dot(
-    vertices: &mut Vec<Vertex>,
-    center: [f32; 2],
-    radius: f32,
-    color: [f32; 4],
-    size: PhysicalSize<u32>,
-) {
-    let segments = 28;
-    for segment in 0..segments {
-        let start = segment as f32 / segments as f32 * std::f32::consts::TAU;
-        let end = (segment + 1) as f32 / segments as f32 * std::f32::consts::TAU;
-        push_pixel_triangle(
-            vertices,
-            center,
-            [
-                center[0] + radius * start.cos(),
-                center[1] + radius * start.sin(),
-            ],
-            [
-                center[0] + radius * end.cos(),
-                center[1] + radius * end.sin(),
-            ],
-            color,
-            size,
-        );
-    }
-}
-
-fn push_aurora_ribbon(
-    vertices: &mut Vec<Vertex>,
-    size: PhysicalSize<u32>,
-    center_y: f32,
-    height: f32,
-    phase: f32,
-    left_color: [f32; 4],
-    right_color: [f32; 4],
-) {
-    let width = size.width as f32;
-    let segments = 18;
-    for segment in 0..segments {
-        let a = segment as f32 / segments as f32;
-        let b = (segment + 1) as f32 / segments as f32;
-        let x0 = -width * 0.08 + a * width * 1.16;
-        let x1 = -width * 0.08 + b * width * 1.16;
-        let wave0 = (a * std::f32::consts::TAU * 1.35 + phase).sin() * height * 0.23
-            + (a * std::f32::consts::TAU * 2.10 + phase * 0.7).cos() * height * 0.10;
-        let wave1 = (b * std::f32::consts::TAU * 1.35 + phase).sin() * height * 0.23
-            + (b * std::f32::consts::TAU * 2.10 + phase * 0.7).cos() * height * 0.10;
-        let color0 = mix_color(left_color, right_color, a);
-        let color1 = mix_color(left_color, right_color, b);
-        let edge0 = transparent(color0);
-        let edge1 = transparent(color1);
-        let top0 = [x0, center_y + wave0 - height * 0.55];
-        let mid0 = [x0, center_y + wave0];
-        let bot0 = [x0, center_y + wave0 + height * 0.55];
-        let top1 = [x1, center_y + wave1 - height * 0.55];
-        let mid1 = [x1, center_y + wave1];
-        let bot1 = [x1, center_y + wave1 + height * 0.55];
-        push_gradient_quad(
-            vertices, top0, mid0, mid1, top1, edge0, color0, color1, edge1, size,
-        );
-        push_gradient_quad(
-            vertices, mid0, bot0, bot1, mid1, color0, edge0, edge1, color1, size,
-        );
-    }
-}
-
-fn push_gradient_quad(
-    vertices: &mut Vec<Vertex>,
-    a: [f32; 2],
-    b: [f32; 2],
-    c: [f32; 2],
-    d: [f32; 2],
-    a_color: [f32; 4],
-    b_color: [f32; 4],
-    c_color: [f32; 4],
-    d_color: [f32; 4],
-    size: PhysicalSize<u32>,
-) {
-    push_gradient_triangle(vertices, a, b, c, a_color, b_color, c_color, size);
-    push_gradient_triangle(vertices, a, c, d, a_color, c_color, d_color, size);
-}
-
-fn mix_color(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
-    [
-        a[0] + (b[0] - a[0]) * t,
-        a[1] + (b[1] - a[1]) * t,
-        a[2] + (b[2] - a[2]) * t,
-        a[3] + (b[3] - a[3]) * t,
-    ]
-}
-
-fn push_gradient_triangle(
-    vertices: &mut Vec<Vertex>,
-    a: [f32; 2],
-    b: [f32; 2],
-    c: [f32; 2],
-    a_color: [f32; 4],
-    b_color: [f32; 4],
-    c_color: [f32; 4],
-    size: PhysicalSize<u32>,
-) {
-    vertices.extend_from_slice(&[
-        Vertex {
-            position: pixel_to_ndc(a, size),
-            color: a_color,
-        },
-        Vertex {
-            position: pixel_to_ndc(b, size),
-            color: b_color,
-        },
-        Vertex {
-            position: pixel_to_ndc(c, size),
-            color: c_color,
-        },
-    ]);
-}
-
-fn transparent(mut color: [f32; 4]) -> [f32; 4] {
-    color[3] = 0.0;
-    color
-}
-
-fn alpha_scaled(mut color: [f32; 4], scale: f32) -> [f32; 4] {
-    color[3] = (color[3] * scale).clamp(0.0, 1.0);
-    color
-}
-
-fn push_single_session_composer_card(
-    vertices: &mut Vec<Vertex>,
-    app: &SingleSessionApp,
-    size: PhysicalSize<u32>,
-) {
-    let welcome_input_reveal = if app.is_welcome_handoff_visible() {
-        0.0
-    } else if app.is_welcome_chrome_visible() {
-        app.welcome_input_reveal_progress()
-    } else {
-        1.0
-    };
-    if welcome_input_reveal <= 0.0 {
-        return;
-    }
-
-    let draft_top = single_session_draft_top_for_app(app, size);
-    let typography = single_session_typography();
-    let line_y = draft_top
-        + typography.code_size * typography.code_line_height
-        + 7.0
-        + (1.0 - welcome_input_reveal) * 8.0;
-    push_rect(
-        vertices,
-        Rect {
-            x: PANEL_TITLE_LEFT_PADDING,
-            y: line_y,
-            width: (size.width as f32 - PANEL_TITLE_LEFT_PADDING * 2.0).max(1.0),
-            height: 1.5,
-        },
-        alpha_scaled(COMPOSER_LINE_COLOR, welcome_input_reveal),
-        size,
-    );
 }
 
 pub(crate) fn push_native_activity_spinner(
@@ -952,21 +345,10 @@ pub(crate) fn single_session_body_scroll_metrics(
     size: PhysicalSize<u32>,
     tick: u64,
 ) -> Option<SingleSessionBodyScrollMetrics> {
-    if app.is_fresh_welcome_visible() {
-        return None;
-    }
     let typography = single_session_typography();
     let line_height = typography.body_size * typography.body_line_height;
-    let body_top = if app.is_welcome_handoff_visible() {
-        fresh_welcome_draft_top(size)
-    } else {
-        PANEL_BODY_TOP_PADDING
-    };
-    let body_bottom = if app.is_welcome_handoff_visible() {
-        size.height as f32 - PANEL_TITLE_TOP_PADDING
-    } else {
-        single_session_body_bottom(size)
-    };
+    let body_top = single_session_body_top_for_app(app, size);
+    let body_bottom = single_session_body_bottom_for_app(app, size);
     let available_height = (body_bottom - body_top).max(line_height);
     let visible_lines = ((available_height / line_height).floor() as usize).max(1);
     let total_lines = app.body_styled_lines_for_tick(tick).len();
@@ -1084,10 +466,6 @@ pub(crate) fn push_single_session_caret(
     size: PhysicalSize<u32>,
     draft_buffer: Option<&Buffer>,
 ) {
-    if app.is_welcome_handoff_visible() {
-        return;
-    }
-
     let caret = draft_buffer
         .and_then(|buffer| glyphon_draft_caret_position(app, buffer, size))
         .unwrap_or_else(|| approximate_draft_caret_position(app, size));
@@ -1199,28 +577,16 @@ pub(crate) fn single_session_draft_top_for_app(
     app: &SingleSessionApp,
     size: PhysicalSize<u32>,
 ) -> f32 {
-    single_session_draft_top_for_fresh_state(size, app.is_welcome_chrome_visible())
+    let _ = app;
+    single_session_draft_top(size)
 }
 
 pub(crate) fn single_session_draft_top_for_fresh_state(
     size: PhysicalSize<u32>,
     fresh_welcome_visible: bool,
 ) -> f32 {
-    if fresh_welcome_visible {
-        fresh_welcome_draft_top(size)
-    } else {
-        single_session_draft_top(size)
-    }
-}
-
-pub(crate) fn fresh_welcome_draft_top(size: PhysicalSize<u32>) -> f32 {
-    let hero_bottom = handwritten_welcome_bounds(size).1[1];
-    let typography = single_session_typography();
-    let clearance = (typography.code_size * 1.85).max(46.0);
-    let draft_top = hero_bottom + clearance;
-    draft_top
-        .min(single_session_draft_top(size))
-        .max(hero_bottom + clearance)
+    let _ = fresh_welcome_visible;
+    single_session_draft_top(size)
 }
 
 #[cfg(test)]
@@ -1256,18 +622,12 @@ pub(crate) fn single_session_text_key_for_tick_with_scroll(
     tick: u64,
     smooth_scroll_lines: f32,
 ) -> SingleSessionTextKey {
-    let fresh_welcome_visible = app.is_fresh_welcome_visible();
-    let welcome_handoff_visible = app.is_welcome_handoff_visible();
-    let welcome_chrome_visible = fresh_welcome_visible || welcome_handoff_visible;
-    let welcome_input_visible = !welcome_chrome_visible
-        || !app.draft.is_empty()
-        || app.welcome_input_reveal_progress() >= 0.5;
+    let welcome_handoff_visible = false;
+    let welcome_chrome_visible = false;
+    let welcome_input_visible = true;
     let body = single_session_body_viewport_for_tick(app, size, tick, smooth_scroll_lines).lines;
-    let (welcome_hero, welcome_hint, body) = if fresh_welcome_visible {
-        split_welcome_hero_lines(body)
-    } else {
-        (String::new(), Vec::new(), body)
-    };
+    let welcome_hero = String::new();
+    let welcome_hint = Vec::new();
     SingleSessionTextKey {
         size: (size.width, size.height),
         fresh_welcome_visible: welcome_chrome_visible,
@@ -1301,21 +661,6 @@ pub(crate) fn single_session_text_key_for_tick_with_scroll(
             app.composer_status_line_for_tick(tick)
         },
     }
-}
-
-fn split_welcome_hero_lines(
-    lines: Vec<SingleSessionStyledLine>,
-) -> (
-    String,
-    Vec<SingleSessionStyledLine>,
-    Vec<SingleSessionStyledLine>,
-) {
-    let hero = lines
-        .into_iter()
-        .find(|line| !line.text.trim().is_empty())
-        .map(|line| line.text)
-        .unwrap_or_default();
-    (hero, Vec::new(), Vec::new())
 }
 
 pub(crate) fn single_session_text_buffers_from_key(
@@ -1531,19 +876,13 @@ pub(crate) fn single_session_body_char_width() -> f32 {
 }
 
 fn single_session_body_top_for_app(app: &SingleSessionApp, size: PhysicalSize<u32>) -> f32 {
-    if app.is_welcome_handoff_visible() {
-        fresh_welcome_draft_top(size)
-    } else {
-        PANEL_BODY_TOP_PADDING
-    }
+    let _ = (app, size);
+    PANEL_BODY_TOP_PADDING
 }
 
 fn single_session_body_bottom_for_app(app: &SingleSessionApp, size: PhysicalSize<u32>) -> f32 {
-    if app.is_welcome_handoff_visible() {
-        size.height as f32 - PANEL_TITLE_TOP_PADDING
-    } else {
-        single_session_body_bottom(size)
-    }
+    let _ = app;
+    single_session_body_bottom(size)
 }
 
 pub(crate) fn single_session_body_bottom(size: PhysicalSize<u32>) -> f32 {
@@ -1737,13 +1076,7 @@ pub(crate) fn single_session_text_areas_for_app_with_scroll<'a>(
     let body_top_offset_pixels =
         single_session_body_viewport_for_tick(app, size, tick, smooth_scroll_lines)
             .top_offset_pixels;
-    single_session_text_areas_for_state(
-        buffers,
-        size,
-        app.is_welcome_chrome_visible(),
-        app.is_welcome_handoff_visible(),
-        body_top_offset_pixels,
-    )
+    single_session_text_areas_for_state(buffers, size, false, false, body_top_offset_pixels)
 }
 
 pub(crate) fn single_session_text_areas_for_fresh_state(
@@ -1903,8 +1236,8 @@ fn fresh_welcome_version_font_size() -> f32 {
     (single_session_typography().meta_size * 0.58).clamp(11.0, 14.0)
 }
 
-fn fresh_welcome_version_top(size: PhysicalSize<u32>) -> f32 {
-    handwritten_welcome_bounds(size).1[1] + 12.0
+fn fresh_welcome_version_top(_size: PhysicalSize<u32>) -> f32 {
+    PANEL_TITLE_TOP_PADDING + 3.0
 }
 
 fn fresh_welcome_version_left(label: &str, size: PhysicalSize<u32>, font_size: f32) -> f32 {
