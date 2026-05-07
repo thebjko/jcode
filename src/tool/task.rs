@@ -218,16 +218,7 @@ impl Tool for SubagentTool {
             .collect();
         summary.sort_by(|a, b| a.id.cmp(&b.id));
 
-        let mut output = final_text;
-        if !output.ends_with('\n') {
-            output.push('\n');
-        }
-        output.push('\n');
-        output.push_str("Next step: integrate this result into the main task and continue.\n");
-        output.push('\n');
-        output.push_str("<subagent_metadata>\n");
-        output.push_str(&format!("session_id: {}\n", sub_session_id));
-        output.push_str("</subagent_metadata>");
+        let output = format_subagent_output(&final_text, &sub_session_id);
 
         Ok(ToolOutput::new(output)
             .with_title(subagent_display_title(&params, &resolved_model))
@@ -253,9 +244,21 @@ fn subagent_display_title(params: &SubagentInput, model: &str) -> String {
     )
 }
 
+fn format_subagent_output(final_text: &str, sub_session_id: &str) -> String {
+    let mut output = final_text.to_string();
+    if !output.ends_with('\n') {
+        output.push('\n');
+    }
+    output.push('\n');
+    output.push_str("<subagent_metadata>\n");
+    output.push_str(&format!("session_id: {}\n", sub_session_id));
+    output.push_str("</subagent_metadata>");
+    output
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{SubagentInput, subagent_display_title};
+    use super::{SubagentInput, format_subagent_output, subagent_display_title};
 
     #[test]
     fn subagent_display_title_includes_type_and_model() {
@@ -293,9 +296,23 @@ mod tests {
             super::SubagentTool::resolve_model(None, None, Some("parent"), "provider"),
             "parent"
         );
+        let configured_or_provider = crate::config::config()
+            .agents
+            .swarm_model
+            .as_deref()
+            .unwrap_or("provider");
         assert_eq!(
             super::SubagentTool::resolve_model(None, None, None, "provider"),
-            "provider"
+            configured_or_provider
         );
+    }
+
+    #[test]
+    fn format_subagent_output_preserves_answer_without_generic_next_step_footer() {
+        let output = format_subagent_output("answer", "session_test");
+
+        assert!(output.starts_with("answer\n\n<subagent_metadata>\n"));
+        assert!(output.contains("session_id: session_test\n"));
+        assert!(!output.contains("Next step: integrate this result"));
     }
 }
