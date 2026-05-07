@@ -1397,10 +1397,7 @@ impl Provider for MultiProvider {
                 .cursor_provider()
                 .map(|o| o.handles_tools_internally())
                 .unwrap_or(false),
-            ActiveProvider::Bedrock => self
-                .bedrock_provider()
-                .map(|o| o.supports_compaction())
-                .unwrap_or(false),
+            ActiveProvider::Bedrock => false, // jcode executes Bedrock tool calls
             ActiveProvider::OpenRouter => false, // jcode executes tools
         }
     }

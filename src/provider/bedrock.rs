@@ -293,8 +293,16 @@ impl BedrockProvider {
 
     fn classify_error_message(raw: &str) -> String {
         let lower = raw.to_ascii_lowercase();
-        let hint = if lower.contains("legacy") || lower.contains("last 30 days") {
+        let is_legacy_model_error = lower.contains("marked by provider as legacy")
+            || lower.contains("model is marked") && lower.contains("legacy")
+            || lower.contains("have not been actively using the model in the last 30 days");
+        let hint = if is_legacy_model_error {
             "This Bedrock model is marked as legacy for this account. Choose an active Bedrock model or an active inference profile instead."
+        } else if lower.contains("doesn't support tool use")
+            || lower.contains("does not support tool use")
+            || lower.contains("tool use in streaming mode")
+        {
+            "This Bedrock model does not support tool use with streaming. Choose a Bedrock model with tool support, such as a Claude or Nova profile, or use a no-tools Bedrock model route."
         } else if lower.contains("no credentials")
             || lower.contains("could not load credentials")
             || lower.contains("credentials") && lower.contains("not loaded")
@@ -729,7 +737,7 @@ impl BedrockProvider {
                 supports_reasoning: false,
                 pricing: Some((800_000, 3_200_000)),
             }
-        } else if id.contains("amazon.nova-lite") {
+        } else if id.contains("amazon.nova-2-lite") || id.contains("amazon.nova-lite") {
             BedrockModelInfo {
                 context_tokens: 300_000,
                 max_output_tokens: 5_120,
@@ -747,7 +755,16 @@ impl BedrockProvider {
                 supports_reasoning: false,
                 pricing: Some((35_000, 140_000)),
             }
-        } else if id.contains("llama3-1-405b") {
+        } else if id.starts_with("deepseek.") {
+            BedrockModelInfo {
+                context_tokens: 128_000,
+                max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
+                supports_tools: false,
+                supports_vision: false,
+                supports_reasoning: true,
+                pricing: None,
+            }
+        } else if id.contains("llama3-1-405b") || id.starts_with("meta.") {
             BedrockModelInfo {
                 context_tokens: 128_000,
                 max_output_tokens: 4_096,
@@ -756,20 +773,40 @@ impl BedrockProvider {
                 supports_reasoning: false,
                 pricing: Some((5_320_000, 16_000_000)),
             }
-        } else if id.contains("mistral-large") {
+        } else if id.starts_with("mistral.") {
             BedrockModelInfo {
                 context_tokens: 128_000,
                 max_output_tokens: 8_192,
-                supports_tools: true,
+                supports_tools: false,
                 supports_vision: false,
                 supports_reasoning: false,
                 pricing: Some((4_000_000, 12_000_000)),
+            }
+        } else if id.starts_with("openai.")
+            || id.starts_with("qwen.")
+            || id.starts_with("moonshot.")
+            || id.starts_with("moonshotai.")
+            || id.starts_with("minimax.")
+            || id.starts_with("zai.")
+            || id.starts_with("google.")
+            || id.starts_with("nvidia.")
+            || id.starts_with("writer.")
+        {
+            BedrockModelInfo {
+                context_tokens: DEFAULT_CONTEXT_LIMIT,
+                max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
+                supports_tools: false,
+                supports_vision: false,
+                supports_reasoning: id.contains("thinking")
+                    || id.contains("reason")
+                    || id.contains("gpt-oss"),
+                pricing: None,
             }
         } else {
             BedrockModelInfo {
                 context_tokens: DEFAULT_CONTEXT_LIMIT,
                 max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
-                supports_tools: true,
+                supports_tools: false,
                 supports_vision: false,
                 supports_reasoning: false,
                 pricing: None,
@@ -819,11 +856,11 @@ impl BedrockProvider {
             .read()
             .map(|guard| guard.clone())
             .unwrap_or_default();
-        let should_hide_non_invokable_foundation_model = |model: &str| {
-            profile_required_models.contains(model) && inference_profile_routes.contains_key(model)
+        let should_hide_duplicate_foundation_model = |model: &str| {
+            inference_profile_routes.contains_key(model) || profile_required_models.contains(model)
         };
         for model in Self::known_models().into_iter().map(str::to_string) {
-            if should_hide_non_invokable_foundation_model(&model) {
+            if should_hide_duplicate_foundation_model(&model) {
                 continue;
             }
             if seen.insert(model.clone()) {
@@ -832,7 +869,7 @@ impl BedrockProvider {
         }
         if let Ok(fetched) = self.fetched_models.read() {
             for model in fetched.iter() {
-                if should_hide_non_invokable_foundation_model(model) {
+                if should_hide_duplicate_foundation_model(model) {
                     continue;
                 }
                 if seen.insert(model.clone()) {
@@ -1408,6 +1445,34 @@ mod tests {
     }
 
     #[test]
+    fn hides_foundation_model_when_profile_route_exists() {
+        let _guard = crate::storage::lock_test_env();
+        let temp = tempfile::tempdir().unwrap();
+        let _xdg = EnvVarGuard::set("XDG_CONFIG_HOME", temp.path().as_os_str());
+        let p = BedrockProvider::new();
+        *p.fetched_models.write().unwrap() = vec!["amazon.nova-2-lite-v1:0".to_string()];
+        *p.fetched_inference_profiles.write().unwrap() =
+            vec!["us.amazon.nova-2-lite-v1:0".to_string()];
+        p.inference_profile_routes.write().unwrap().insert(
+            "amazon.nova-2-lite-v1:0".to_string(),
+            "us.amazon.nova-2-lite-v1:0".to_string(),
+        );
+
+        let display = p.all_display_models();
+
+        assert!(
+            !display
+                .iter()
+                .any(|model| model == "amazon.nova-2-lite-v1:0")
+        );
+        assert!(
+            display
+                .iter()
+                .any(|model| model == "us.amazon.nova-2-lite-v1:0")
+        );
+    }
+
+    #[test]
     fn prefers_region_inference_profile_over_global_profile() {
         let _guard = crate::storage::lock_test_env();
         let _region = EnvVarGuard::set(REGION_ENV, "us-east-2");
@@ -1443,6 +1508,18 @@ mod tests {
     }
 
     #[test]
+    fn known_no_tool_models_do_not_advertise_tools() {
+        assert!(!BedrockProvider::model_info("us.deepseek.r1-v1:0").supports_tools);
+        assert!(!BedrockProvider::model_info("deepseek.v3.2").supports_tools);
+        assert!(
+            !BedrockProvider::model_info("mistral.mistral-large-3-675b-instruct").supports_tools
+        );
+        assert!(!BedrockProvider::model_info("openai.gpt-oss-120b-1:0").supports_tools);
+        assert!(BedrockProvider::model_info("us.amazon.nova-2-lite-v1:0").supports_tools);
+        assert!(BedrockProvider::model_info("us.anthropic.claude-sonnet-4-6").supports_tools);
+    }
+
+    #[test]
     fn error_classification_mentions_model_access() {
         let message = BedrockProvider::classify_error_message(
             "ValidationException: The provided model identifier is invalid",
@@ -1459,6 +1536,15 @@ mod tests {
         assert!(message.contains("legacy"));
         assert!(message.contains("active"));
         assert!(!message.starts_with("AWS IAM denied"));
+    }
+
+    #[test]
+    fn tool_use_streaming_error_is_not_classified_as_legacy_sdk_type_name() {
+        let message = BedrockProvider::classify_error_message(
+            "ValidationException: This model doesn't support tool use in streaming mode. extensions_1x: {hyper_util::client::legacy::connect::http::HttpInfo}",
+        );
+        assert!(message.contains("does not support tool use"));
+        assert!(!message.starts_with("This Bedrock model is marked as legacy"));
     }
 
     #[test]
