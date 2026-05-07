@@ -657,7 +657,7 @@ fn test_endpoint_detail_string() {
             prompt: Some("0.00000045".to_string()),
             completion: Some("0.00000225".to_string()),
             input_cache_read: Some("0.00000007".to_string()),
-            input_cache_write: None,
+            input_cache_write: Some("0.00000012".to_string()),
         },
         context_length: Some(131072),
         max_completion_tokens: Some(8192),
@@ -676,11 +676,35 @@ fn test_endpoint_detail_string() {
     );
     assert!(detail.contains("100%"), "should contain uptime: {}", detail);
     assert!(
+        detail.contains("out $2.25/M"),
+        "should contain output price: {}",
+        detail
+    );
+    assert!(
+        detail.contains("cache write $0.12/M"),
+        "should contain cache write price: {}",
+        detail
+    );
+    assert!(
+        detail.contains("cache read $0.07/M"),
+        "should contain cache read price: {}",
+        detail
+    );
+    assert!(
+        detail.contains("500ms p50"),
+        "should contain latency: {}",
+        detail
+    );
+    assert!(
         detail.contains("42tps"),
         "should contain throughput: {}",
         detail
     );
-    assert!(detail.contains("cache"), "should contain cache: {}", detail);
+    assert!(
+        detail.contains("cache on"),
+        "should contain cache: {}",
+        detail
+    );
     assert!(
         detail.contains("fp8"),
         "should contain quantization: {}",

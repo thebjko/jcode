@@ -1053,7 +1053,16 @@ impl Provider for MultiProvider {
                 // Auto route: hint which provider it would likely pick
                 let auto_detail = cached
                     .as_ref()
-                    .and_then(|(eps, _)| eps.first().map(|ep| format!("→ {}", ep.provider_name)))
+                    .and_then(|(eps, _)| {
+                        eps.first().map(|ep| {
+                            let endpoint_detail = ep.detail_string();
+                            if endpoint_detail.trim().is_empty() {
+                                format!("→ {}", ep.provider_name)
+                            } else {
+                                format!("→ {} · {}", ep.provider_name, endpoint_detail)
+                            }
+                        })
+                    })
                     .unwrap_or_default();
                 if supports_openrouter_provider_features {
                     routes.push(build_openrouter_auto_route(

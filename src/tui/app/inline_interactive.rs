@@ -585,11 +585,8 @@ impl App {
             )
         }
 
-        const RECOMMENDED_MODELS: &[&str] = &[
-            "gpt-5.5",
-            "claude-opus-4-7",
-            "deepseek/deepseek-v4-pro",
-        ];
+        const RECOMMENDED_MODELS: &[&str] =
+            &["gpt-5.5", "claude-opus-4-7", "deepseek/deepseek-v4-pro"];
 
         const CLAUDE_OAUTH_ONLY_MODELS: &[&str] = &["claude-opus-4-7"];
 
@@ -1968,6 +1965,7 @@ impl App {
                             "Model → {} via {} ({})",
                             entry.name, route.provider, route.api_method
                         );
+                        let route_detail = route.detail.trim().to_string();
 
                         if self.is_remote {
                             self.inline_interactive_state = None;
@@ -1997,7 +1995,17 @@ impl App {
                         if let Some(effort) = effort {
                             let _ = self.provider.set_reasoning_effort(&effort);
                         }
-                        self.set_status_notice(notice);
+                        if !route_detail.is_empty() {
+                            self.push_display_message(DisplayMessage::system(format!(
+                                "{}\n{}",
+                                notice, route_detail
+                            )));
+                        }
+                        self.set_status_notice(if route_detail.is_empty() {
+                            notice
+                        } else {
+                            format!("{} · {}", notice, route_detail)
+                        });
                     }
                 }
             }
