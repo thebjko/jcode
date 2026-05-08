@@ -1,5 +1,32 @@
 # Manual: Ubuntu server + macOS client
 
+## Bottom line
+
+You need four long-lived processes total:
+
+- Ubuntu terminal 1: `jcode --socket "/run/user/$UID/jcode.sock" serve`
+- Ubuntu terminal 2: `jcode bridge serve --listen "<ubuntu-private-ip>:4242" --local-socket "/run/user/$UID/jcode.sock" --token-file "$HOME/.jcode/bridge-token"`
+- macOS terminal 1: `jcode bridge dial --remote "<ubuntu-private-ip>:4242" --bind "$HOME/.jcode/remote-jcode.sock" --token-file "$HOME/.jcode/bridge-token"`
+- macOS terminal 2: `jcode --socket "$HOME/.jcode/remote-jcode.sock" connect`
+
+Do **not** run plain `jcode` on the Mac for this flow. Use `connect` so the Mac attaches to the Ubuntu server instead of starting a local one.
+
+If you want a script-heavy flow instead of typing the raw commands, use:
+
+```bash
+# Ubuntu
+~/.claude/skills/multi-machine-jcode/helper/bridge.sh init-token
+~/.claude/skills/multi-machine-jcode/helper/bridge.sh doctor
+~/.claude/skills/multi-machine-jcode/helper/bridge.sh server-auto
+```
+
+On macOS:
+
+```bash
+~/.claude/skills/multi-machine-jcode/helper/bridge.sh doctor --remote-host "<ubuntu-private-ip>"
+~/.claude/skills/multi-machine-jcode/helper/bridge.sh client-auto --remote-host "<ubuntu-private-ip>"
+```
+
 ## Build `jcode` from this checkout
 
 This repository is the `jcode` checkout.

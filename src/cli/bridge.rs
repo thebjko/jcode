@@ -46,23 +46,35 @@ async fn run_bridge_server(listen: &str, local_socket: &Path, token: &str) -> Re
     let listener = TcpListener::bind(listen)
         .await
         .with_context(|| format!("Failed to bind bridge listener on {listen}"))?;
+    let local_socket = local_socket.to_path_buf();
+    let token = token.to_string();
 
     loop {
         let (tcp_stream, _) = listener.accept().await?;
-        if let Err(err) = handle_server_connection(tcp_stream, local_socket, token).await {
-            eprintln!("bridge serve connection failed: {err:#}");
-        }
+        let local_socket = local_socket.clone();
+        let token = token.clone();
+        tokio::spawn(async move {
+            if let Err(err) = handle_server_connection(tcp_stream, &local_socket, &token).await {
+                eprintln!("bridge serve connection failed: {err:#}");
+            }
+        });
     }
 }
 
 async fn run_bridge_dial(remote: &str, bind: &Path, token: &str) -> Result<()> {
     let (listener, _guard) = bind_dial_listener(bind).await?;
+    let remote = remote.to_string();
+    let token = token.to_string();
 
     loop {
         let (mut local_stream, _) = listener.accept().await?;
-        if let Err(err) = handle_dial_connection(&mut local_stream, remote, token).await {
-            eprintln!("bridge dial connection failed: {err:#}");
-        }
+        let remote = remote.clone();
+        let token = token.clone();
+        tokio::spawn(async move {
+            if let Err(err) = handle_dial_connection(&mut local_stream, &remote, &token).await {
+                eprintln!("bridge dial connection failed: {err:#}");
+            }
+        });
     }
 }
 
